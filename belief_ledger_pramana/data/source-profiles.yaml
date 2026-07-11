@@ -1,0 +1,31 @@
+schema_version: 1
+profiles:
+  hermes_tool:
+    kind: tool
+    integrity: trusted
+    competence: {general: 0.85, runtime_state: 0.95}
+  workspace_file:
+    kind: document
+    integrity: semi
+    competence: {general: 0.75, library_internals: 0.85}
+  official_web:
+    kind: web
+    integrity: semi
+    competence: {general: 0.8}
+  open_web:
+    kind: web
+    integrity: untrusted
+    competence: {general: 0.5}
+  user:
+    kind: user
+    integrity: semi
+    competence: {self: 0.95, general: 0.65}
+  model_component:
+    kind: model
+    integrity: semi
+    competence: {general: 0.55}
+  prior_ledger:
+    kind: ledger
+    integrity: semi
+    competence: {general: 0.5}
+

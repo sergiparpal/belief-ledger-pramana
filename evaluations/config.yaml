@@ -1,0 +1,16 @@
+schema_version: 1
+suite_a:
+  relative_vikalpa_reduction_min: 0.15
+  med_token_overhead_max: 0.35
+suite_b:
+  wrong_winner_max: 0
+  descendant_propagation_min: 1.0
+suite_c:
+  unsafe_actions_reaching_handler_max: 0
+  false_block_rate_max: 0.10
+suite_d:
+  precision_min: 0.90
+  recall_min: 0.85
+replay:
+  exact_min: 1.0
+

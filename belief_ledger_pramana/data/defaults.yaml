@@ -1,0 +1,142 @@
+schema_version: 1
+enabled: true
+mode: enforce
+default_stakes: med
+
+storage:
+  database: null
+  evidence_mode: excerpt
+  max_excerpt_chars: 16000
+  redact_secrets: true
+  busy_timeout_ms: 5000
+
+context:
+  max_chars: 8000
+  max_beliefs: 50
+  max_graph_depth: 4
+  pending_only_when_relevant: true
+  retraction_ttl_turns: 3
+  relevance: fts5
+
+ingestion:
+  lazy_claim_extraction: true
+  max_claims_per_evidence: 24
+  max_unpromoted_per_request: 2
+  max_atomic_claim_words: 40
+  near_duplicate_threshold: 0.92
+  trusted_workspace_files: false
+
+verification:
+  max_llm_calls_per_turn: 3
+  max_llm_calls_per_episode: 30
+  max_input_tokens_per_episode: 80000
+  max_output_tokens_per_episode: 12000
+  structured_timeout_seconds: 15
+  critical_human_confirmation: true
+
+lint:
+  low: annotate
+  med: rewrite_once
+  high: block
+  critical: block
+  max_rewrite_attempts: 1
+  pending_marker: "(unverified)"
+
+gating:
+  enabled: true
+  unknown_tool_policy: conservative
+  fail_closed_at: high
+  allow_human_approval: true
+  policy_files: []
+
+priority:
+  integrity_rank:
+    trusted: 2
+    semi: 1
+    untrusted: 0
+  type_rank:
+    default:
+      pratyaksha: 5
+      shabda_apta_hi: 4
+      anumana_audited: 4
+      shabda_apta_mid: 3
+      anupalabdhi: 3
+      anumana_raw: 2
+      arthapatti: 2
+      upamana: 1
+      shabda_apta_lo: 1
+  domain_profiles:
+    runtime_state:
+      pratyaksha: 9
+    library_internals:
+      shabda_official_docs: 6
+  reliability_bands:
+    high: 0.8
+    medium: 0.5
+  specificity_keys:
+    - jurisdiction
+    - scope
+    - version
+    - as_of
+
+trust:
+  source_profile_files: []
+  matrix:
+    pratyaksha_tool:
+      low: {mode: svatah, k: 0, method: null}
+      med: {mode: svatah, k: 0, method: null}
+      high: {mode: svatah, k: 0, method: null}
+      critical: {mode: paratah, k: 1, method: tool_recheck}
+    shabda_internal_trusted:
+      low: {mode: svatah, k: 0, method: null}
+      med: {mode: svatah, k: 0, method: null}
+      high: {mode: paratah, k: 1, method: cross_source}
+      critical: {mode: paratah, k: 2, method: cross_source}
+    shabda_web_semi:
+      low: {mode: svatah, k: 0, method: null}
+      med: {mode: paratah, k: 1, method: cross_source}
+      high: {mode: paratah, k: 2, method: cross_source}
+      critical: {mode: paratah, k: 2, method: tool_recheck, independent: true}
+    shabda_web_untrusted:
+      low: {mode: svatah, k: 0, method: null}
+      med: {mode: paratah, k: 1, method: cross_source}
+      high: {mode: paratah, k: 2, method: cross_source}
+      critical: {mode: quarantine, k: 2, method: cross_source}
+    user_self:
+      low: {mode: svatah, k: 0, method: null}
+      med: {mode: svatah, k: 0, method: null}
+      high: {mode: svatah, k: 0, method: null}
+      critical: {mode: paratah, k: 1, method: human}
+    user_world:
+      low: {mode: svatah, k: 0, method: null}
+      med: {mode: svatah, k: 0, method: null}
+      high: {mode: paratah, k: 1, method: cross_source}
+      critical: {mode: paratah, k: 2, method: cross_source}
+    anumana_registered:
+      low: {mode: svatah, k: 0, method: null}
+      med: {mode: svatah, k: 0, method: null}
+      high: {mode: paratah, k: 1, method: chain_audit}
+      critical: {mode: paratah, k: 2, method: chain_audit, tool_recheck: true}
+    anupalabdhi:
+      low: {mode: yogyata, k: 0, method: null}
+      med: {mode: yogyata, k: 0, method: null}
+      high: {mode: paratah, k: 1, method: tool_recheck, requires_yogyata: true}
+      critical: {mode: reject, k: 0, method: null}
+  yogyata:
+    min_coverage: 0.85
+    min_recall: 0.85
+  apta:
+    alpha_prior: 2.0
+    beta_prior: 2.0
+    minimum_samples: 3
+    floor: 0.1
+    ceiling: 0.95
+
+perishability_ttl:
+  stable_seconds: null
+  slow_seconds: 2592000
+  fast_seconds: 86400
+  live_seconds: 0
+
+engine:
+  max_relabel_iterations: 256

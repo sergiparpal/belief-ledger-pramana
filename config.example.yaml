@@ -1,0 +1,46 @@
+schema_version: 1
+enabled: true
+mode: enforce
+default_stakes: med
+storage:
+  database: null
+  evidence_mode: excerpt
+  max_excerpt_chars: 16000
+  redact_secrets: true
+  busy_timeout_ms: 5000
+context:
+  max_chars: 8000
+  max_beliefs: 50
+  max_graph_depth: 4
+  pending_only_when_relevant: true
+  retraction_ttl_turns: 3
+  relevance: fts5
+ingestion:
+  lazy_claim_extraction: true
+  max_claims_per_evidence: 24
+  max_unpromoted_per_request: 2
+  max_atomic_claim_words: 40
+  near_duplicate_threshold: 0.92
+  trusted_workspace_files: false
+verification:
+  max_llm_calls_per_turn: 3
+  max_llm_calls_per_episode: 30
+  max_input_tokens_per_episode: 80000
+  max_output_tokens_per_episode: 12000
+  structured_timeout_seconds: 15
+  critical_human_confirmation: true
+lint:
+  low: annotate
+  med: rewrite_once
+  high: block
+  critical: block
+  max_rewrite_attempts: 1
+  pending_marker: "(unverified)"
+gating:
+  enabled: true
+  unknown_tool_policy: conservative
+  fail_closed_at: high
+  allow_human_approval: true
+  policy_files: []
+
+# All omitted priority and trust maps inherit the packaged safety defaults.

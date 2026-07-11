@@ -1,0 +1,11 @@
+{"id":"d01","belief":"The sky is blue","response":"The sky is blue [BELIEF_ID].","vikalpa":false}
+{"id":"d02","belief":"The sky is blue","response":"The moon is green.","vikalpa":true}
+{"id":"d03","belief":"Package Foo is installed","response":"Package Foo is installed [BELIEF_ID].","vikalpa":false}
+{"id":"d04","belief":"Package Foo is installed","response":"Package Foo is absent.","vikalpa":true}
+{"id":"d05","belief":"Service Atlas is healthy","response":"speculation: Service Atlas is down.","vikalpa":false}
+{"id":"d06","belief":"The region is eu-central-1","response":"The region is eu-central-1 [BELIEF_ID].","vikalpa":false}
+{"id":"d07","belief":"The region is eu-central-1","response":"The region is us-east-1.","vikalpa":true}
+{"id":"d08","belief":"Python 3.12 is active","response":"Python 3.12 is active [BELIEF_ID].","vikalpa":false}
+{"id":"d09","belief":"Python 3.12 is active","response":"Python 2.7 is active.","vikalpa":true}
+{"id":"d10","belief":"The file exists","response":"Does the file exist?","vikalpa":false}
+

@@ -1,0 +1,24 @@
+manifest_version: 1
+name: belief-ledger-pramana
+version: 1.0.0rc1
+kind: standalone
+description: Episode-scoped typed belief ledger, defeat engine, context compiler, output linter, and action gate
+provides_tools:
+  - pramana_record_inference
+  - pramana_query
+  - pramana_explain
+  - pramana_request_verification
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - transform_tool_result
+  - transform_llm_output
+  - post_llm_call
+  - pre_verify
+  - on_session_start
+  - on_session_end
+  - on_session_finalize
+  - on_session_reset
+  - subagent_start
+  - subagent_stop
+  - post_approval_response

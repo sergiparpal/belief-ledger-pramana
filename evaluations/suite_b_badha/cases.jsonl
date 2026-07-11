@@ -1,0 +1,5 @@
+{"id":"b01","attacker":{"integrity":"trusted","pramana":"pratyaksha"},"target":{"integrity":"semi","pramana":"shabda"},"expected":"attacker","descendants":3}
+{"id":"b02","attacker":{"integrity":"semi","pramana":"shabda"},"target":{"integrity":"semi","pramana":"shabda"},"expected":"conflict","descendants":0}
+{"id":"b03","attacker":{"integrity":"trusted","pramana":"shabda"},"target":{"integrity":"untrusted","pramana":"shabda"},"expected":"attacker","descendants":2}
+{"id":"b04","attacker":{"integrity":"trusted","pramana":"pratyaksha"},"target":{"integrity":"trusted","pramana":"anupalabdhi"},"expected":"attacker","descendants":1}
+
