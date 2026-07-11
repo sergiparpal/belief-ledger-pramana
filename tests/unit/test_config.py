@@ -21,8 +21,9 @@ def test_config_is_initialized_privately(tmp_path: Path) -> None:
     snapshot, paths = load_config(hermes_home=tmp_path)
     assert snapshot.data["mode"] == "enforce"
     assert paths.config.exists()
-    assert stat.S_IMODE(paths.root.stat().st_mode) == 0o700
-    assert stat.S_IMODE(paths.config.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(paths.root.stat().st_mode) == 0o700
+        assert stat.S_IMODE(paths.config.stat().st_mode) == 0o600
     assert paths.database.parent == paths.root
 
 
@@ -101,7 +102,9 @@ def test_config_reload_detection_handles_changes_and_disappearance(tmp_path: Pat
     snapshot, _ = load_config(hermes_home=tmp_path)
     assert not config_needs_reload(snapshot)
     assert snapshot.source is not None
-    os.utime(snapshot.source, ns=(snapshot.mtime_ns + 1, snapshot.mtime_ns + 1))
+    assert snapshot.mtime_ns is not None
+    updated_mtime_ns = snapshot.mtime_ns + 1_000_000_000
+    os.utime(snapshot.source, ns=(updated_mtime_ns, updated_mtime_ns))
     assert config_needs_reload(snapshot)
     snapshot.source.unlink()
     assert config_needs_reload(snapshot)
