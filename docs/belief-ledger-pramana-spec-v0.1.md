@@ -1,46 +1,46 @@
-# Belief Ledger tipado (pramāṇa) — Especificación v0.1-draft
+# Typed Belief Ledger (pramāṇa) — Specification v0.1-draft
 
-**Qué es:** middleware de harness que mantiene, para cada episodio de agente, un libro mayor de creencias tipadas por fuente epistémica, con grafo de justificaciones, motor de derrota (bādha) y política de confianza explícita (svataḥ/parataḥ). Se integra en el bucle del agente en cinco puntos y produce el bloque de contexto epistémico que ve el modelo.
+**What it is:** harness middleware that maintains, for each agent episode, a ledger of beliefs typed by epistemic source, with a justification graph, a defeat engine (bādha), and an explicit trust policy (svataḥ/parataḥ). It integrates with the agent loop at five points and produces the epistemic context block seen by the model.
 
-**Linaje técnico:** JTMS (Doyle 1979) para el mantenimiento de razones, defeaters de Pollock (rebutting/undercutting) para la semántica de derrota, AGM como referencia de revisión, con los pramāṇas como esquema de procedencia y las condiciones de validez clásicas (āpta, vyāpti, yogyatā) operacionalizadas como checks.
-
----
-
-## 0. Alcance y no-objetivos
-
-**Objetivos.** (1) Que toda afirmación fáctica que el agente use o emita sea trazable a una creencia con tipo, procedencia y estado. (2) Que la llegada de evidencia contradictoria produzca retractación estructural y propagada, no una corrección retórica. (3) Que la decisión confiar-por-defecto vs. verificar-antes sea configuración explícita por fuente × stakes, no un accidente del prompt.
-
-**No-objetivos (v0.x).**
-- **No es una defensa anti-inyección.** La integridad de canal se marca en la ingesta y condiciona prioridades, pero la defensa contra instrucciones embebidas en contenido es una capa ortogonal del harness. El ledger la asume, no la implementa.
-- **No es un razonador probabilístico.** El estado de una creencia es discreto (IN/OUT/PENDING/QUARANTINED); la confianza escalar existe como campo auxiliar pero no gobierna la derrota. Racional en §4.
-- **No es un knowledge graph.** No se exige ontología ni forma lógica: las creencias son proposiciones en lenguaje natural normalizado. La estructura vive en el grafo de justificaciones y derrotas, no en el contenido.
-- **No es memoria a largo plazo.** El ledger es por-episodio (o por-tarea). Su interacción con memoria persistente se define en la regla R6 y el resto queda para el proyecto vāsanā-store.
+**Technical lineage:** JTMS (Doyle 1979) for reason maintenance, Pollock's defeaters (rebutting/undercutting) for defeat semantics, and AGM as a revision reference; pramāṇas provide the provenance scheme, and the classical validity conditions (āpta, vyāpti, yogyatā) are operationalized as checks.
 
 ---
 
-## 1. Principios de diseño (reglas no negociables)
+## 0. Scope and non-goals
 
-**R1 — Estado discreto, derrota estructural.** La pregunta operativa no es "¿cuán probable es P?" sino "¿P está actualmente sostenida, por qué cadena, y qué la derrotaría?". Los estados discretos hacen la retractación computable y auditable (transiciones con causa registrada). La probabilidad puede añadirse encima; al revés no funciona: un logprob no te dice qué retirar cuando llega el defeater.
+**Goals.** (1) Every factual assertion the agent uses or emits is traceable to a belief with a type, provenance, and state. (2) The arrival of contradictory evidence produces structural, propagated retraction rather than rhetorical correction. (3) The decision to trust by default versus verify first is explicit configuration by source × stakes, not a prompt accident.
 
-**R2 — Wrapper/contenido.** Leer no es saber. La observación directa de una herramienta cubre exactamente lo que la herramienta mide. Un fetch de página produce *dos* creencias de tipos distintos: pratyakṣa («la URL U devolvió 200 con cuerpo que contiene T», fuente = el propio tool) y śabda («lo que T afirma», fuente = el dominio de U, con su āpta). Confundir ambas es el error de tipado nº1 de los sistemas RAG y la puerta de entrada de la mitad de las alucinaciones "citadas".
-
-**R3 — La ausencia tiene condición de validez (yogyatā).** «No encontrado» solo es evidencia de ausencia si el buscador habría encontrado el objeto de estar presente. Toda creencia anupalabdhi debe llevar adjunta una estimación de detectabilidad (cobertura del corpus para esa clase de query × recall estimado del retriever, con parámetros de búsqueda registrados). Si la condición no se cumple, el resultado se registra como evento `SEARCH_FAILED` (evidencia sobre la búsqueda), nunca como creencia sobre el mundo.
-
-**R4 — La memoria no es un pramāṇa.** Una creencia recuperada de un episodio anterior no es conocimiento nuevo: reentra con su tipo original, sus qualifiers temporales, y un descuento por perecibilidad; debe volver a pasar las condiciones de validez de su tipo. La memoria es transporte, no fuente.
-
-**R5 — El monitor es contenido.** El extractor de claims, el linter y los verificadores son a su vez procesos falibles cuyos veredictos se registran como creencias de tipo anumāna con fuente = ese componente, auditables y con estadísticas propias. Ningún componente del sistema tiene estatus de testigo privilegiado.
-
-**R6 — Independencia de testimonios.** Para corroboración y para verificación parataḥ(k), dos testimonios cuentan como independientes solo si sus raíces de procedencia difieren (dominio/origen distinto) y su contenido no es casi-duplicado (dedup por similitud). N chunks del mismo mirror son un testigo, no N.
-
-**R7 — Qualifiers antes que contradicción.** Antes de declarar REBUT, se normalizan los ámbitos: «X a fecha 2024» y «X a fecha 2026» no se contradicen; «según la doc oficial» y «según el comportamiento observado» pueden coexistir marcadas. Muchas contradicciones aparentes son desajustes de scope; el detector debe reconciliar qualifiers primero.
-
-**R8 — Event-sourcing.** Todo es append-only: las creencias son vistas materializadas sobre un log de eventos. La auditabilidad no es una feature, es el formato de almacenamiento.
+**Non-goals (v0.x).**
+- **This is not an anti-injection defense.** Channel integrity is marked at ingestion and affects priorities, but defense against instructions embedded in content is an orthogonal harness layer. The ledger assumes it; it does not implement it.
+- **This is not a probabilistic reasoner.** A belief's state is discrete (IN/OUT/PENDING/QUARANTINED); scalar confidence exists as an auxiliary field but does not govern defeat. The rationale is in §4.
+- **This is not a knowledge graph.** No ontology or logical form is required: beliefs are normalized natural-language propositions. Structure lives in the justification and defeat graph, not in the content.
+- **This is not long-term memory.** The ledger is per episode (or per task). Its interaction with persistent memory is defined by rule R6; everything else belongs to the vāsanā-store project.
 
 ---
 
-## 2. Modelo de datos
+## 1. Design principles (non-negotiable rules)
 
-### 2.1 Entidades
+**R1 — Discrete state, structural defeat.** The operational question is not “how probable is P?” but “is P currently supported, by what chain, and what would defeat it?” Discrete states make retraction computable and auditable (transitions have a recorded cause). Probability can be added on top; the reverse does not work: a logprob does not tell you what to retract when a defeater arrives.
+
+**R2 — Wrapper/content.** Reading is not knowing. A tool's direct observation covers exactly what that tool measures. A page fetch produces *two* beliefs of different types: pratyakṣa (“URL U returned 200 with a body containing T,” source = the tool itself) and śabda (“what T asserts,” source = U's domain, with its āpta). Confusing them is the number-one typing error in RAG systems and the entry point for half of “cited” hallucinations.
+
+**R3 — Absence has a validity condition (yogyatā).** “Not found” is evidence of absence only if the searcher would have found the object had it been present. Every anupalabdhi belief must include an estimate of detectability (corpus coverage for that query class × the retriever's estimated recall, with recorded search parameters). If the condition is not met, the result is recorded as a `SEARCH_FAILED` event (evidence about the search), never as a belief about the world.
+
+**R4 — Memory is not a pramāṇa.** A belief retrieved from an earlier episode is not new knowledge: it re-enters with its original type, temporal qualifiers, and a perishability discount; it must pass its type's validity conditions again. Memory is transport, not a source.
+
+**R5 — The monitor is content.** The claim extractor, linter, and verifiers are themselves fallible processes whose verdicts are recorded as anumāna beliefs with source = that component; they are auditable and have their own statistics. No system component has privileged-witness status.
+
+**R6 — Testimony independence.** For corroboration and parataḥ(k) verification, two testimonies count as independent only if their provenance roots differ (different domain/origin) and their content is not near-duplicate (similarity-based deduplication). N chunks from the same mirror are one witness, not N.
+
+**R7 — Qualifiers before contradiction.** Before declaring REBUT, scopes are normalized: “X as of 2024” and “X as of 2026” do not contradict each other; “according to the official documentation” and “according to observed behavior” can coexist when marked. Many apparent contradictions are scope mismatches; the detector must reconcile qualifiers first.
+
+**R8 — Event sourcing.** Everything is append-only: beliefs are materialized views over an event log. Auditability is not a feature; it is the storage format.
+
+---
+
+## 2. Data model
+
+### 2.1 Entities
 
 ```python
 from enum import Enum
@@ -48,47 +48,47 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 class SourceKind(str, Enum):
-    TOOL = "tool"            # ejecutores: shell, python, http, fs...
-    RETRIEVER = "retriever"  # índices RAG propios
+    TOOL = "tool"            # executors: shell, python, http, fs...
+    RETRIEVER = "retriever"  # in-house RAG indexes
     WEB = "web"
-    DOCUMENT = "document"    # docs aportados al episodio
+    DOCUMENT = "document"    # documents supplied to the episode
     USER = "user"
-    MODEL = "model"          # el propio LLM u otros agentes/componentes
-    LEDGER = "ledger"        # re-ingesta desde episodios previos (R4)
+    MODEL = "model"          # the LLM itself or other agents/components
+    LEDGER = "ledger"        # re-ingestion from prior episodes (R4)
 
 class Integrity(str, Enum):
-    TRUSTED = "trusted"      # canal controlado por el operador
-    SEMI = "semi"            # tercero con reputación establecida
-    UNTRUSTED = "untrusted"  # web abierta / contenido inyectable
+    TRUSTED = "trusted"      # channel controlled by the operator
+    SEMI = "semi"            # third party with an established reputation
+    UNTRUSTED = "untrusted"  # open web / injectable content
 
 @dataclass
 class Source:
     id: str
     kind: SourceKind
     integrity: Integrity
-    competence: dict[str, float]      # dominio -> [0,1]; prior editable (āpta)
-    stats: "SourceStats"              # confirmaciones, derrotas recibidas, n
-    # āpta operacional = competence[dominio] modulada por stats (§5.4)
+    competence: dict[str, float]      # domain -> [0,1]; editable prior (āpta)
+    stats: "SourceStats"              # confirmations, received defeats, n
+    # operational āpta = competence[domain] modulated by stats (§5.4)
 
 class Pramana(str, Enum):
-    PRATYAKSHA = "pratyaksha"    # observación directa de herramienta
-    SHABDA = "shabda"            # testimonio (contenido afirmado por una fuente)
-    ANUMANA = "anumana"          # inferencia del modelo
-    ARTHAPATTI = "arthapatti"    # abducción / mejor explicación
-    UPAMANA = "upamana"          # analogía (opcional en v0.x)
-    ANUPALABDHI = "anupalabdhi"  # ausencia, sujeta a yogyatā (R3)
+    PRATYAKSHA = "pratyaksha"    # direct tool observation
+    SHABDA = "shabda"            # testimony (content asserted by a source)
+    ANUMANA = "anumana"          # model inference
+    ARTHAPATTI = "arthapatti"    # abduction / best explanation
+    UPAMANA = "upamana"          # analogy (optional in v0.x)
+    ANUPALABDHI = "anupalabdhi"  # absence, subject to yogyatā (R3)
 
 class Status(str, Enum):
-    IN = "in"                    # sostenida y usable
-    OUT = "out"                  # derrotada o sin soporte
-    PENDING = "pending"          # parataḥ: a la espera de verificación
-    QUARANTINED = "quarantined"  # canal no confiable sin sanear
+    IN = "in"                    # supported and usable
+    OUT = "out"                  # defeated or unsupported
+    PENDING = "pending"          # parataḥ: awaiting verification
+    QUARANTINED = "quarantined"  # untrusted, unsanitized channel
 
 class Perishability(str, Enum):
-    STABLE = "stable"   # matemáticas, APIs congeladas, historia
-    SLOW = "slow"       # docs de librerías, organigramas
-    FAST = "fast"       # versiones, precios, estados de servicio
-    LIVE = "live"       # estado de runtime, ficheros, procesos
+    STABLE = "stable"   # mathematics, frozen APIs, history
+    SLOW = "slow"       # library documentation, organization charts
+    FAST = "fast"       # versions, prices, service states
+    LIVE = "live"       # runtime state, files, processes
 
 class Stakes(str, Enum):
     LOW = "low"; MED = "med"; HIGH = "high"; CRITICAL = "critical"
@@ -96,30 +96,30 @@ class Stakes(str, Enum):
 @dataclass
 class EvidenceRef:
     evidence_id: str
-    span: tuple[int, int] | None = None   # offsets sobre el payload
+    span: tuple[int, int] | None = None   # offsets into the payload
 
 @dataclass
 class Justification:
     id: str
-    premises: list[str]          # belief_ids; deben estar IN para estar viva
-    warrant: str                 # la vyāpti: regla general invocada, en LN
-    audit: "ChainAudit | None"   # resultado del checklist trairūpya (Apéndice A)
+    premises: list[str]          # belief_ids; must be IN to be live
+    warrant: str                 # the vyāpti: general rule invoked, in natural language
+    audit: "ChainAudit | None"   # result of the trairūpya checklist (Appendix A)
 
 @dataclass
 class Belief:
     id: str
-    content: str                       # proposición atómica, autocontenida (§2.2)
+    content: str                       # atomic, self-contained proposition (§2.2)
     pramana: Pramana
     source_id: str
-    evidence: list[EvidenceRef]        # obligatorio para PRATYAKSHA/SHABDA
-    justifications: list[Justification]  # obligatorio para ANUMANA/ARTHAPATTI
+    evidence: list[EvidenceRef]        # required for PRATYAKSHA/SHABDA
+    justifications: list[Justification]  # required for ANUMANA/ARTHAPATTI
     qualifiers: dict[str, str]         # {"as_of": ..., "scope": ..., "assumes": ...}
     perishability: Perishability
     observed_at: datetime
-    stakes: Stakes                     # heredado de la tarea; elevable por acción
+    stakes: Stakes                     # inherited from the task; escalatable by action
     status: Status
-    confidence: float | None = None    # auxiliar; NO gobierna bādha (R1)
-    corroboration: int = 0             # nº de fuentes independientes concordantes (R6)
+    confidence: float | None = None    # auxiliary; does NOT govern bādha (R1)
+    corroboration: int = 0             # number of agreeing independent sources (R6)
 
 @dataclass
 class DefeatEdge:
@@ -127,33 +127,33 @@ class DefeatEdge:
     attacker: str                      # belief_id
     target: str                        # belief_id (REBUT) | justification_id (UNDERCUT)
     kind: str                          # "REBUT" | "UNDERCUT"
-    basis: str                         # explicación en LN (auditoría)
-    active: bool                       # recalculado por el motor (§4)
+    basis: str                         # natural-language explanation (audit)
+    active: bool                       # recalculated by the engine (§4)
 
 @dataclass
 class VerificationTask:
     id: str
     belief_id: str
     method: str        # cross_source | tool_recheck | chain_audit | human
-    k_required: int    # nº de confirmaciones independientes exigidas
-    budget: int        # tokens/llamadas asignadas
+    k_required: int    # required independent confirmations
+    budget: int        # allocated tokens/calls
     result: str | None # confirmed | disconfirmed | inconclusive
 ```
 
-### 2.2 Normas de contenido de una creencia
+### 2.2 Belief-content rules
 
-El renderizado, la detección de contradicciones y el matching de claims dependen de que `content` sea disciplinado:
+Rendering, contradiction detection, and claim matching depend on disciplined `content`:
 
-1. **Atómica:** una proposición por creencia. Si la ingesta produce una conjunción, se divide.
-2. **Autocontenida:** sin pronombres ni deícticos («esta versión», «el fichero anterior»); entidades con nombre completo.
-3. **Tiempo y ámbito explícitos** cuando aplique, en `qualifiers`, no embebidos en prosa ambigua.
-4. **Longitud objetivo ≤ ~40 palabras.** Más largo suele indicar falta de atomicidad.
-5. **Dedup:** hash de contenido normalizado; casi-duplicados de la *misma* raíz de procedencia se fusionan (no suman corroboración); de raíces independientes, incrementan `corroboration` (R6).
+1. **Atomic:** one proposition per belief. If ingestion produces a conjunction, split it.
+2. **Self-contained:** no pronouns or deictics (“this version,” “the prior file”); entities use their full names.
+3. **Time and scope explicit** where applicable, in `qualifiers` rather than ambiguous prose.
+4. **Target length ≤ ~40 words.** More usually indicates a lack of atomicity.
+5. **Deduplication:** hash normalized content; near-duplicates from the *same* provenance root are merged (they do not add corroboration); those from independent roots increase `corroboration` (R6).
 
-### 2.3 Esquema de persistencia (sketch)
+### 2.3 Persistence schema (sketch)
 
 ```sql
-CREATE TABLE events (              -- fuente de verdad, append-only (R8)
+CREATE TABLE events (              -- source of truth, append-only (R8)
   seq INTEGER PRIMARY KEY,
   ts TEXT, kind TEXT,              -- INGESTED|TYPED|ADMITTED|DEFEATED|REINSTATED|
   payload JSON                     -- VERIFIED|RETRACTION_NOTICED|GATE_BLOCKED|SEARCH_FAILED
@@ -176,54 +176,52 @@ CREATE TABLE verification_tasks (id TEXT PRIMARY KEY, belief_id TEXT, method TEX
                                  k_required INTEGER, budget INTEGER, result TEXT);
 ```
 
-Índice vectorial opcional sobre `beliefs.content` para la selección de relevancia del compilador (§6.1). SQLite basta para v0.x; el grafo cabe en memoria por episodio (cientos a pocos miles de nodos).
+An optional vector index on `beliefs.content` supports the compiler's relevance selection (§6.1). SQLite is enough for v0.x; the graph fits in memory per episode (hundreds to a few thousand nodes).
 
 ---
 
-## 3. Registro de tipos: condiciones de validez y derrotadores típicos
+## 3. Type registry: validity conditions and typical defeaters
 
-| Tipo | Qué lo produce | Condición de validez en ingesta | Derrotadores típicos |
+| Type | What produces it | Validity condition at ingestion | Typical defeaters |
 |---|---|---|---|
-| **PRATYAKSHA** | Salida de tool ejecutado por el harness | Tool terminó OK; salida parseada; la creencia cubre solo lo medido (R2); entorno íntegro | UNDERCUT: tool mal invocado, entorno corrupto, flakiness demostrada. REBUT: re-observación posterior en hechos FAST/LIVE |
-| **SHABDA** | Contenido afirmado por doc/web/usuario/otro agente | Cita obligatoria a span de evidencia; fuente con āpta calculable; canal marcado (Integrity) | REBUT: pratyakṣa o testimonio de mayor āpta. UNDERCUT: fuente desacreditada en el dominio, doc obsoleto, contexto satírico/no asertivo |
-| **ANUMANA** | Conclusión derivada por el modelo | Premisas listadas y todas IN; warrant (vyāpti) explícito; audit opcional (Apéndice A) según stakes | UNDERCUT: hetvābhāsa detectado en la cadena, premisa cae a OUT. REBUT: creencia de mayor prioridad contradictoria |
-| **ARTHAPATTI** | Postulación abductiva («solo se explica si…») | El explanandum está IN; alternativas consideradas y descartadas quedan registradas | UNDERCUT: aparece una alternativa viable (derrotador constitutivo del tipo) |
-| **UPAMANA** | Analogía («la API B se comporta como la A») | Base de similitud explícita; marcada siempre como la prioridad más baja | UNDERCUT: desanalogía relevante señalada. *Opcional en v0.x: puede modelarse como anumāna con warrant analógico* |
-| **ANUPALABDHI** | Búsqueda negativa | **yogyatā** (R3): cobertura(clase_query, corpus) ≥ θ y recall_est ≥ θ′, parámetros de búsqueda registrados | REBUT: cualquier hallazgo positivo posterior (gana siempre). UNDERCUT: se demuestra cobertura insuficiente |
+| **PRATYAKSHA** | Output from a harness-executed tool | The tool completed OK; output was parsed; the belief covers only what was measured (R2); the environment is intact | UNDERCUT: incorrectly invoked tool, corrupt environment, demonstrated flakiness. REBUT: subsequent re-observation for FAST/LIVE facts |
+| **SHABDA** | Content asserted by a document, website, user, or other agent | Required citation to an evidence span; source with computable āpta; marked channel (Integrity) | REBUT: pratyakṣa or testimony with higher āpta. UNDERCUT: source discredited in the domain, obsolete document, satirical/non-assertive context |
+| **ANUMANA** | A conclusion derived by the model | Premises are listed and all IN; explicit warrant (vyāpti); optional audit (Appendix A) according to stakes | UNDERCUT: hetvābhāsa detected in the chain, a premise falls to OUT. REBUT: contradictory belief with higher priority |
+| **ARTHAPATTI** | Abductive postulation (“it is explained only if…”) | The explanandum is IN; considered and rejected alternatives are recorded | UNDERCUT: a viable alternative appears (the type's constitutive defeater) |
+| **UPAMANA** | Analogy (“API B behaves like A”) | Explicit similarity basis; always marked as the lowest priority | UNDERCUT: a relevant disanalogy is identified. *Optional in v0.x: it can be modeled as anumāna with an analogical warrant* |
+| **ANUPALABDHI** | Negative search | **yogyatā** (R3): coverage(query_class, corpus) ≥ θ and estimated_recall ≥ θ′, with recorded search parameters | REBUT: any later positive finding (always wins). UNDERCUT: insufficient coverage is demonstrated |
 
-Reglas transversales:
+Cross-cutting rules:
 
-- **Usuario:** afirmaciones sobre sí mismo o sus preferencias → śabda con āpta alto por defecto; afirmaciones sobre el mundo → śabda con āpta del dominio.
-- **Otro agente/LLM:** siempre śabda con fuente = ese modelo/componente; nunca hereda el tipo de las fuentes que ese agente dice haber usado (a menos que exporte su propio ledger firmado, extensión futura).
-- **Ledger previo (memoria):** reentra con tipo original + `qualifiers.as_of` + descuento por perecibilidad (R4). Hechos LIVE nunca reentran como IN: se re-observan.
-- **vikalpa no es un tipo:** es el veredicto del linter sobre spans de salida sin creencia IN que los respalde (§7.3).
+- **User:** assertions about themselves or their preferences → śabda with high āpta by default; assertions about the world → śabda with domain āpta.
+- **Other agent/LLM:** always śabda with source = that model/component; it never inherits the types of sources that agent says it used (unless it exports its own signed ledger, a future extension).
+- **Prior ledger (memory):** re-enters with original type + `qualifiers.as_of` + perishability discount (R4). LIVE facts never re-enter as IN: re-observe them.
+- **vikalpa is not a type:** it is the linter's verdict on output spans with no supporting IN belief (§7.3).
 
 ---
 
-## 4. Motor de derrota (bādha)
+## 4. Defeat engine (bādha)
 
-### 4.1 Semántica
+### 4.1 Semantics
 
-Dos clases de ataque (Pollock):
+Two attack types (Pollock):
 
-- **REBUT** (`attacker ⟂ target`): las proposiciones se contradicen tras normalizar qualifiers (R7). Ataca la *creencia*.
-- **UNDERCUT**: ataca una *justificación* o la validez de ingesta de una creencia básica (el vínculo evidencia→creencia), sin afirmar la negación. Es la forma computable de las teorías khyāti: explica cómo una cognición convincente surge de un proceso defectuoso.
+- **REBUT** (`attacker ⟂ target`): the propositions contradict each other after normalizing qualifiers (R7). It attacks the *belief*.
+- **UNDERCUT**: attacks a *justification* or the ingestion validity of a basic belief (the evidence→belief link), without asserting its negation. It is the computational form of khyāti theories: it explains how a convincing cognition can arise from a defective process.
 
-Detección de REBUT: bloqueo por vecindad (mismo cluster de entidad/tema vía embeddings) para evitar O(n²), después check de contradicción NLI/LLM sobre los pares candidatos, después reconciliación de qualifiers. Solo los pares que sobreviven generan DefeatEdge.
+REBUT detection: neighborhood blocking (same entity/topic cluster via embeddings) avoids O(n²); an NLI/LLM contradiction check then runs over candidate pairs, followed by qualifier reconciliation. Only pairs that survive generate a DefeatEdge.
 
-### 4.2 Orden de prioridad
+### 4.2 Priority order
 
 ```
 priority(b) = ( integrity_rank(source(b)),      # trusted=2 > semi=1 > untrusted=0
-                type_rank(b.pramana, dominio),   # tabla configurable, ver YAML
-                reliability(b),                  # āpta efectivo o calidad de cadena, discretizado
-                specificity(b),                  # específico > general (lex specialis)
-                recency_rank(b) )                # solo pesa si perishability ∈ {FAST, LIVE}
+                type_rank(b.pramana, domain),   # configurable table; see YAML
+                reliability(b),                  # effective āpta or chain quality, discretized
+                specificity(b),                  # specific > general (lex specialis)
+                recency_rank(b) )                # matters only if perishability ∈ {FAST, LIVE}
 ```
 
-Comparación lexicográfica. Un REBUT es **ganador** si `priority(attacker) > priority(target)` estrictamente en el primer componente que difiera. Igualdad o incomparabilidad configurada → **saṃśaya**: ninguna derrota a la otra; ambas quedan marcadas CONFLICT, se renderizan como conflicto abierto (§6.2) y se emite una VerificationTask. Los conflictos no se resuelven en silencio: la duda dispara indagación, no un tie-break arbitrario.
-
-`type_rank` es dependiente de dominio y se declara en configuración:
+Lexicographic comparison. A REBUT **wins** when `priority(attacker) > priority(target)` strictly at the first component that differs. Equality or configured incomparability → **saṃśaya**: neither defeats the other; both are marked CONFLICT, rendered as an open conflict (§6.2), and a VerificationTask is emitted. Conflicts are not silently resolved: doubt triggers inquiry, not an arbitrary tie-break.
 
 ```yaml
 type_rank:
@@ -231,182 +229,182 @@ type_rank:
                        shabda_apta_mid: 3, anumana_raw: 2, arthapatti: 2,
                        upamana: 1, shabda_apta_lo: 1}
 domain_profiles:
-  runtime_state:      {pratyaksha: 9}     # lo observado en el sistema manda
-  library_internals:  {shabda_official_docs: 6}  # la doc oficial > inferencia local
-reglas_fijas:
-  - "hallazgo positivo > anupalabdhi, siempre"
-  - "QUARANTINED/untrusted nunca derrota a trusted, sea cual sea el tipo"
+  runtime_state:      {pratyaksha: 9}     # observed system state is authoritative
+  library_internals:  {shabda_official_docs: 6}  # official docs > local inference
+fixed_rules:
+  - "positive finding > anupalabdhi, always"
+  - "QUARANTINED/untrusted never defeats trusted, regardless of type"
 ```
 
-### 4.3 Reetiquetado (punto fijo, estilo JTMS)
+### 4.3 Relabeling (fixed point, JTMS style)
 
-El grafo de justificaciones se fuerza acíclico en escritura (se rechaza el ciclo y se pide reformular). Las aristas de derrota sí pueden formar ciclos; se tratan con la regla saṃśaya.
+The justification graph is kept acyclic on write (a cycle is rejected and must be reformulated). Defeat edges may form cycles; they use the saṃśaya rule.
 
 ```python
 def relabel(ledger):
-    # 0) normaliza qualifiers; recalcula pares REBUT vigentes (R7)
-    # 1) inicialización: básicas con validez de tipo OK -> candidatas IN;
-    #    derivadas -> desconocido
-    # 2) itera hasta punto fijo:
-    #    viva(j)      = all(status(p) == IN for p in j.premises) \
-    #                   and not undercut_activo(j)
-    #    soporte(b)   = es_basica_valida(b) or any(viva(j) for j in b.justifications)
-    #    rebut_win(b) = exists a: rebuts(a, b) and status(a) == IN \
-    #                   and priority(a) > priority(b)
-    #    status(b)    = IN  si soporte(b) and not rebut_win(b)
-    #                   OUT si not soporte(b) or  rebut_win(b)
-    # 3) derrotas mutuas irresueltas (a⟂b, prioridades empatadas o ciclo impar):
-    #    ambas -> PENDING + VerificationTask(saṃśaya)
-    # 4) emite eventos por cada transición (retractaciones §4.4, āpta §5.4)
+    # 0) normalize qualifiers; recompute current REBUT pairs (R7)
+    # 1) initialization: basics with type validity OK -> IN candidates;
+    #    derived beliefs -> unknown
+    # 2) iterate to a fixed point:
+    #    live(j)          = all(status(p) == IN for p in j.premises) \
+    #                       and not active_undercut(j)
+    #    support(b)       = valid_basic(b) or any(live(j) for j in b.justifications)
+    #    winning_rebut(b) = exists a: rebuts(a, b) and status(a) == IN \
+    #                       and priority(a) > priority(b)
+    #    status(b)        = IN  if support(b) and not winning_rebut(b)
+    #                       OUT if not support(b) or winning_rebut(b)
+    # 3) unresolved mutual defeats (a⟂b, tied priorities or odd cycle):
+    #    both -> PENDING + VerificationTask(saṃśaya)
+    # 4) emit events for every transition (retractions §4.4, āpta §5.4)
 ```
 
-Terminación: retículo finito + regla PENDING para ciclos; en la práctica, tope de iteraciones con alarma. La **reinstauración** es gratuita: si el atacante cae a OUT en una pasada posterior, el objetivo recupera IN en el mismo punto fijo.
+Termination: finite lattice + the PENDING rule for cycles; in practice, use an iteration ceiling with an alarm. **Reinstatement** is free: if an attacker falls to OUT on a later pass, its target recovers IN in the same fixed point.
 
-### 4.4 Protocolo de retractación
+### 4.4 Retraction protocol
 
-La derrota no basta: el modelo ya pudo haber usado la creencia. Cuando una creencia previamente *renderizada en contexto* transita IN→OUT:
+Defeat alone is not enough: the model may already have used the belief. When a belief previously *rendered in context* transitions IN→OUT:
 
-1. Se encola `RetractionNotice(belief, causa, descendientes_afectados)`.
-2. El compilador la renderiza en el bloque RETRACTACIONES (§6.2) durante los siguientes turnos, hasta que el modelo produzca salida que no dependa de ella (verificado por el linter) o expire un TTL.
-3. Los descendientes (anumāna que la usaban como premisa) caen por propagación y se listan junto a ella: la retractación es del subárbol, no del nodo.
+1. Queue `RetractionNotice(belief, cause, affected_descendants)`.
+2. The compiler renders it in the RETRACTIONS block (§6.2) during subsequent turns, until the model produces output that does not depend on it (as verified by the linter) or a TTL expires.
+3. Descendants (anumāna that used it as a premise) fall by propagation and are listed with it: retraction is of the subtree, not the node.
 
-Este protocolo es el corazón del sistema: convierte «el modelo se corrige si se acuerda» en «el harness garantiza que la corrección llega y se propaga».
+This protocol is the system's core: it turns “the model corrects itself if it remembers” into “the harness ensures that the correction arrives and propagates.”
 
 ---
 
-## 5. Política de confianza (prāmāṇya)
+## 5. Trust policy (prāmāṇya)
 
-### 5.1 Modos
+### 5.1 Modes
 
-- **svataḥ** — admitir como IN inmediatamente; derrotable (validez intrínseca con defeaters).
-- **parataḥ(k, método)** — entra como PENDING; pasa a IN tras k confirmaciones por el método indicado (validez que requiere certificación externa).
-- **quarantine** — no entra al grafo activo; visible solo en auditoría.
+- **svataḥ** — admit as IN immediately; defeasible (intrinsic validity with defeaters).
+- **parataḥ(k, method)** — enter as PENDING; become IN after k confirmations by the specified method (validity requiring external certification).
+- **quarantine** — do not enter the active graph; visible only in audit.
 
-### 5.2 Matriz por fuente × stakes (defaults; configuración YAML)
+### 5.2 Source × stakes matrix (defaults; YAML configuration)
 
-| Fuente \ Stakes | LOW | MED | HIGH | CRITICAL |
+| Source \ Stakes | LOW | MED | HIGH | CRITICAL |
 |---|---|---|---|---|
-| pratyakṣa (tool propio) | svataḥ | svataḥ | svataḥ | parataḥ(1, re-observación) |
-| śabda interno TRUSTED | svataḥ | svataḥ | parataḥ(1) | parataḥ(2) |
-| śabda web SEMI | svataḥ | parataḥ(1) | parataḥ(2, indep.) | parataḥ(2, indep. + tool) |
-| śabda web UNTRUSTED | svataḥ* | parataḥ(1) | parataḥ(2, indep.) | quarantine hasta corroborar |
-| usuario (sobre sí) | svataḥ | svataḥ | svataḥ | confirmar en chat |
-| usuario (sobre el mundo) | svataḥ | svataḥ | parataḥ(1) | parataḥ(2) |
-| anumāna (cadena registrada) | svataḥ | svataḥ | parataḥ(chain_audit) | parataḥ(audit + tool_recheck) |
-| anupalabdhi | yogyatā | yogyatā | yogyatā + re-búsqueda | no admitir: exigir positivo |
+| pratyakṣa (own tool) | svataḥ | svataḥ | svataḥ | parataḥ(1, re-observation) |
+| TRUSTED internal śabda | svataḥ | svataḥ | parataḥ(1) | parataḥ(2) |
+| SEMI web śabda | svataḥ | parataḥ(1) | parataḥ(2, independent) | parataḥ(2, independent + tool) |
+| UNTRUSTED web śabda | svataḥ* | parataḥ(1) | parataḥ(2, independent) | quarantine until corroborated |
+| user (about self) | svataḥ | svataḥ | svataḥ | confirm in chat |
+| user (about the world) | svataḥ | svataḥ | parataḥ(1) | parataḥ(2) |
+| anumāna (recorded chain) | svataḥ | svataḥ | parataḥ(chain_audit) | parataḥ(audit + tool_recheck) |
+| anupalabdhi | yogyatā | yogyatā | yogyatā + re-search | do not admit: require a positive finding |
 
-\* svataḥ pero con `integrity_rank = 0`: usable para tareas baratas, incapaz de derrotar nada trusted.
+\* svataḥ but with `integrity_rank = 0`: usable for low-cost tasks, incapable of defeating anything trusted.
 
-Los **stakes** los declara la tarea (default MED) y los **eleva la acción**: si una creencia es precondición de una acción HIGH (§7.4), su celda efectiva es la de HIGH aunque la tarea fuera LOW.
+The **stakes** are declared by the task (default MED), and the **action escalates them**: if a belief is a precondition of a HIGH action (§7.4), its effective cell is HIGH even if the task was LOW.
 
-### 5.3 Verificadores
+### 5.3 Verifiers
 
-- `cross_source`: k testimonios independientes según R6 (raíces de procedencia distintas + dedup semántico).
-- `tool_recheck`: convertir śabda en pratyakṣa cuando exista un observable («la doc dice X → ejecútalo y mira»). Es la verificación preferente: sube de tipo, no solo de contador.
-- `chain_audit`: checklist trairūpya + linter hetvābhāsa sobre la justificación (Apéndice A).
-- `human`: escalada; bloquea en CRITICAL si no hay respuesta.
+- `cross_source`: k independent testimonies under R6 (different provenance roots + semantic deduplication).
+- `tool_recheck`: turn śabda into pratyakṣa when an observable exists (“the documentation says X → run it and see”). This is the preferred verification: it raises the type, not just a counter.
+- `chain_audit`: trairūpya checklist + hetvābhāsa linter over the justification (Appendix A).
+- `human`: escalation; blocks at CRITICAL if there is no response.
 
-**Presupuesto:** cada episodio lleva un budget de verificación (llamadas/tokens). Los PENDING que exceden presupuesto permanecen PENDING; el compilador los renderiza con qualifier explícito («según F, sin verificar») y el linter permite citarlos solo con ese marcador. Degradación honesta, no silenciosa.
+**Budget:** every episode carries a verification budget (calls/tokens). PENDING beliefs that exhaust their budget remain PENDING; the compiler renders them with an explicit qualifier (“according to F, unverified”), and the linter permits citations only with that marker. This is honest degradation, not silent degradation.
 
-### 5.4 Aprendizaje de āpta
+### 5.4 āpta learning
 
-Bucle lento sobre `Source.stats`: cada derrota confirmada de una creencia de la fuente decrementa su competencia efectiva en el dominio; cada confirmación independiente la incrementa (con suavizado tipo Beta y suelo/techo). Es la parte «parataḥ-aprāmāṇya aprendida»: la fiabilidad se gana y se pierde con historial, no se declara una vez. Los ajustes son eventos auditables como todo lo demás.
-
----
-
-## 6. Compilador de contexto
-
-El ledger es inerte si el prompt no lo hace respetar. El compilador es el producto real.
-
-### 6.1 Selección
-
-1. Recupera creencias relevantes al paso actual (índice vectorial sobre `content` + expansión de grafo: si entra una anumāna, entran los ids de sus premisas).
-2. Ordena por (obligatorios, prioridad, relevancia) bajo presupuesto de tokens. Obligatorios: retractaciones vivas > conflictos abiertos > precondiciones de la acción en curso > resto.
-3. PENDING solo se renderiza si es directamente relevante, siempre con su marcador.
-
-### 6.2 Renderizado (gramática de línea)
-
-```
-[<id>][<tipo>][<meta>] <content> <qualifiers>
-
-tipo:  P = pratyakṣa · Ś = śabda · A = anumāna · Ap = arthāpatti · ¬∃ = anupalabdhi
-meta:  P  -> tool y timestamp          Ś  -> fuente y ā=āpta efectivo
-       A  -> ← premisas [+audit✓]      ¬∃ -> yogyatā✓(θ) y query
-```
-
-Ejemplo de bloque compilado:
-
-```
-### LEDGER — creencias activas relevantes
-[b41][P][pip index versions foo · 14:02] foo: última versión estable = 2.4.1
-[b17][Ś][foo.dev ā=0.6] foo 2.x requiere Python >= 3.10  {as_of: 2026-05} (SIN VERIFICAR)
-[b52][A ← b41,b09 · audit✓][warrant: semver, cambios de patch no rompen API pública]
-      la firma de foo.bar() es idéntica entre 2.4.0 y 2.4.1
-[b60][¬∃][yogyatā✓ 0.92 · grep -rn "legacy_mode" src/] no existe uso de legacy_mode en src/
-
-### CONFLICTOS ABIERTOS (saṃśaya)
-b17 ⟂ b33 (README interno dice Python >= 3.9) — verificación vt-7 en curso. No asumas ninguna.
-
-### RETRACTACIONES
-b12 «foo: última versión estable = 2.3» — DERROTADA por b41 (pratyakṣa > śabda web).
-Cae también b29 (plan de pin a 2.3, derivada de b12). Corrige cualquier paso que dependa de ellas.
-
-### CONTRATO DE GENERACIÓN
-- Toda afirmación fáctica de tu salida debe citar [b·] o ir precedida de "especulación:".
-- Prohibido citar creencias OUT o QUARANTINED; las PENDING solo con "(sin verificar)".
-- Si necesitas un hecho que no está en el ledger, dilo y propón cómo obtenerlo (tool/búsqueda).
-```
-
-### 6.3 Compresión
-
-En episodios largos, los resúmenes del ledger preservan el tipado (se resume por subgrafos, manteniendo ids y tipos de los nodos raíz). Colapsar a prosa destruye exactamente la estructura que justifica el sistema; está prohibido por diseño.
+A slow loop over `Source.stats`: each confirmed defeat of one of the source's beliefs decrements its effective domain competence; each independent confirmation increments it (with Beta-style smoothing and floor/ceiling). This is the learned “parataḥ-aprāmāṇya” component: reliability is gained and lost through history, not declared once. Adjustments are auditable events like everything else.
 
 ---
 
-## 7. Ingesta, linting y gate de acciones
+## 6. Context compiler
 
-### 7.1 Ingesta de resultados de tool
+The ledger is inert if the prompt does not make the model honor it. The compiler is the real product.
 
-Cada `ToolResult` produce: un EvidenceObject inmutable (hash, meta), una creencia pratyakṣa de wrapper (siempre), y cero o más creencias śabda de contenido si el payload contiene aserciones (R2). El extractor de aserciones es un LLM barato con prompt de extracción y las normas §2.2; su coste se controla extrayendo bajo demanda (lazy): el contenido queda indexado como evidencia y solo se promueve a creencias śabda cuando la selección de relevancia lo toca.
+### 6.1 Selection
 
-Contenido de canal UNTRUSTED: las aserciones se tipan con `integrity=untrusted`; cualquier texto con forma de instrucción no se ingiere como creencia ni como comando (capa anti-inyección del harness, fuera de alcance pero asumida).
+1. Retrieve beliefs relevant to the current step (vector index over `content` + graph expansion: if an anumāna enters, the IDs of its premises enter too).
+2. Sort by (mandatory, priority, relevance) under a token budget. Mandatory: live retractions > open conflicts > preconditions of the current action > everything else.
+3. Render PENDING only when directly relevant, always with its marker.
 
-### 7.2 Ingesta de mensajes de usuario y de generaciones propias
+### 6.2 Rendering (line grammar)
 
-- Usuario: claims extraídos lazy con las reglas transversales de §3.
-- Generación del modelo: las conclusiones que el modelo declara («por tanto X») se registran como anumāna *solo si* el contrato se cumplió (premisas citadas). Si no, son candidatas a vikalpa (§7.3), no creencias.
+```
+[<id>][<type>][<meta>] <content> <qualifiers>
+
+type:  P = pratyakṣa · Ś = śabda · A = anumāna · Ap = arthāpatti · ¬∃ = anupalabdhi
+meta:  P  -> tool and timestamp       Ś  -> source and effective ā=āpta
+       A  -> ← premises [+audit✓]     ¬∃ -> yogyatā✓(θ) and query
+```
+
+Example compiled block:
+
+```
+### LEDGER — relevant active beliefs
+[b41][P][pip index versions foo · 14:02] foo: latest stable version = 2.4.1
+[b17][Ś][foo.dev ā=0.6] foo 2.x requires Python >= 3.10  {as_of: 2026-05} (UNVERIFIED)
+[b52][A ← b41,b09 · audit✓][warrant: semver, patch changes do not break the public API]
+      the signature of foo.bar() is identical between 2.4.0 and 2.4.1
+[b60][¬∃][yogyatā✓ 0.92 · grep -rn "legacy_mode" src/] no use of legacy_mode exists in src/
+
+### OPEN CONFLICTS (saṃśaya)
+b17 ⟂ b33 (the internal README says Python >= 3.9) — verification vt-7 is under way. Do not assume either.
+
+### RETRACTIONS
+b12 “foo: latest stable version = 2.3” — DEFEATED by b41 (pratyakṣa > web śabda).
+b29 also falls (the plan to pin 2.3, derived from b12). Correct any step that depends on them.
+
+### GENERATION CONTRACT
+- Every factual assertion in your output must cite [b·] or be preceded by "speculation:".
+- Do not cite OUT or QUARANTINED beliefs; cite PENDING beliefs only with "(unverified)".
+- If you need a fact that is not in the ledger, say so and propose how to obtain it (tool/search).
+```
+
+### 6.3 Compression
+
+In long episodes, ledger summaries preserve the typing (they summarize by subgraph, retaining the IDs and types of root nodes). Collapsing to prose destroys exactly the structure that justifies the system; it is prohibited by design.
+
+---
+
+## 7. Ingestion, linting, and action gate
+
+### 7.1 Tool-result ingestion
+
+Each `ToolResult` produces: an immutable EvidenceObject (hash, metadata), a wrapper pratyakṣa belief (always), and zero or more content śabda beliefs if the payload contains assertions (R2). The assertion extractor is an inexpensive LLM with an extraction prompt and the §2.2 rules; its cost is controlled through on-demand (lazy) extraction: content remains indexed as evidence and is promoted to śabda beliefs only when relevance selection reaches it.
+
+UNTRUSTED-channel content: assertions are typed with `integrity=untrusted`; any instruction-shaped text is not ingested as either a belief or a command (an anti-injection harness layer, out of scope but assumed).
+
+### 7.2 User-message and self-generation ingestion
+
+- **User:** claims are extracted lazily under the cross-cutting rules in §3.
+- **Model generation:** conclusions the model declares (“therefore X”) are recorded as anumāna *only if* the contract was met (cited premises). Otherwise, they are vikalpa candidates (§7.3), not beliefs.
 
 ### 7.3 Linter (vikalpa)
 
-Sobre la salida final del turno (y opcionalmente sobre acciones intermedias en HIGH+):
+Over the turn's final output (and optionally over intermediate actions at HIGH+):
 
-1. Extrae afirmaciones fácticas declarativas de la salida.
-2. Matching contra el ledger: entailment de cada afirmación por alguna creencia IN (o PENDING si lleva el marcador).
-3. Clasifica: **grounded** (cita válida) · **inferible** (se registra la anumāna que faltaba, con premisas) · **vikalpa** (sin respaldo).
-4. Política por stakes: LOW → anotar y seguir; MED → reescritura con marcador de especulación o búsqueda de grounding; HIGH+ → bloquear la salida hasta resolver.
+1. Extract declarative factual assertions from the output.
+2. Match every assertion against the ledger for entailment by an IN belief (or a PENDING belief when it carries the marker).
+3. Classify: **grounded** (valid citation) · **inferible** (record the missing anumāna with its premises) · **vikalpa** (unsupported).
+4. Apply the stakes policy: LOW → annotate and continue; MED → rewrite with a speculation marker or seek grounding; HIGH+ → block the output until resolved.
 
-El linter es contenido (R5): sus veredictos se registran con fuente = linter, y su precisión se mide contra un set etiquetado (§10). Sin esa medición, el linter es un oráculo no auditado, exactamente lo que este sistema existe para eliminar.
+The linter is content (R5): its verdicts are recorded with source = linter, and its precision is measured against a labeled set (§10). Without that measurement, the linter is an unaudited oracle—the very thing this system exists to eliminate.
 
-### 7.4 Gate de acciones (precondiciones)
+### 7.4 Action gate (preconditions)
 
-Antes de ejecutar una acción con efectos (stakes HIGH/CRITICAL declarados en el schema del tool):
+Before executing an effectful action (with HIGH/CRITICAL stakes declared in the tool schema):
 
 ```python
 def gate_action(action) -> "ALLOW | ASK | BLOCK":
-    for p in preconditions(action):      # declaradas en el tool schema o inferidas
+    for p in preconditions(action):      # declared in the tool schema or inferred
         b = ledger.entails(p)
         if b is None or b.status != Status.IN or priority(b) < min_priority(action.stakes):
-            return ASK(missing=p, sugerencia=cómo_obtenerla(p))
+            return ASK(missing=p, suggestion=how_to_obtain(p))
     return ALLOW
 ```
 
-Es el punto de intervención barato: entre la evaluación y el compromiso, antes de que el efecto se propague. Las precondiciones típicas («el fichero existe», «el usuario confirmó», «el entorno es staging») son exactamente la clase de creencia que este sistema mantiene bien.
+This is the inexpensive intervention point: between evaluation and commitment, before the effect propagates. Typical preconditions (“the file exists,” “the user confirmed,” “the environment is staging”) are exactly the kind of beliefs this system maintains well.
 
 ---
 
-## 8. Integración en el harness
+## 8. Harness integration
 
-### 8.1 Interfaz (Protocol)
+### 8.1 Interface (Protocol)
 
 ```python
 class LedgerMiddleware(Protocol):
@@ -416,17 +414,17 @@ class LedgerMiddleware(Protocol):
     def on_model_output(self, text: str, actions: list[ToolCall]) -> LintReport: ...
     def gate_action(self, action: ToolCall) -> GateDecision: ...
 
-# workers asíncronos:
-#   verifier_worker(queue[VerificationTask])   -> ejecuta §5.3, emite VERIFIED
+# asynchronous workers:
+#   verifier_worker(queue[VerificationTask])   -> runs §5.3, emits VERIFIED
 #   apta_updater(events)                        -> §5.4
-#   relabel se invoca tras cada mutación del grafo (es barato: subgrafo afectado)
+#   relabel is invoked after every graph mutation (cheap: affected subgraph)
 ```
 
-### 8.2 Adaptador para tu harness
+### 8.2 Adapter for your harness
 
-No asumo internals de Hermes; el adaptador son ~50 líneas si el harness expone (a) wrapper de tool-calls, (b) middleware de mensajes, (c) hook o wrapper del cliente de modelo para pre/post-generación. Si falta (c), se envuelve el cliente. El compilador inyecta su bloque como mensaje de sistema efímero por turno (no acumulativo: se regenera, el histórico vive en el ledger, no en el transcript).
+This specification makes no assumptions about Hermes internals; the adapter is about 50 lines if the harness exposes (a) a tool-call wrapper, (b) message middleware, and (c) a hook or wrapper around the model client for pre/post-generation. If (c) is absent, wrap the client. The compiler injects its block as an ephemeral system message per turn (non-accumulative: it is regenerated; history lives in the ledger, not the transcript).
 
-Orden de llamada por turno:
+Call order per turn:
 
 ```
 user_msg → on_user_message → compile_context → LLM → on_model_output
@@ -435,91 +433,91 @@ user_msg → on_user_message → compile_context → LLM → on_model_output
 
 ---
 
-## 9. Traza de ejemplo (end-to-end)
+## 9. End-to-end example trace
 
-Tarea (stakes MED): «actualiza requirements y el código para la última versión de foo».
+Task (MED stakes): “update the requirements and code for the latest version of foo.”
 
-1. Retriever devuelve un post de blog: `e1`. Ingesta: `b12 = [Ś][blog.example ā=0.5] «última estable de foo = 2.3» {as_of: 2025-11}`. Matriz §5.2 (web SEMI × MED) → parataḥ(1)… el presupuesto lo permite → vt-1 (tool_recheck) encolada; mientras, PENDING.
-2. El modelo, con b12 renderizada como PENDING, propone provisionalmente `b29 = [A ← b12] «pin foo==2.3»` — el compilador la admite citada con «(sin verificar)».
-3. vt-1 ejecuta `pip index versions foo` → `e2`, `b41 = [P] «última estable de foo = 2.4.1»`. Detector de contradicción: b41 ⟂ b12 (qualifiers reconciliados: ambas pretenden valer *ahora*; b12 además es FAST y vieja). priority(b41) > priority(b12) en type_rank → REBUT ganador.
-4. `relabel`: b12 → OUT; b29 pierde su única justificación viva → OUT. Eventos DEFEATED×2; RetractionNotice(b12, {b29}). `apta_updater`: blog.example pierde competencia en `python_packaging`.
-5. Turno siguiente: el compilador renderiza b41 IN, y RETRACTACIONES con b12+b29. El modelo corrige el plan citando [b41]. El linter confirma que la salida ya no depende de b12 → la notice expira.
-6. Antes de escribir requirements (acción HIGH por schema): gate exige «existe requirements.txt en el repo» → no hay creencia → ASK → el harness ejecuta `ls`, crea la pratyakṣa, ALLOW.
+1. The retriever returns a blog post: `e1`. Ingestion: `b12 = [Ś][blog.example ā=0.5] “latest stable version of foo = 2.3” {as_of: 2025-11}`. The §5.2 matrix (SEMI web × MED) → parataḥ(1) … the budget permits it → vt-1 (tool_recheck) is queued; meanwhile, it remains PENDING.
+2. With b12 rendered as PENDING, the model tentatively proposes `b29 = [A ← b12] “pin foo==2.3”` — the compiler admits it with a citation and “(unverified).”
+3. vt-1 runs `pip index versions foo` → `e2`, `b41 = [P] “latest stable version of foo = 2.4.1”`. The contradiction detector finds b41 ⟂ b12 (qualifiers reconciled: both claim to apply *now*; b12 is also FAST and old). `priority(b41) > priority(b12)` in type_rank → winning REBUT.
+4. `relabel`: b12 → OUT; b29 loses its only live justification → OUT. DEFEATED×2 events; RetractionNotice(b12, {b29}). `apta_updater`: blog.example loses competence in `python_packaging`.
+5. On the next turn, the compiler renders b41 IN and RETRACTIONS with b12+b29. The model corrects the plan, citing [b41]. The linter confirms that output no longer depends on b12 → the notice expires.
+6. Before writing requirements (a HIGH action under the schema), the gate requires “requirements.txt exists in the repository” → no belief exists → ASK → the harness runs `ls`, creates the pratyakṣa, ALLOW.
 
-Lo que compra el sistema en esta traza: la corrección no dependió de que el modelo «se acordara» del blog; fue estructural, propagada al descendiente, auditada, y dejó a la fuente con la reputación tocada.
+What this system buys in this trace: the correction did not depend on the model “remembering” the blog post; it was structural, propagated to the descendant, auditable, and left the source with a damaged reputation.
 
 ---
 
-## 10. Evaluación y criterios de colapso
+## 10. Evaluation and collapse criteria
 
 ### Suites
 
-- **A — Grounding QA:** QA sensible al tiempo y multi-hop con distractores. Métricas: tasa de vikalpa en respuestas finales (grader independiente), precisión/cobertura de citación, calibración de los marcadores «sin verificar».
-- **B — Sondas bādha (la suite propia):** episodios sintéticos con llegada programada de evidencia contradictoria y ground truth de qué debe ganar. Métricas: retraction rate, completitud de propagación (% de descendientes reetiquetados), wrong-winner rate, turnos-hasta-retractar. Casi no existe benchmark público de revisión de creencias en agentes; esta suite es en sí un artefacto publicable.
-- **C — Tareas agénticas con fallos inyectados:** docs obsoletas vs. estado de runtime, ausencias con y sin yogyatā. Métricas: task success, tasa de acciones inseguras bloqueadas por el gate, falsos bloqueos.
-- **D — El linter mismo (R5):** precisión/recall del detector de vikalpa contra set etiquetado a mano (~300 claims). Sin D, A no es interpretable.
+- **A — Grounding QA:** time-sensitive, multi-hop QA with distractors. Metrics: vikalpa rate in final answers (independent grader), citation precision/coverage, and calibration of “unverified” markers.
+- **B — bādha probes (the project's own suite):** synthetic episodes with scheduled arrival of contradictory evidence and ground truth for what should win. Metrics: retraction rate, propagation completeness (% of relabeled descendants), wrong-winner rate, and turns-to-retract. There is almost no public benchmark for belief revision in agents; this suite is itself a publishable artifact.
+- **C — Agentic tasks with injected failures:** obsolete documentation versus runtime state, and absences with and without yogyatā. Metrics: task success, rate of unsafe actions blocked by the gate, and false blocks.
+- **D — The linter itself (R5):** precision/recall of the vikalpa detector against a manually labeled set (~300 claims). Without D, A is not interpretable.
 
 ### Ablations
 
-flat baseline · solo tipos (sin derrota) · solo derrota (sin tipos) · sin contrato en el compilador · sin gate. La pregunta de cada ablation: ¿qué componente paga su coste?
+Flat baseline · types only (no defeat) · defeat only (no types) · no compiler contract · no gate. The question for every ablation: which component earns its cost?
 
-### Costes y colapso
+### Costs and collapse
 
-Registrar overhead de tokens y llamadas por configuración. Criterio de colapso, heredado del documento original: si Suite A no mejora de forma material (propuesta provisional: ≥15% relativo en vikalpa rate) con overhead aceptable (≤ +35% tokens en MED), colapsar a contexto plano y quedarse solo con lo que las ablations salven. Los números son placeholders a calibrar en v0.2; el compromiso de tener criterio de abandono no lo es.
+Record token and call overhead by configuration. The collapse criterion, inherited from the original document: if Suite A does not improve materially (provisional proposal: ≥15% relative reduction in vikalpa rate) with acceptable overhead (≤ +35% tokens at MED), collapse to flat context and retain only what the ablations preserve. The numbers are placeholders to calibrate in v0.2; the commitment to an abandonment criterion is not.
 
 ---
 
 ## 11. Roadmap
 
-- **v0.1 (1–2 semanas):** schema + eventos + compilador con renderizado y contrato; ingesta manual/semiautomática; derrota manual. Objetivo: falsar barato la hipótesis mínima — ¿el renderizado tipado por sí solo mueve Suite A?
-- **v0.2 (+2–3 semanas):** ingesta automática con regla wrapper/contenido; detección de contradicciones (blocking + NLI); bādha con prioridades fijas; protocolo de retractación; Suite B v1.
-- **v0.3 (+3–4 semanas):** linter vikalpa sobre salidas finales; verificadores parataḥ con presupuesto; aprendizaje de āpta; Suite D.
-- **v1.0:** gate de acciones con precondiciones en tool schemas; suites completas + ablations; congelar spec y decidir colapso o continuación.
+- **v0.1 (1–2 weeks):** schema + events + compiler with rendering and contract; manual/semi-automatic ingestion; manual defeat. Objective: cheaply falsify the minimum hypothesis—does typed rendering alone move Suite A?
+- **v0.2 (+2–3 weeks):** automatic ingestion with the wrapper/content rule; contradiction detection (blocking + NLI); bādha with fixed priorities; retraction protocol; Suite B v1.
+- **v0.3 (+3–4 weeks):** vikalpa linter over final outputs; budgeted parataḥ verifiers; āpta learning; Suite D.
+- **v1.0:** action gate with preconditions in tool schemas; complete suites + ablations; freeze the specification and decide on collapse or continuation.
 
-## 12. Problemas abiertos y riesgos honestos
+## 12. Open problems and honest risks
 
-1. **Granularidad de claims.** La atomicidad es difusa; sobre-atomizar explota el grafo, sub-atomizar rompe la derrota selectiva. Mitigación: normas §2.2 + presupuesto de creencias por episodio; es empírico.
-2. **El extractor y el linter son LLMs.** Sus errores generan falsas alarmas de vikalpa (fatiga) o falsos grounded (peor). Por eso Suite D es prerequisito de cualquier conclusión, y por eso R5 no es decorativa.
-3. **Adherencia al contrato.** Que el modelo cite [b·] disciplinadamente varía por modelo y es prompt-engineering empírico. El fallback es honesto: si no cita, el linter trata la afirmación como vikalpa y aplica política.
-4. **Coste.** Extracción + NLI + verificación pueden suponer 1.5–3× llamadas si se hace todo eager. Mitigaciones ya en spec: lazy extraction, blocking, lint solo de salidas finales fuera de HIGH, presupuestos explícitos.
-5. **Prioridades a mano.** El orden §4.2 es config inicial razonable, no verdad. Aprenderlo de los resultados de las sondas bādha (qué orden minimiza wrong-winner) es la extensión natural.
-6. **Bayesianización.** Variante futura: estados blandos con umbrales. Se pospone deliberadamente (R1); si las sondas muestran que la lexicografía discreta pierde información decisiva, es el primer sitio donde ceder.
-7. **Multi-agente.** Intercambio de subgrafos firmados entre ledgers (testimonio con cadena adjunta) queda fuera de v0.x, pero el tipado ya lo deja preparado: otro agente es una fuente śabda con āpta propio.
+1. **Claim granularity.** Atomicity is fuzzy; over-atomizing explodes the graph, while under-atomizing breaks selective defeat. Mitigation: the §2.2 rules + a per-episode belief budget; it is empirical.
+2. **The extractor and linter are LLMs.** Their errors create false vikalpa alarms (fatigue) or false grounded judgments (worse). That is why Suite D is a prerequisite for any conclusion, and why R5 is not decorative.
+3. **Contract adherence.** Whether the model reliably cites [b·] varies by model and is empirical prompt engineering. The fallback is honest: if it does not cite, the linter treats the assertion as vikalpa and applies policy.
+4. **Cost.** Extraction + NLI + verification can require 1.5–3× calls if everything is eager. Existing mitigations in the specification are lazy extraction, blocking, linting only final outputs outside HIGH, and explicit budgets.
+5. **Manually configured priorities.** The §4.2 order is a reasonable initial configuration, not truth. Learning it from bādha-probe results (which order minimizes wrong winners) is the natural extension.
+6. **Bayesianization.** A future variant uses soft states with thresholds. It is deliberately deferred (R1); if the probes show that discrete lexicography loses decisive information, this is the first place to yield.
+7. **Multi-agent.** Exchange of signed subgraphs between ledgers (testimony with an attached chain) is outside v0.x, but the typing already prepares for it: another agent is a śabda source with its own āpta.
 
 ---
 
-## Apéndice A — Auditoría de cadenas (para `chain_audit`)
+## Appendix A — Chain audit (for `chain_audit`)
 
-**Checklist trairūpya** sobre la justificación (warrant + premisas):
+**Trairūpya checklist** over the justification (warrant + premises):
 
-1. *pakṣadharmatā* — la razón aplica de verdad al caso presente (las premisas mencionan este caso, no uno parecido).
-2. *sapakṣe sattvam* — existe al menos una instancia positiva del warrant (ejemplo concreto registrable; la tradición exigía el udāharaṇa en el propio silogismo).
-3. *vipakṣe asattvam* — una búsqueda rápida de contraejemplo falla (n intentos del propio modelo o del crítico).
+1. *pakṣadharmatā* — the reason genuinely applies to the present case (the premises mention this case, not a similar one).
+2. *sapakṣe sattvam* — at least one positive instance of the warrant exists (a recordable concrete example; tradition required the udāharaṇa in the syllogism itself).
+3. *vipakṣe asattvam* — a quick search for a counterexample fails (n attempts by the model itself or by the critic).
 
-**Taxonomía hetvābhāsa como categorías de lint** (conecta con el proyecto nº2, el linter de cadenas):
+**Hetvābhāsa taxonomy as lint categories** (connected to project no. 2, the chain linter):
 
-| Categoría | Lectura moderna | Acción del motor |
+| Category | Modern reading | Engine action |
 |---|---|---|
-| savyabhicāra (inconcluyente) | el warrant admite contraejemplos conocidos | UNDERCUT a la justificación |
-| viruddha (contradictoria) | el warrant, bien aplicado, soporta la negación | UNDERCUT + alerta |
-| satpratipakṣa (contrabalanceada) | existe cadena opuesta de prioridad igual | marcar CONFLICT (saṃśaya) |
-| asiddha (premisa no establecida) | alguna premisa no está IN | la propagación estándar ya lo cubre |
-| bādhita (derrotada por superior) | conclusión contradicha por creencia de mayor prioridad | es literalmente el REBUT de §4; el linter solo lo etiqueta |
+| savyabhicāra (inconclusive) | the warrant permits known counterexamples | UNDERCUT the justification |
+| viruddha (contradictory) | the warrant, correctly applied, supports the negation | UNDERCUT + alert |
+| satpratipakṣa (counterbalanced) | an opposing chain of equal priority exists | mark CONFLICT (saṃśaya) |
+| asiddha (premise not established) | some premise is not IN | standard propagation already covers it |
+| bādhita (defeated by a superior) | conclusion contradicted by a higher-priority belief | it is literally the §4 REBUT; the linter only labels it |
 
-## Apéndice B — Trazabilidad concepto → componente
+## Appendix B — Concept → component traceability
 
-| Concepto | Componente de la spec |
+| Concept | Specification component |
 |---|---|
-| pramāṇa (tipología de fuentes) | enum `Pramana` + registro §3 |
-| āpta (fuente competente y honesta) | `Source.competence/integrity` + aprendizaje §5.4 |
-| vyāpti / trairūpya | `Justification.warrant` + `chain_audit` (Ap. A) |
-| anupalabdhi + yogyatā | tipo ANUPALABDHI + R3 |
-| bādha / khyāti | motor §4: REBUT / UNDERCUT |
-| svataḥ- vs parataḥ-prāmāṇya | matriz §5.2 |
-| saṃśaya (la duda dispara indagación) | CONFLICT → VerificationTask §4.2 |
-| vikalpa | veredicto del linter §7.3 |
-| smṛti no es pramāṇa | R4 (memoria como transporte) |
-| vedanā como punto de intervención | gate de acciones §7.4 |
-| el testigo no es privilegiado | R5 (monitor como contenido) + Suite D |
+| pramāṇa (source typology) | `Pramana` enum + §3 registry |
+| āpta (competent and honest source) | `Source.competence/integrity` + §5.4 learning |
+| vyāpti / trairūpya | `Justification.warrant` + `chain_audit` (App. A) |
+| anupalabdhi + yogyatā | ANUPALABDHI type + R3 |
+| bādha / khyāti | §4 engine: REBUT / UNDERCUT |
+| svataḥ vs. parataḥ-prāmāṇya | §5.2 matrix |
+| saṃśaya (doubt triggers inquiry) | CONFLICT → VerificationTask §4.2 |
+| vikalpa | §7.3 linter verdict |
+| smṛti is not a pramāṇa | R4 (memory as transport) |
+| vedanā as an intervention point | §7.4 action gate |
+| the witness is not privileged | R5 (monitor as content) + Suite D |
 
-*Fin de la especificación v0.1-draft.*
+*End of specification v0.1-draft.*
