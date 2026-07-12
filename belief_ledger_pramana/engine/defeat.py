@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from ..models import (
@@ -39,6 +40,8 @@ def relabel(
     defeats: Iterable[DefeatEdge],
     sources: Mapping[str, Source],
     config: dict[str, Any],
+    *,
+    now: datetime | None = None,
 ) -> RelabelResult:
     """Relabel the finite affected graph until a deterministic fixed point."""
 
@@ -52,6 +55,9 @@ def relabel(
     supports_by_belief: dict[str, list[IngestionSupport]] = defaultdict(list)
     for support in support_list:
         supports_by_belief[support.belief_id].append(support)
+    target_owners = {support.id: support.belief_id for support in support_list} | {
+        justification.id: justification.belief_id for justification in justification_list
+    }
     undercuts: dict[str, list[DefeatEdge]] = defaultdict(list)
     rebuts: list[DefeatEdge] = []
     for edge in defeat_list:
@@ -83,6 +89,12 @@ def relabel(
             belief_id: _candidate_status(beliefs[belief_id], supported[belief_id])
             for belief_id in ordered_ids
         }
+        if now is not None:
+            for belief_id in ordered_ids:
+                belief = beliefs[belief_id]
+                if _is_stale(belief, config, now) and next_status[belief_id] is Status.IN:
+                    next_status[belief_id] = Status.PENDING
+                    causes[belief_id] = f"stale:{belief.perishability.value}"
         conflict_pairs = set()
 
         # Equal-priority contradictions are persistent open conflicts, independent
@@ -143,7 +155,7 @@ def relabel(
                 next_status, active, tuple(sorted(conflict_pairs)), causes, iteration, False
             )
         if next_key in seen:
-            involved = _defeat_cycle_nodes(defeat_list)
+            involved = _defeat_cycle_nodes(defeat_list, target_owners=target_owners)
             for belief_id in involved:
                 if belief_id in next_status and supported.get(belief_id):
                     next_status[belief_id] = Status.PENDING
@@ -166,7 +178,7 @@ def relabel(
             causes[belief_id] = _support_loss_cause(
                 beliefs[belief_id], current, by_belief, supports_by_belief, undercuts
             )
-    involved = _defeat_cycle_nodes(defeat_list) or set(ordered_ids)
+    involved = _defeat_cycle_nodes(defeat_list, target_owners=target_owners) or set(ordered_ids)
     for belief_id in involved:
         if supported.get(belief_id):
             current[belief_id] = Status.PENDING
@@ -183,6 +195,21 @@ def _candidate_status(belief: Belief, supported: bool) -> Status:
     if belief.admission_status is Status.PENDING:
         return Status.PENDING
     return Status.IN
+
+
+def _is_stale(belief: Belief, config: dict[str, Any], now: datetime) -> bool:
+    """Return whether a non-stable belief has exceeded its configured lifetime."""
+
+    ttl = config.get("perishability_ttl", {}).get(f"{belief.perishability.value}_seconds")
+    if ttl is None:
+        return False
+    try:
+        seconds = int(ttl)
+    except (TypeError, ValueError):
+        return True
+    if seconds < 0 or belief.observed_at.tzinfo is None or now.tzinfo is None:
+        return True
+    return (now - belief.observed_at).total_seconds() > seconds
 
 
 def _is_supported(
@@ -263,11 +290,16 @@ def _active_edges(
     return active
 
 
-def _defeat_cycle_nodes(defeats: Iterable[DefeatEdge]) -> set[str]:
+def _defeat_cycle_nodes(
+    defeats: Iterable[DefeatEdge], *, target_owners: Mapping[str, str] | None = None
+) -> set[str]:
     graph: dict[str, set[str]] = defaultdict(set)
+    owners = target_owners or {}
     for edge in defeats:
         if edge.kind is DefeatKind.REBUT:
             graph[edge.attacker].add(edge.target)
+        elif edge.target in owners:
+            graph[edge.attacker].add(owners[edge.target])
     cycle_nodes: set[str] = set()
 
     def visit(node: str, path: list[str], on_path: set[str]) -> None:

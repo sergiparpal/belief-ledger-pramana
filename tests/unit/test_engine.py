@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from belief_ledger_pramana.config import load_config
@@ -162,6 +162,50 @@ def test_cycle_path_reports_exact_closure() -> None:
     j1 = Justification(new_id("justification"), b, (a,), "a therefore b")
     j2 = Justification(new_id("justification"), c, (b,), "b therefore c")
     assert cycle_path((j1, j2), a, (c,)) == (a, b, c, a)
+
+
+def test_expired_facts_are_pending_and_cannot_support_derivations(tmp_path: Path) -> None:
+    config, _ = load_config(hermes_home=tmp_path)
+    episode_id = new_id("episode")
+    source = _source(episode_id, Integrity.TRUSTED, SourceKind.TOOL, 0.9)
+    observed_at = datetime.now(UTC) - timedelta(seconds=2)
+    root = replace(
+        _basic(episode_id, source, "Live probe is healthy", Pramana.PRATYAKSHA),
+        perishability=Perishability.LIVE,
+        observed_at=observed_at,
+    )
+    derived_id = new_id("belief")
+    justification = Justification(
+        new_id("justification"), derived_id, (root.id,), "probe implies ready"
+    )
+    derived = Belief(
+        derived_id,
+        episode_id,
+        "Service is ready",
+        "service is ready",
+        Pramana.ANUMANA,
+        source.id,
+        (),
+        (justification,),
+        {},
+        Perishability.SLOW,
+        observed_at,
+        Stakes.MED,
+        Status.IN,
+        Status.IN,
+    )
+    config.data["perishability_ttl"]["live_seconds"] = 1
+    result = relabel(
+        {root.id: root, derived.id: derived},
+        (justification,),
+        (_support(root),),
+        (),
+        {source.id: source},
+        config.data,
+        now=datetime.now(UTC),
+    )
+    assert result.statuses[root.id] is Status.PENDING
+    assert result.statuses[derived.id] is Status.OUT
 
 
 def test_generated_finite_chains_terminate(tmp_path: Path) -> None:

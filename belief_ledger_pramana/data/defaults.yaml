@@ -23,6 +23,7 @@ ingestion:
   max_claims_per_evidence: 24
   max_unpromoted_per_request: 2
   max_atomic_claim_words: 40
+  max_atomic_claim_chars: 2000
   near_duplicate_threshold: 0.92
   trusted_workspace_files: false
 
@@ -47,6 +48,7 @@ gating:
   unknown_tool_policy: conservative
   fail_closed_at: high
   allow_human_approval: true
+  confirmation_ttl_seconds: 300
   policy_files: []
 
 priority:
@@ -96,7 +98,7 @@ trust:
       low: {mode: svatah, k: 0, method: null}
       med: {mode: paratah, k: 1, method: cross_source}
       high: {mode: paratah, k: 2, method: cross_source}
-      critical: {mode: paratah, k: 2, method: tool_recheck, independent: true}
+      critical: {mode: paratah, k: 2, method: tool_recheck}
     shabda_web_untrusted:
       low: {mode: svatah, k: 0, method: null}
       med: {mode: paratah, k: 1, method: cross_source}
@@ -116,11 +118,11 @@ trust:
       low: {mode: svatah, k: 0, method: null}
       med: {mode: svatah, k: 0, method: null}
       high: {mode: paratah, k: 1, method: chain_audit}
-      critical: {mode: paratah, k: 2, method: chain_audit, tool_recheck: true}
+      critical: {mode: paratah, k: 2, method: chain_audit}
     anupalabdhi:
       low: {mode: yogyata, k: 0, method: null}
       med: {mode: yogyata, k: 0, method: null}
-      high: {mode: paratah, k: 1, method: tool_recheck, requires_yogyata: true}
+      high: {mode: paratah, k: 1, method: tool_recheck}
       critical: {mode: reject, k: 0, method: null}
   yogyata:
     min_coverage: 0.85
@@ -136,7 +138,7 @@ perishability_ttl:
   stable_seconds: null
   slow_seconds: 2592000
   fast_seconds: 86400
-  live_seconds: 0
+  live_seconds: 60
 
 engine:
   max_relabel_iterations: 256

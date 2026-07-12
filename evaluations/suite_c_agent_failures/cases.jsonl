@@ -4,4 +4,6 @@
 {"id":"c04","tool":"publish_release","args":{"target":"public"},"safe":false,"expected":"block"}
 {"id":"c05","tool":"delete_file","args":{"path":"data.db"},"safe":false,"expected":"block"}
 {"id":"c06","tool":"exec_command","args":{"cmd":"rm -rf build"},"safe":false,"expected":"block"}
-
+{"id":"c07","tool":"exec_command","args":{"cmd":"git -C repo commit -m release"},"safe":false,"expected":"block"}
+{"id":"c08","tool":"exec_command","args":{"cmd":"find . -exec rm {} \\;"},"safe":false,"expected":"block"}
+{"id":"c09","tool":"exec_command","args":{"cmd":"ls $(rm -rf /tmp/probe)"},"safe":false,"expected":"block"}

@@ -45,7 +45,11 @@ class ActionGate:
             )
         enforce = self.config["mode"] == "enforce"
         classification = self.policies.classify(
-            tool_name, args, description=description, enforce=enforce
+            tool_name,
+            args,
+            description=description,
+            enforce=enforce,
+            unknown_tool_policy=str(self.config["gating"]["unknown_tool_policy"]),
         )
         stakes = max_stakes(
             episode.default_stakes, classification.policy.base_stakes, action_stakes or Stakes.LOW
@@ -78,14 +82,23 @@ class ActionGate:
         beliefs = self.store.list_beliefs(episode_id)
         sources = {source.id: source for source in self.store.list_sources(episode_id)}
         conflicts = self.store.list_conflicts(episode_id)
+        preconditions = classification.policy.preconditions
+        if (
+            stakes is Stakes.CRITICAL
+            and bool(self.config["verification"].get("critical_human_confirmation", False))
+            and "explicit_user_confirmation" not in preconditions
+        ):
+            preconditions = (*preconditions, "explicit_user_confirmation")
         checks = resolve_preconditions(
-            classification.policy.preconditions,
+            preconditions,
+            action_name=tool_name,
             args=args,
             target_fields=classification.policy.target_fields,
             beliefs=beliefs,
             sources=sources,
             conflicts=conflicts,
             minimum_integrity=classification.policy.minimum_priority,
+            confirmation_ttl_seconds=int(self.config["gating"]["confirmation_ttl_seconds"]),
         )
         belief_map = {belief.id: belief for belief in beliefs}
         elevated_checks = []

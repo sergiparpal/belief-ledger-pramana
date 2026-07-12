@@ -15,6 +15,7 @@ def enforce_report(
     policy: dict[str, str],
     relint: Callable[[str], LintReport] | None = None,
     rewrite_once: Callable[[str], str] | None = None,
+    max_rewrite_attempts: int = 1,
 ) -> LintReport:
     if report.passed:
         return report
@@ -26,7 +27,12 @@ def enforce_report(
         warning = f"Grounding warning: {len(unsupported)} unsupported factual claim(s)."
         replacement = f"{response}\n\n{warning}" if action == "annotate" else None
         return LintReport(report.claims, False, replacement, (warning,))
-    if action == "rewrite_once" and rewrite_once is not None and relint is not None:
+    if (
+        action == "rewrite_once"
+        and max_rewrite_attempts > 0
+        and rewrite_once is not None
+        and relint is not None
+    ):
         try:
             rewritten = rewrite_once(response)
         except Exception:

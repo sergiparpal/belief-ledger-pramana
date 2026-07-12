@@ -127,12 +127,10 @@ class ToolAdapterRegistry:
                 provenance_root(SourceKind.MODEL, identity=tool_name),
                 {"general": 0.65},
             )
-        elif family == "execution" and _direct_observable_command(args):
-            content_source = wrapper
-            metadata["content_pramana"] = "pratyaksha"
-        # Shell execution is an observation about its concrete environment. Its
-        # free-form stdout is not testimony until structured extraction supplies
-        # an explicit domain source.
+        # A command runner is a trustworthy witness only for the fact that it
+        # ran and returned a status.  Its stdout can be attacker-controlled,
+        # shell-dependent, or describe an unrelated domain, so it is never
+        # promoted as direct perception without a typed source adapter.
         return AdaptedToolResult(
             adapter=family,
             wrapper_source=wrapper,
@@ -141,8 +139,7 @@ class ToolAdapterRegistry:
             parsed=parsed,
             content_source=content_source,
             content_assertive=family
-            in {"web", "file", "memory", "retrieval", "delegation", "plugin"}
-            or content_source is wrapper,
+            in {"web", "file", "memory", "retrieval", "delegation", "plugin"},
             metadata=metadata,
         )
 
@@ -192,19 +189,3 @@ def _looks_structured(result: str) -> bool:
 def _extract_url(result: str) -> str | None:
     match = re.search(r"https?://[^\s\]\[<>{}\"']+", result)
     return match.group(0) if match else None
-
-
-def _direct_observable_command(args: dict[str, Any]) -> bool:
-    command = str(args.get("command") or args.get("cmd") or "").strip().casefold()
-    return command.startswith(
-        (
-            "ls",
-            "stat",
-            "pwd",
-            "git status",
-            "git rev-parse",
-            "pip index versions",
-            "python --version",
-            "python3 --version",
-        )
-    )

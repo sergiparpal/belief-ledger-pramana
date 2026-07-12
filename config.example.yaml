@@ -20,6 +20,7 @@ ingestion:
   max_claims_per_evidence: 24
   max_unpromoted_per_request: 2
   max_atomic_claim_words: 40
+  max_atomic_claim_chars: 2000
   near_duplicate_threshold: 0.92
   trusted_workspace_files: false
 verification:
@@ -41,6 +42,7 @@ gating:
   unknown_tool_policy: conservative
   fail_closed_at: high
   allow_human_approval: true
+  confirmation_ttl_seconds: 300
   policy_files: []
 
 # All omitted priority and trust maps inherit the packaged safety defaults.

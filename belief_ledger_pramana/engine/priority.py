@@ -46,7 +46,7 @@ def priority_trace(belief: Belief, source: Source, config: dict[str, Any]) -> Pr
     priority = config["priority"]
     integrity_rank = int(priority["integrity_rank"][source.integrity.value])
     reliability = effective_competence(source, belief.domain, config)
-    type_key = _type_key(belief, reliability)
+    type_key = _type_key(belief, reliability, config)
     type_ranks = priority["type_rank"]["default"]
     domain_ranks = priority.get("domain_profiles", {}).get(belief.domain, {})
     type_rank = int(
@@ -102,9 +102,12 @@ def compare_priority(
     return PriorityComparison(0, attacker_trace, target_trace, "equal")
 
 
-def _type_key(belief: Belief, reliability: float) -> str:
+def _type_key(belief: Belief, reliability: float, config: dict[str, Any]) -> str:
     if belief.pramana is Pramana.SHABDA:
-        band = "hi" if reliability >= 0.8 else "mid" if reliability >= 0.5 else "lo"
+        bands = config.get("priority", {}).get("reliability_bands", {})
+        high = float(bands.get("high", 0.8))
+        medium = float(bands.get("medium", 0.5))
+        band = "hi" if reliability >= high else "mid" if reliability >= medium else "lo"
         return f"shabda_apta_{band}"
     if belief.pramana is Pramana.ANUMANA:
         audited = any(

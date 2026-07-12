@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One command for the local stage/all verification gate."""
+"""One command for the complete local verification gate."""
 
 from __future__ import annotations
 
@@ -20,7 +20,13 @@ def run(command: list[str]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("stage", choices=("0", "1", "2", "3", "4", "5", "6", "7", "8", "all"))
+    parser.add_argument(
+        "stage",
+        nargs="?",
+        choices=("all",),
+        default="all",
+        help="retained for backwards-compatible `all` invocations",
+    )
     parser.add_argument("--hermes-checkout", type=Path)
     parser.add_argument("--skip-build", action="store_true")
     args = parser.parse_args()
@@ -29,7 +35,7 @@ def main() -> int:
     run(["ruff", "check", "."])
     if shutil.which("mypy"):
         run(["mypy", "belief_ledger_pramana"])
-    elif args.stage in {"8", "all"}:
+    else:
         raise RuntimeError("mypy is required for the complete gate")
     run(
         [
@@ -49,11 +55,15 @@ def main() -> int:
         contract.append("--allow-missing")
     run(contract)
     if not args.skip_build:
-        if not shutil.which("python") and sys.executable:
-            pass
         run([sys.executable, "-m", "build"])
         if shutil.which("twine"):
             run(["twine", "check", *[str(path) for path in sorted((ROOT / "dist").glob("*"))]])
+        artifacts = [str(path) for path in sorted((ROOT / "dist").glob("*"))]
+        run([sys.executable, "scripts/inspect_artifacts.py", *artifacts])
+        wheels = [str(path) for path in sorted((ROOT / "dist").glob("*.whl"))]
+        if len(wheels) != 1:
+            raise RuntimeError("expected exactly one wheel for install smoke test")
+        run([sys.executable, "scripts/smoke_install.py", wheels[0]])
     return 0
 
 

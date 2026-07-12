@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any
 
@@ -49,6 +50,21 @@ def apply_event(connection: sqlite3.Connection, event: Event) -> None:
                 event.aggregate_id,
             ),
         )
+    elif kind == "SOURCE_STATS_DELTA":
+        row = connection.execute(
+            "SELECT stats_json FROM sources WHERE id=?", (event.aggregate_id,)
+        ).fetchone()
+        if row is not None:
+            existing = json.loads(str(row["stats_json"]))
+            delta = payload.get("delta", {})
+            updated = {
+                key: max(0, int(existing.get(key, 0)) + int(delta.get(key, 0)))
+                for key in ("confirmed", "defeated", "samples")
+            }
+            connection.execute(
+                "UPDATE sources SET stats_json=? WHERE id=?",
+                (canonical_json(updated), event.aggregate_id),
+            )
     elif kind == "EVIDENCE_INGESTED":
         _evidence_ingested(connection, _record(record))
     elif kind == "BELIEF_ADMITTED":
@@ -171,17 +187,6 @@ def apply_event(connection: sqlite3.Connection, event: Event) -> None:
         "ON CONFLICT(episode_id) DO UPDATE SET seq=excluded.seq,event_hash=excluded.event_hash",
         (event.episode_id, event.seq, event.event_hash),
     )
-    idempotency_key = event.correlation.get("idempotency_key")
-    if idempotency_key:
-        connection.execute(
-            "INSERT OR IGNORE INTO idempotency(idempotency_key,episode_id,event_ids_json,created_at) VALUES (?,?,?,?)",
-            (
-                idempotency_key,
-                event.episode_id,
-                canonical_json([event.id]),
-                event.timestamp.isoformat(),
-            ),
-        )
 
 
 def _episode_created(connection: sqlite3.Connection, record: dict[str, Any]) -> None:

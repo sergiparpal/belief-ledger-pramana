@@ -14,11 +14,14 @@ def lint_response(
     beliefs: Iterable[Belief],
     *,
     pending_marker: str,
+    require_coverage: bool = False,
 ) -> LintReport:
     belief_map = {belief.id: belief for belief in beliefs}
     claims = tuple(
         match_claim(claim, belief_map, pending_marker=pending_marker)
-        for claim in extract_claims(response, pending_marker=pending_marker)
+        for claim in extract_claims(
+            response, pending_marker=pending_marker, require_coverage=require_coverage
+        )
     )
     passed = all(
         claim.disposition in {LintDisposition.GROUNDED, LintDisposition.PENDING_MARKED}

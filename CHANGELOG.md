@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Hardened terminal classification, action-bound confirmation, request-bound context injection,
+  and execution-output provenance.
+- Made freshness, configuration controls, retraction acknowledgement, and linter citation
+  enforcement operational rather than advisory.
+- Fixed multi-event idempotency, verification-task races, source-stat deltas, and atomic LLM
+  budget reservation; added schema migration 2.
+- Added batching for belief hydration, stronger input validation, expanded regression/evaluation
+  coverage, package smoke checks, and pinned audited runtime dependencies.
+
 ## 1.0.0rc1 - 2026-07-11
 
 - Complete standalone Hermes `0.18.2` plugin with directory and entry-point discovery.

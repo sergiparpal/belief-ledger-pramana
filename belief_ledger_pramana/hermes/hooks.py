@@ -30,7 +30,11 @@ class HermesHooks:
                     query=message,
                     request_id=str(kwargs.get("turn_id") or "compatibility-turn"),
                 )
-                return {"context": self.runtime.injector.wrap(rendered.text)}
+                return {
+                    "context": self.runtime.injector.wrap(
+                        rendered.text, binding=str(kwargs.get("turn_id") or "compatibility-turn")
+                    )
+                }
             if self.runtime.compatibility.mode is CompatibilityMode.DIAGNOSTICS_ONLY:
                 return {
                     "context": (
@@ -41,7 +45,7 @@ class HermesHooks:
             return None
         except Exception as exc:
             logger.exception("belief ledger pre_llm_call failed")
-            self.runtime.health_reasons.append(f"pre_llm_call failed: {type(exc).__name__}")
+            self.runtime.mark_global_failure("pre_llm_call", type(exc).__name__)
             return {
                 "context": (
                     "[belief-ledger-pramana degraded: user evidence ingestion failed; do not "
@@ -52,7 +56,9 @@ class HermesHooks:
     def pre_tool_call(self, **kwargs: Any) -> dict[str, str] | None:
         tool_name = str(kwargs.get("tool_name") or "")
         args = kwargs.get("args")
-        args = args if isinstance(args, dict) else {}
+        if not isinstance(args, dict):
+            documented = kwargs.get("arguments")
+            args = documented if isinstance(documented, dict) else {}
         try:
             service = self.runtime.service(**kwargs)
             decision = service.gate_action(tool_name, args)
@@ -69,7 +75,7 @@ class HermesHooks:
             if (
                 self.runtime.health is not Health.HEALTHY
                 and decision.reason_code != "READ_ONLY"
-                and decision.stakes in {Stakes.HIGH, Stakes.CRITICAL}
+                and _fails_closed(self.runtime, decision.stakes)
             ):
                 return {
                     "action": "block",
@@ -82,7 +88,7 @@ class HermesHooks:
             if (
                 self.runtime.injection_failed(service.episode_id)
                 and decision.reason_code != "READ_ONLY"
-                and decision.stakes in {Stakes.HIGH, Stakes.CRITICAL}
+                and _fails_closed(self.runtime, decision.stakes)
             ):
                 return {
                     "action": "block",
@@ -106,7 +112,7 @@ class HermesHooks:
             return None
         except Exception as exc:
             logger.exception("belief ledger action gate failed")
-            self.runtime.health_reasons.append(f"pre_tool_call failed: {type(exc).__name__}")
+            self.runtime.mark_global_failure("pre_tool_call", type(exc).__name__)
             if _known_read_only_low_med(self.runtime, tool_name, args):
                 return None
             return {
@@ -139,9 +145,7 @@ class HermesHooks:
             )
         except Exception as exc:
             logger.exception("belief ledger tool-result ingestion failed")
-            self.runtime.health_reasons.append(
-                f"transform_tool_result failed: {type(exc).__name__}"
-            )
+            self.runtime.mark_global_failure("transform_tool_result", type(exc).__name__)
         # Returning None preserves Hermes' post-redaction tool result byte-for-byte.
         return None
 
@@ -156,20 +160,16 @@ class HermesHooks:
                     response
                     + "\n\n[Belief ledger diagnostics-only: this response was not strictly grounded.]"
                 )
-            if self.runtime.health is not Health.HEALTHY and service.episode.default_stakes in {
-                Stakes.HIGH,
-                Stakes.CRITICAL,
-            }:
+            if self.runtime.health is not Health.HEALTHY and _fails_closed(
+                self.runtime, service.episode.default_stakes
+            ):
                 return (
                     "Response blocked because the belief ledger is degraded for a high-stakes "
                     "turn. Run `hermes belief-ledger doctor` and retry."
                 )
-            if self.runtime.injection_failed(
-                service.episode_id
-            ) and service.episode.default_stakes in {
-                Stakes.HIGH,
-                Stakes.CRITICAL,
-            }:
+            if self.runtime.injection_failed(service.episode_id) and _fails_closed(
+                self.runtime, service.episode.default_stakes
+            ):
                 return (
                     "Response blocked because epistemic context injection failed for a "
                     "high-stakes turn. Run `hermes belief-ledger doctor` and retry."
@@ -354,3 +354,12 @@ def _known_read_only_low_med(runtime: PluginRuntime, tool_name: str, args: dict[
         )
     except Exception:
         return False
+
+
+def _fails_closed(runtime: PluginRuntime, stakes: Stakes) -> bool:
+    try:
+        threshold = str(runtime.config.data["gating"]["fail_closed_at"])
+    except Exception:
+        threshold = Stakes.HIGH.value
+    ranks = {Stakes.LOW: 0, Stakes.MED: 1, Stakes.HIGH: 2, Stakes.CRITICAL: 3}
+    return ranks[stakes] >= ranks[Stakes(threshold)]

@@ -8,4 +8,4 @@
 {"id":"d08","belief":"Python 3.12 is active","response":"Python 3.12 is active [BELIEF_ID].","vikalpa":false}
 {"id":"d09","belief":"Python 3.12 is active","response":"Python 2.7 is active.","vikalpa":true}
 {"id":"d10","belief":"The file exists","response":"Does the file exist?","vikalpa":false}
-
+{"id":"d11","belief":"The deployment uses version 2.3","response":"The deployment uses version 2.4.","vikalpa":true}

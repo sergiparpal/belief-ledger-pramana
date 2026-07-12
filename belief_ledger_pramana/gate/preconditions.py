@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import PurePath
 from typing import Any
 
 from ..engine.validity import normalize_content
 from ..models import Belief, Conflict, Integrity, Source, Status
+
+_AFFIRMATIVE_CONFIRMATION = re.compile(
+    r"^(?:i|we|yo)\s+(?:hereby\s+)?(?:confirm\w*|authoriz\w*|approve\w*|autoriz\w*)\b"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,12 +30,14 @@ class PreconditionResult:
 def resolve_preconditions(
     names: tuple[str, ...],
     *,
+    action_name: str,
     args: dict[str, Any],
     target_fields: tuple[str, ...],
     beliefs: list[Belief],
     sources: Mapping[str, Source],
     conflicts: list[Conflict],
     minimum_integrity: str,
+    confirmation_ttl_seconds: int = 300,
 ) -> tuple[PreconditionResult, ...]:
     target = _target(args, target_fields)
     results: list[PreconditionResult] = []
@@ -49,9 +57,22 @@ def resolve_preconditions(
             continue
         proposition, suggestion = _proposition(name, target)
         match = (
-            _confirmation_belief(target, beliefs, sources, minimum_integrity)
+            _confirmation_belief(
+                target,
+                action_name,
+                beliefs,
+                sources,
+                minimum_integrity,
+                confirmation_ttl_seconds=confirmation_ttl_seconds,
+            )
             if name == "explicit_user_confirmation"
-            else _entailing_belief(proposition, beliefs, sources, minimum_integrity)
+            else _entailing_belief(
+                proposition,
+                beliefs,
+                sources,
+                minimum_integrity,
+                exact=name == "resource_identity",
+            )
         )
         results.append(
             PreconditionResult(
@@ -110,6 +131,8 @@ def _entailing_belief(
     beliefs: list[Belief],
     sources: Mapping[str, Source],
     minimum_integrity: str,
+    *,
+    exact: bool = False,
 ) -> Belief | None:
     ranks = {Integrity.UNTRUSTED: 0, Integrity.SEMI: 1, Integrity.TRUSTED: 2}
     required = {"untrusted": 0, "semi": 1, "trusted": 2}.get(minimum_integrity, 2)
@@ -117,21 +140,30 @@ def _entailing_belief(
     for belief in sorted(beliefs, key=lambda item: item.id):
         if belief.status is not Status.IN or ranks[sources[belief.source_id].integrity] < required:
             continue
+        if _contains_negation(belief.normalized_content):
+            continue
         actual = set(belief.normalized_content.split())
-        if wanted <= actual or belief.normalized_content == normalize_content(proposition):
+        normalized = normalize_content(proposition)
+        if belief.normalized_content == normalized:
+            return belief
+        if not exact and wanted <= actual:
             return belief
     return None
 
 
 def _confirmation_belief(
     target: str,
+    action_name: str,
     beliefs: list[Belief],
     sources: Mapping[str, Source],
     minimum_integrity: str,
+    *,
+    confirmation_ttl_seconds: int,
 ) -> Belief | None:
     target_tokens = set(normalize_content(target).split())
     required = {"untrusted": 0, "semi": 1, "trusted": 2}.get(minimum_integrity, 2)
     ranks = {Integrity.UNTRUSTED: 0, Integrity.SEMI: 1, Integrity.TRUSTED: 2}
+    now = datetime.now(UTC)
     for belief in sorted(beliefs, key=lambda item: item.id):
         source = sources[belief.source_id]
         if (
@@ -140,9 +172,29 @@ def _confirmation_belief(
             or ranks[source.integrity] < required
         ):
             continue
-        content = belief.normalized_content
-        if not any(token in content for token in ("confirm", "authoriz", "approve", "autoriz")):
+        age_seconds = (
+            (now - belief.observed_at).total_seconds()
+            if belief.observed_at.tzinfo is not None
+            else float("inf")
+        )
+        if age_seconds < 0 or age_seconds > confirmation_ttl_seconds:
             continue
-        if not target_tokens or target_tokens <= set(content.split()):
+        content = belief.normalized_content
+        tokens = set(re.findall(r"[\w.-]+", content))
+        if _contains_negation(content):
+            continue
+        if _AFFIRMATIVE_CONFIRMATION.search(content) is None:
+            continue
+        action_tokens = set(re.findall(r"[\w.-]+", action_name.replace("_", " ")))
+        if target_tokens <= tokens and action_tokens <= tokens:
             return belief
     return None
+
+
+def _contains_negation(content: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:not|no|never|without|deny|denied|decline|declined|don't|do not|cannot|can't|unconfirm)\b",
+            content,
+        )
+    )

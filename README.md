@@ -53,6 +53,9 @@ compiles current relevant beliefs, open conflicts, and live structural retractio
 ephemeral block appended to the active user item. Tool results remain byte-for-byte unchanged
 in the Hermes transcript; the plugin separately records an immutable evidence object, a
 PRATYAKṢA tool wrapper, and lazily validated content beliefs with the actual source.
+Generic command stdout is only evidence that the command returned; it is never promoted into a
+domain fact. Terminal commands are read-only only when they match the plugin's strict,
+non-compositional read grammar.
 
 Final responses are linted under the episode stakes:
 
@@ -64,6 +67,8 @@ Before an effectful tool runs, a versioned action registry derives effective sta
 checks preconditions. Missing support returns a deterministic block with a safe observation;
 when explicit human confirmation is the only missing precondition, the audited Hermes
 approval gate may be requested.
+Textual confirmation is action-and-target-bound, expires quickly, and a negated statement never
+authorizes an action.
 
 ## Tools and commands
 

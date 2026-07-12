@@ -5,12 +5,14 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import math
+import re
 import sqlite3
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import yaml
@@ -136,6 +138,7 @@ class PluginRuntime:
         self._queries: dict[str, str] = {}
         self._recent_tool_results: dict[str, str] = {}
         self._injection_failures: set[str] = set()
+        self._episode_health_reasons: dict[str, list[str]] = {}
         self._current_episode: contextvars.ContextVar[str] = contextvars.ContextVar(
             "belief_ledger_current_episode", default=""
         )
@@ -208,7 +211,7 @@ class PluginRuntime:
         if turn_id:
             with self._registry_lock:
                 self._turn_to_episode[turn_id] = service.episode_id
-        marker = turn_id or f"implicit:{content_hash(_clean(kwargs.get('user_message')))[:16]}"
+        marker = turn_id or f"implicit:{new_id('turn')}"
         key = (service.episode_id, marker)
         with self._registry_lock:
             first = key not in self._begun_turns
@@ -260,8 +263,10 @@ class PluginRuntime:
 
     def current_service(self) -> EpisodeService:
         episode_id = self._current_episode.get()
-        if episode_id and self.store is not None and self.store.get_episode(episode_id):
-            return self.service_for_id(episode_id)
+        if episode_id and self.store is not None:
+            current = self.store.get_episode(episode_id)
+            if current is not None and current.state == "active":
+                return self.service_for_id(episode_id)
         self.ensure_initialized()
         assert self.store is not None
         active = [episode for episode in self.store.list_episodes() if episode.state == "active"]
@@ -345,8 +350,14 @@ class PluginRuntime:
 
     def mark_injection_failure(self, episode_id: str, reason: str) -> None:
         self._injection_failures.add(episode_id)
-        self.health = Health.DEGRADED
-        self.health_reasons.append(f"context injection failed for {episode_id}: {reason}")
+        self._episode_health_reasons.setdefault(episode_id, []).append(
+            f"context injection failed: {reason}"
+        )
+
+    def mark_global_failure(self, component: str, reason: str) -> None:
+        if self.health is not Health.UNAVAILABLE:
+            self.health = Health.DEGRADED
+        self.health_reasons.append(f"{component} failed: {reason}")
 
     def injection_failed(self, episode_id: str) -> bool:
         return episode_id in self._injection_failures
@@ -379,12 +390,17 @@ class PluginRuntime:
             self._queries.pop(episode_id, None)
             self._recent_tool_results.pop(episode_id, None)
             self._injection_failures.discard(episode_id)
+            self._episode_health_reasons.pop(episode_id, None)
+            self._episode_locks.pop(episode_id, None)
+            self._begun_turns = {key for key in self._begun_turns if key[0] != episode_id}
             for turn_id, mapped in list(self._turn_to_episode.items()):
                 if mapped == episode_id:
                     self._turn_to_episode.pop(turn_id, None)
             for session_key, mapped in list(self._approval_to_episode.items()):
                 if mapped == episode_id:
                     self._approval_to_episode.pop(session_key, None)
+            if self._current_episode.get() == episode_id:
+                self._current_episode.set("")
 
     def _reload_at_boundary(self) -> None:
         if self._config is None or not config_needs_reload(self._config):
@@ -440,6 +456,7 @@ class EpisodeService:
             message,
             mode=str(storage["evidence_mode"]),
             max_excerpt_chars=int(storage["max_excerpt_chars"]),
+            redact=bool(storage["redact_secrets"]),
         )
         evidence = Evidence(
             id=new_id("evidence"),
@@ -522,12 +539,13 @@ class EpisodeService:
             result,
             mode=str(storage["evidence_mode"]),
             max_excerpt_chars=int(storage["max_excerpt_chars"]),
+            redact=bool(storage["redact_secrets"]),
         )
         evidence_id = new_id("evidence")
         wrapper_id = new_id("belief")
         metadata = {
             **adapted.metadata,
-            "args_hash": _args_hash(args),
+            "args_hash": _args_hash(args, redact=bool(storage["redact_secrets"])),
             "duration_ms": int(kwargs.get("duration_ms") or 0),
             "status": _clean(kwargs.get("status")),
             "error_type": _clean(kwargs.get("error_type")),
@@ -584,6 +602,7 @@ class EpisodeService:
             evidence_payloads={evidence_id: prepared.payload},
             evidence_mode=str(storage["evidence_mode"]),
             max_words=int(self.config["ingestion"]["max_atomic_claim_words"]),
+            max_chars=int(self.config["ingestion"]["max_atomic_claim_chars"]),
         )
         if not validity.valid:
             # A wrapper about observing a failed/unparsed result remains valid as
@@ -654,8 +673,16 @@ class EpisodeService:
             idempotency_key=idempotency_key,
         )
         self.runtime.set_recent_tool_result(self.episode_id, result)
+        event_ids = [event.id for event in events]
+        if (
+            not bool(self.config["ingestion"]["lazy_claim_extraction"])
+            and content_source is not None
+            and prepared.payload
+            and adapted.content_assertive
+        ):
+            event_ids.extend(self._promote_evidence(evidence.id))
         self._after_new_beliefs()
-        return tuple(event.id for event in events)
+        return tuple(event_ids)
 
     def ensure_source(self, descriptor: SourceDescriptor | None) -> Source:
         if descriptor is None:
@@ -720,6 +747,8 @@ class EpisodeService:
         return tuple(all_event_ids)
 
     def _promote_evidence(self, evidence_id: str) -> tuple[str, ...]:
+        if not self.store.is_unpromoted(self.episode_id, evidence_id):
+            return ()
         evidence = self.store.get_evidence(evidence_id)
         if evidence is None or not evidence.payload:
             return ()
@@ -727,34 +756,47 @@ class EpisodeService:
         content_source = self.store.get_source(content_source_id)
         if content_source is None:
             return ()
+        if content_source.id == evidence.source_id:
+            events = self.store.append_events(
+                self.episode_id,
+                [
+                    EventDraft(
+                        "UNPROMOTED_EVIDENCE_FAILED",
+                        "evidence",
+                        evidence.id,
+                        {
+                            "evidence_id": evidence.id,
+                            "reason": "generic execution output has no domain source",
+                        },
+                    )
+                ],
+            )
+            return tuple(event.id for event in events)
         candidates: tuple[ClaimCandidate, ...]
         used_model = False
-        direct_observation = evidence.metadata.get("content_pramana") == "pratyaksha"
-        if direct_observation:
+        # Only typed content adapters reach this path. Generic execution stdout
+        # has no content source and cannot become a domain claim.
+        try:
+            result = self.llm.complete_structured(
+                episode_id=self.episode_id,
+                purpose="belief-ledger.claim-extraction",
+                instructions=CLAIM_EXTRACTION,
+                text=evidence.payload,
+                schema=CLAIM_EXTRACTION_SCHEMA,
+                schema_name="belief_ledger_claim_extraction_v1",
+                max_tokens=1_500,
+                validator=lambda value: _validate_claim_result(
+                    value,
+                    max_claims=int(self.config["ingestion"]["max_claims_per_evidence"]),
+                ),
+            )
+            candidates = result.parsed
+            used_model = True
+        except LlmComponentError:
             candidates = deterministic_candidates(
                 evidence.payload,
-                pramana=Pramana.PRATYAKSHA,
                 max_claims=int(self.config["ingestion"]["max_claims_per_evidence"]),
             )
-        else:
-            try:
-                result = self.llm.complete_structured(
-                    episode_id=self.episode_id,
-                    purpose="belief-ledger.claim-extraction",
-                    instructions=CLAIM_EXTRACTION,
-                    text=evidence.payload,
-                    schema=CLAIM_EXTRACTION_SCHEMA,
-                    schema_name="belief_ledger_claim_extraction_v1",
-                    max_tokens=1_500,
-                    validator=_validate_claim_result,
-                )
-                candidates = result.parsed
-                used_model = True
-            except LlmComponentError:
-                candidates = deterministic_candidates(
-                    evidence.payload,
-                    max_claims=int(self.config["ingestion"]["max_claims_per_evidence"]),
-                )
         drafts: list[EventDraft] = []
         accepted = 0
         for candidate in candidates:
@@ -762,10 +804,9 @@ class EpisodeService:
                 candidate,
                 evidence.payload,
                 max_words=int(self.config["ingestion"]["max_atomic_claim_words"]),
+                max_chars=int(self.config["ingestion"]["max_atomic_claim_chars"]),
                 allowed_source_identity=content_source.name,
-                allowed_pramanas={Pramana.PRATYAKSHA}
-                if direct_observation
-                else {Pramana.SHABDA, Pramana.ANUPALABDHI},
+                allowed_pramanas={Pramana.SHABDA, Pramana.ANUPALABDHI},
             )
             if not validation.accepted:
                 drafts.append(
@@ -808,6 +849,17 @@ class EpisodeService:
                     },
                 )
             )
+            drafts.append(
+                EventDraft(
+                    "UNPROMOTED_EVIDENCE_FAILED",
+                    "evidence",
+                    evidence.id,
+                    {
+                        "evidence_id": evidence.id,
+                        "reason": "no valid recoverable atomic claims",
+                    },
+                )
+            )
         verdict_drafts = self._component_verdict_drafts(
             "claim_extractor",
             evidence.content_hash,
@@ -839,6 +891,7 @@ class EpisodeService:
     ) -> tuple[Belief, tuple[str, ...]]:
         if pramana not in {Pramana.ANUMANA, Pramana.ARTHAPATTI, Pramana.UPAMANA}:
             raise ValueError("model-authored records may only be anumana, arthapatti, or upamana")
+        self.relabel()
         if not warrant.strip():
             raise ValueError("warrant must be non-empty")
         if not premise_ids:
@@ -900,6 +953,7 @@ class EpisodeService:
             initial,
             premise_statuses=premise_statuses,
             max_words=int(self.config["ingestion"]["max_atomic_claim_words"]),
+            max_chars=int(self.config["ingestion"]["max_atomic_claim_chars"]),
         )
         if not validation.valid:
             raise ValueError("invalid inference: " + "; ".join(validation.reasons))
@@ -993,48 +1047,66 @@ class EpisodeService:
             return ()
         if result not in {"confirmed", "disconfirmed", "inconclusive"}:
             raise ValueError("invalid verification result")
-        belief = self.store.get_belief(task.belief_id)
-        if belief is None:
-            raise ValueError("verification belief is missing")
-        drafts: list[EventDraft] = [
-            EventDraft(
-                "VERIFICATION_TASK_COMPLETED",
-                "verification_task",
-                task.id,
-                {"result": result, "state": "completed", "cause": cause},
+        with self.runtime.episode_lock(self.episode_id):
+            current = next(
+                (
+                    item
+                    for item in self.store.list_verification_tasks(self.episode_id)
+                    if item.id == task.id
+                ),
+                None,
             )
-        ]
-        if result in {"confirmed", "disconfirmed"}:
-            new_admission = Status.IN if result == "confirmed" else Status.OUT
-            if belief.admission_status is not new_admission:
-                drafts.append(
-                    EventDraft(
-                        "BELIEF_ADMISSION_CHANGED",
-                        "belief",
-                        belief.id,
-                        {
-                            "from": belief.admission_status.value,
-                            "to": new_admission.value,
-                            "cause": f"verification:{task.id}:{result}",
-                        },
+            if current is None or current.state != "open":
+                return ()
+            belief = self.store.get_belief(current.belief_id)
+            if belief is None:
+                raise ValueError("verification belief is missing")
+            drafts: list[EventDraft] = [
+                EventDraft(
+                    "VERIFICATION_TASK_COMPLETED",
+                    "verification_task",
+                    current.id,
+                    {"result": result, "state": "completed", "cause": cause},
+                )
+            ]
+            if result in {"confirmed", "disconfirmed"}:
+                new_admission = Status.IN if result == "confirmed" else Status.OUT
+                if belief.admission_status is not new_admission:
+                    drafts.append(
+                        EventDraft(
+                            "BELIEF_ADMISSION_CHANGED",
+                            "belief",
+                            belief.id,
+                            {
+                                "from": belief.admission_status.value,
+                                "to": new_admission.value,
+                                "cause": f"verification:{current.id}:{result}",
+                            },
+                        )
                     )
-                )
-            source = self.store.get_source(belief.source_id)
-            if source:
-                stats = SourceStats(
-                    confirmed=source.stats.confirmed + int(result == "confirmed"),
-                    defeated=source.stats.defeated + int(result == "disconfirmed"),
-                    samples=source.stats.samples + 1,
-                )
-                drafts.append(
-                    EventDraft(
-                        "SOURCE_STATS_UPDATED",
-                        "source",
-                        source.id,
-                        {"stats": to_primitive(stats), "competence": dict(source.competence)},
+                source = self.store.get_source(belief.source_id)
+                if source:
+                    drafts.append(
+                        EventDraft(
+                            "SOURCE_STATS_DELTA",
+                            "source",
+                            source.id,
+                            {
+                                "delta": {
+                                    "confirmed": int(result == "confirmed"),
+                                    "defeated": int(result == "disconfirmed"),
+                                    "samples": 1,
+                                }
+                            },
+                        )
                     )
-                )
-        events = self.store.append_events(self.episode_id, drafts)
+            events = self.store.append_events(
+                self.episode_id,
+                drafts,
+                require_open_verification_task_id=current.id,
+            )
+        if not events:
+            return ()
         transition_ids = self.relabel()
         return tuple(event.id for event in events) + transition_ids
 
@@ -1151,6 +1223,7 @@ class EpisodeService:
                 defeats,
                 sources,
                 self.config,
+                now=utc_now(),
             )
             drafts: list[EventDraft] = []
             for edge in defeats:
@@ -1214,15 +1287,27 @@ class EpisodeService:
                 )
                 existing_conflicts[conflict_pair] = conflict
             new_conflicts = set(outcome.conflicts)
+            existing_tasks = {
+                (task.belief_id, task.method): task
+                for task in self.store.list_verification_tasks(self.episode_id, state="open")
+            }
             for pair in sorted(new_conflicts - set(existing_conflicts)):
-                task = VerificationTask(
-                    id=new_id("verification"),
-                    episode_id=self.episode_id,
-                    belief_id=pair[0],
-                    method=VerificationMethod.CROSS_SOURCE,
-                    k_required=1,
-                    budget=1,
-                )
+                task = existing_tasks.get((pair[0], VerificationMethod.CROSS_SOURCE))
+                if task is None:
+                    task = VerificationTask(
+                        id=new_id("verification"),
+                        episode_id=self.episode_id,
+                        belief_id=pair[0],
+                        method=VerificationMethod.CROSS_SOURCE,
+                        k_required=1,
+                        budget=1,
+                    )
+                    existing_tasks[(pair[0], VerificationMethod.CROSS_SOURCE)] = task
+                    drafts.append(
+                        _record_draft(
+                            "VERIFICATION_TASK_CREATED", "verification_task", task.id, task
+                        )
+                    )
                 conflict = Conflict(
                     id=new_id("conflict"),
                     episode_id=self.episode_id,
@@ -1230,9 +1315,6 @@ class EpisodeService:
                     right_belief_id=pair[1],
                     normalized_scope={},
                     verification_task_id=task.id,
-                )
-                drafts.append(
-                    _record_draft("VERIFICATION_TASK_CREATED", "verification_task", task.id, task)
                 )
                 drafts.append(_record_draft("CONFLICT_OPENED", "conflict", conflict.id, conflict))
             for pair in sorted(set(existing_conflicts) - new_conflicts):
@@ -1247,18 +1329,12 @@ class EpisodeService:
                 )
 
             for source_id, count in sorted(defeated_by_source.items()):
-                source = sources[source_id]
-                stats = SourceStats(
-                    confirmed=source.stats.confirmed,
-                    defeated=source.stats.defeated + count,
-                    samples=source.stats.samples + count,
-                )
                 drafts.append(
                     EventDraft(
-                        "SOURCE_STATS_UPDATED",
+                        "SOURCE_STATS_DELTA",
                         "source",
                         source_id,
-                        {"stats": to_primitive(stats), "competence": dict(source.competence)},
+                        {"delta": {"confirmed": 0, "defeated": count, "samples": count}},
                     )
                 )
             if outcome.oscillation:
@@ -1317,7 +1393,11 @@ class EpisodeService:
             selection,
             sources,
             config=self.config,
-            health=self.runtime.health,
+            health=(
+                Health.DEGRADED
+                if self.runtime.injection_failed(self.episode_id)
+                else self.runtime.health
+            ),
             request_id=resolved_request_id,
             ascii_only=ascii_only,
         )
@@ -1358,10 +1438,18 @@ class EpisodeService:
 
         def relint(text: str) -> LintReport:
             return lint_response(
-                text, self.store.list_beliefs(self.episode_id), pending_marker=marker
+                text,
+                self.store.list_beliefs(self.episode_id),
+                pending_marker=marker,
+                require_coverage=stakes in {Stakes.HIGH, Stakes.CRITICAL},
             )
 
-        report = lint_response(response, beliefs, pending_marker=marker)
+        report = lint_response(
+            response,
+            beliefs,
+            pending_marker=marker,
+            require_coverage=stakes in {Stakes.HIGH, Stakes.CRITICAL},
+        )
         report = self._semantic_lint(
             response,
             report,
@@ -1401,6 +1489,7 @@ class EpisodeService:
                 },
                 relint=relint,
                 rewrite_once=rewrite_once,
+                max_rewrite_attempts=int(self.config["lint"]["max_rewrite_attempts"]),
             )
         except LlmComponentError:
             replacement = linter_failure_response(stakes, response)
@@ -1437,12 +1526,8 @@ class EpisodeService:
             ),
             *verdict_drafts,
         ]
-        used_beliefs = {
-            belief_id for claim in enforced.claims for belief_id in claim.supporting_beliefs
-        }
         for notice in self.store.list_retractions(self.episode_id):
-            retracted = {notice.defeated_belief_id, *notice.descendants}
-            if not (used_beliefs & retracted):
+            if _explicitly_acknowledges_retraction(final_text, notice):
                 drafts.append(
                     EventDraft(
                         "RETRACTION_ACKNOWLEDGED",
@@ -1477,6 +1562,10 @@ class EpisodeService:
         stop = {"the", "a", "an", "is", "are", "was", "were", "of", "to", "in"}
         candidates: dict[int, list[Belief]] = {}
         for index, claim in unresolved:
+            if not claim.cited_beliefs:
+                # Semantic similarity can assess a supplied citation, but it
+                # must not invent one and thereby bypass the citation contract.
+                continue
             claim_tokens = set(normalize_content(claim.text).split()) - stop
             ranked = sorted(
                 (
@@ -1486,6 +1575,7 @@ class EpisodeService:
                     )
                     for belief in beliefs
                     if belief.status in {Status.IN, Status.PENDING}
+                    and belief.id in claim.cited_beliefs
                 ),
                 key=lambda item: (-item[0], item[1].id),
             )
@@ -1592,6 +1682,7 @@ class EpisodeService:
             text,
             mode=str(storage["evidence_mode"]),
             max_excerpt_chars=int(storage["max_excerpt_chars"]),
+            redact=bool(storage["redact_secrets"]),
         )
         evidence = Evidence(
             id=new_id("evidence"),
@@ -1671,7 +1762,10 @@ class EpisodeService:
             return None
         marker = str(self.config["lint"]["pending_marker"])
         report = lint_response(
-            response, self.store.list_beliefs(self.episode_id), pending_marker=marker
+            response,
+            self.store.list_beliefs(self.episode_id),
+            pending_marker=marker,
+            require_coverage=True,
         )
         if report.passed:
             return None
@@ -1687,7 +1781,11 @@ class EpisodeService:
         }
 
     def record_accepted_response(self, response: str, **kwargs: Any) -> tuple[str, ...]:
-        redacted, _ = redact_secrets(response)
+        redacted, _ = (
+            redact_secrets(response)
+            if bool(self.config["storage"]["redact_secrets"])
+            else (response, False)
+        )
         event = self.store.append_events(
             self.episode_id,
             [
@@ -1713,6 +1811,10 @@ class EpisodeService:
         *,
         description: str = "",
     ) -> GateDecision:
+        # Freshness is a precondition of using an IN belief to authorize an
+        # effectful action.  Relabel before every gate decision rather than only
+        # when a context happens to be rendered.
+        self.relabel()
         return self.gate.evaluate(self.episode_id, tool_name, args, description=description)
 
     def query(
@@ -1907,6 +2009,7 @@ class EpisodeService:
             evidence_payloads={evidence.id: evidence.payload},
             evidence_mode=str(self.config["storage"]["evidence_mode"]),
             max_words=int(self.config["ingestion"]["max_atomic_claim_words"]),
+            max_chars=int(self.config["ingestion"]["max_atomic_claim_chars"]),
         )
         if not validation.valid:
             return [
@@ -1975,15 +2078,41 @@ class EpisodeService:
         yogyata = self.config["trust"]["yogyata"]
         raw_parameters = args.get("parameters")
         parameters: dict[str, Any] = raw_parameters if isinstance(raw_parameters, dict) else {}
+        truncated = args.get("truncated", True)
+        try:
+            coverage = float(args.get("coverage") or 0.0)
+            recall = float(args.get("recall") or 0.0)
+        except (TypeError, ValueError):
+            return [
+                EventDraft(
+                    "SEARCH_FAILED",
+                    "evidence",
+                    evidence.id,
+                    {"reason": "search coverage or recall is malformed", "tool_name": tool_name},
+                )
+            ]
+        if (
+            not math.isfinite(coverage)
+            or not math.isfinite(recall)
+            or not isinstance(truncated, bool)
+        ):
+            return [
+                EventDraft(
+                    "SEARCH_FAILED",
+                    "evidence",
+                    evidence.id,
+                    {"reason": "search metadata is malformed", "tool_name": tool_name},
+                )
+            ]
         assessment = assess_negative_search(
             search_succeeded=search_succeeded,
-            truncated=bool(args.get("truncated", True)),
+            truncated=truncated,
             corpus=str(args.get("corpus") or ""),
             scope=str(args.get("scope") or ""),
             query=str(args.get("query") or args.get("pattern") or ""),
             parameters=parameters,
-            coverage=float(args.get("coverage") or 0.0),
-            recall=float(args.get("recall") or 0.0),
+            coverage=coverage,
+            recall=recall,
             min_coverage=float(yogyata["min_coverage"]),
             min_recall=float(yogyata["min_recall"]),
         )
@@ -2026,6 +2155,8 @@ class EpisodeService:
         validation = validate_belief(
             initial,
             evidence_payloads={evidence.id: evidence.payload},
+            max_words=int(self.config["ingestion"]["max_atomic_claim_words"]),
+            max_chars=int(self.config["ingestion"]["max_atomic_claim_chars"]),
             yogyata_min_coverage=float(yogyata["min_coverage"]),
             yogyata_min_recall=float(yogyata["min_recall"]),
         )
@@ -2352,18 +2483,18 @@ def _correlation(kwargs: Mapping[str, Any]) -> dict[str, str]:
     return {field: value for field in fields if (value := _clean(kwargs.get(field)))}
 
 
-def _args_hash(args: dict[str, Any]) -> str:
+def _args_hash(args: dict[str, Any], *, redact: bool = True) -> str:
     serialized = json.dumps(
         args, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":")
     )
-    redacted, _ = redact_secrets(serialized)
-    return content_hash(redacted)
+    value, _ = redact_secrets(serialized) if redact else (serialized, False)
+    return content_hash(value)
 
 
-def _validate_claim_result(value: Any) -> tuple[ClaimCandidate, ...]:
+def _validate_claim_result(value: Any, *, max_claims: int = 24) -> tuple[ClaimCandidate, ...]:
     if not isinstance(value, dict) or not isinstance(value.get("claims"), list):
         raise ValueError("claim extractor result must contain a claims array")
-    if len(value["claims"]) > 24:
+    if len(value["claims"]) > max_claims:
         raise ValueError("claim extractor returned too many claims")
     return tuple(candidate_from_structured(item) for item in value["claims"])
 
@@ -2474,7 +2605,7 @@ def _apply_source_profile(descriptor: SourceDescriptor, config: dict[str, Any]) 
     if not isinstance(profile, dict):
         return descriptor
     try:
-        return replace(
+        resolved = replace(
             descriptor,
             kind=SourceKind(str(profile.get("kind", descriptor.kind.value))),
             integrity=Integrity(str(profile.get("integrity", descriptor.integrity.value))),
@@ -2483,5 +2614,31 @@ def _apply_source_profile(descriptor: SourceDescriptor, config: dict[str, Any]) 
                 for key, value in dict(profile.get("competence", descriptor.competence)).items()
             },
         )
+        if (
+            resolved.kind is SourceKind.DOCUMENT
+            and bool(config.get("ingestion", {}).get("trusted_workspace_files", False))
+            and _is_relative_workspace_path(resolved.name)
+        ):
+            return replace(resolved, integrity=Integrity.TRUSTED)
+        return resolved
     except (TypeError, ValueError) as exc:
         raise ValueError(f"source profile {profile_name} is invalid") from exc
+
+
+def _is_relative_workspace_path(value: str) -> bool:
+    path = Path(value)
+    windows_path = PureWindowsPath(value)
+    return (
+        not path.is_absolute()
+        and not windows_path.is_absolute()
+        and ".." not in path.parts
+        and ".." not in windows_path.parts
+        and bool(path.parts)
+    )
+
+
+def _explicitly_acknowledges_retraction(text: str, notice: RetractionNotice) -> bool:
+    normalized = normalize_content(text)
+    return notice.defeated_belief_id.casefold() in normalized and bool(
+        re.search(r"\b(?:retract(?:ed|ion)?|withdrawn|superseded|incorrect)\b", normalized)
+    )

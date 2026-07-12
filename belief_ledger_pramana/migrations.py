@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -291,6 +290,20 @@ CREATE TABLE IF NOT EXISTS idempotency (
 """
 
 
+SCHEMA_V2 = r"""
+CREATE TABLE IF NOT EXISTS llm_reservations (
+  id TEXT PRIMARY KEY,
+  episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+  turn_number INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS llm_reservations_episode_turn_idx
+  ON llm_reservations(episode_id, turn_number);
+"""
+
+
 PROJECTION_TABLES: tuple[str, ...] = (
     "assistant_responses",
     "gate_decisions",
@@ -341,17 +354,23 @@ def migrate(database: Path, busy_timeout_ms: int = 5_000) -> MigrationResult:
             "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
         ).fetchone()
         from_version = int(row[0]) if row else 0
-        if from_version > 1:
-            raise RuntimeError(f"database schema {from_version} is newer than supported schema 1")
+        if from_version > 2:
+            raise RuntimeError(f"database schema {from_version} is newer than supported schema 2")
+        if existed and from_version < 2:
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            backup = database.with_name(f"{database.name}.pre-v{from_version + 1}.{stamp}.bak")
+            _online_backup(connection, backup)
         if from_version < 1:
-            if existed:
-                stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-                backup = database.with_name(f"{database.name}.pre-v1.{stamp}.bak")
-                shutil.copy2(database, backup)
             connection.executescript(SCHEMA_V1)
             now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             connection.execute(
                 "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (1, now)
+            )
+        if from_version < 2:
+            connection.executescript(SCHEMA_V2)
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (2, now)
             )
         fts5 = _ensure_fts(connection)
     finally:
@@ -363,7 +382,7 @@ def migrate(database: Path, busy_timeout_ms: int = 5_000) -> MigrationResult:
     except OSError:
         pass
     return MigrationResult(
-        from_version=from_version, to_version=1, backup=backup, fts5_available=fts5
+        from_version=from_version, to_version=2, backup=backup, fts5_available=fts5
     )
 
 
@@ -375,3 +394,13 @@ def _ensure_fts(connection: sqlite3.Connection) -> bool:
         return True
     except sqlite3.OperationalError:
         return False
+
+
+def _online_backup(source: sqlite3.Connection, destination_path: Path) -> None:
+    """Use SQLite's online backup API so WAL state is included consistently."""
+
+    destination = sqlite3.connect(destination_path)
+    try:
+        source.backup(destination)
+    finally:
+        destination.close()

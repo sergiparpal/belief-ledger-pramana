@@ -112,7 +112,7 @@ def test_provenance_roots_and_adapter_families_are_conservative() -> None:
         ("search_index", {"index": "docs"}, "retrieval", SourceKind.RETRIEVER),
         ("delegate_task", {"agent_id": "a"}, "delegation", SourceKind.MODEL),
         ("pramana_query", {}, "plugin", SourceKind.MODEL),
-        ("exec_command", {"cmd": "pwd"}, "execution", SourceKind.TOOL),
+        ("exec_command", {"cmd": "pwd"}, "execution", None),
         ("opaque_probe", {}, "unknown", None),
     )
     for name, args, family, source_kind in cases:
@@ -173,9 +173,21 @@ def test_action_classifier_terminal_and_unknown_edges() -> None:
     assert registry.classify("exec_command", {"cmd": "rm target"}).policy.effectful
     assert registry.classify("exec_command", {}).policy.effectful
     assert registry.classify("exec_command", {"cmd": "'broken"}).policy.effectful
+    for bypass in (
+        "git -C repo commit -m x",
+        "find . -exec rm {} \\;",
+        "ls $(rm -rf /tmp/probe)",
+        "rg --pre evil needle",
+        "git diff --ext-diff",
+        "find . -fprint0 output.txt",
+    ):
+        assert registry.classify("exec_command", {"cmd": bypass}).policy.effectful
     assert registry.classify("mystery", {}, enforce=True).policy.effectful
     assert not registry.classify("mystery", {}, enforce=False).policy.effectful
-    assert not registry.classify("future_lookup", {"query": "x"}).policy.effectful
+    assert registry.classify("future_lookup", {"query": "x"}).policy.effectful
+    assert not registry.classify(
+        "future_lookup", {"query": "x"}, unknown_tool_policy="allow_read_only"
+    ).policy.effectful
     assert registry.classify("future_publish", {"target": "x"}).policy.effectful
     with pytest.raises(ValueError, match="anchored"):
         ActionPolicyRegistry(

@@ -54,25 +54,21 @@ def render_context(
     selected_ids: list[str] = []
 
     if selection.retractions:
-        writer.add("### RETRACTIONS" if ascii_only else "### RETRACTACIONES", mandatory=True)
+        writer.add("### RETRACTIONS", mandatory=True)
         for notice in selection.retractions:
             descendants = ",".join(notice.descendants) or "none"
             writer.add(
-                f"{notice.defeated_belief_id} DEFEATED ({notice.cause}); descendants retracted: {descendants}."
+                f"{notice.defeated_belief_id} DEFEATED ({notice.cause}); descendants retracted: {descendants}.",
+                mandatory=True,
             )
 
     if selection.conflicts:
-        writer.add(
-            "\n### OPEN CONFLICTS (samsaya)"
-            if ascii_only
-            else "\n### CONFLICTOS ABIERTOS (saṃśaya)",
-            mandatory=True,
-        )
+        writer.add("\n### OPEN CONFLICTS (samsaya)", mandatory=True)
         for conflict in selection.conflicts:
             writer.add(
-                f"{conflict.left_belief_id} <-> {conflict.right_belief_id} — verification {conflict.verification_task_id} open; assume neither."
-                if ascii_only
-                else f"{conflict.left_belief_id} ⟂ {conflict.right_belief_id} — verificación {conflict.verification_task_id} abierta; no asumas ninguna."
+                f"{conflict.left_belief_id} <-> {conflict.right_belief_id} — verification "
+                f"{conflict.verification_task_id} open; assume neither.",
+                mandatory=True,
             )
 
     ledger_prefix = "\n" if selection.retractions or selection.conflicts else ""
@@ -107,7 +103,7 @@ def render_belief_line(
             + ", ".join(f"{key}: {value}" for key, value in sorted(belief.qualifiers.items()))
             + "}"
         )
-    pending = " (UNVERIFIED)" if ascii_only else " (SIN VERIFICAR)"
+    pending = " (UNVERIFIED)"
     marker = pending if belief.status is Status.PENDING else ""
     return f"[{belief.id}][{type_code}][{meta}] {belief.content}{qualifiers}{marker}"
 

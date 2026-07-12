@@ -11,18 +11,20 @@ from typing import Any
 from ..events import content_hash
 from ..ids import new_id
 from ..models import ComponentVerdict, LlmUsage
-from ..store import LedgerStore
+from ..store import LedgerStore, LlmReservationError
 
 _IN_COMPONENT_CALL: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "belief_ledger_component_call", default=False
 )
 
 
-class LlmBudgetError(RuntimeError):
+class LlmComponentError(RuntimeError):
     pass
 
 
-class LlmComponentError(RuntimeError):
+class LlmBudgetError(LlmComponentError):
+    """A component failure caused by an exhausted auditable budget."""
+
     pass
 
 
@@ -65,16 +67,26 @@ class HostLlmClient:
         if episode is None:
             raise LlmComponentError("episode does not exist")
         limits = self._config["verification"]
-        if self._store.llm_usage_count(episode_id, episode.current_turn) >= int(
-            limits["max_llm_calls_per_turn"]
-        ):
-            raise LlmBudgetError("turn LLM call budget exhausted")
-        if episode.llm_calls_used >= int(limits["max_llm_calls_per_episode"]):
-            raise LlmBudgetError("episode LLM call budget exhausted")
-        if episode.input_tokens_used >= int(limits["max_input_tokens_per_episode"]):
-            raise LlmBudgetError("episode input-token budget exhausted")
-        if episode.output_tokens_used >= int(limits["max_output_tokens_per_episode"]):
-            raise LlmBudgetError("episode output-token budget exhausted")
+        # Reserve before invoking the host model.  Checking counters alone is
+        # racy when multiple hooks run at once or another process shares the
+        # ledger database.
+        # A character is a conservative upper bound for token accounting across
+        # the supported providers. Reserving that upper bound prevents parallel
+        # calls from overspending an episode before actual usage is reported.
+        estimated_input = max(1, len(instructions) + len(text) + len(str(schema)))
+        try:
+            reservation_id = self._store.reserve_llm_budget(
+                episode_id,
+                episode.current_turn,
+                input_tokens=estimated_input,
+                output_tokens=max_tokens,
+                max_calls_turn=int(limits["max_llm_calls_per_turn"]),
+                max_calls_episode=int(limits["max_llm_calls_per_episode"]),
+                max_input_tokens_episode=int(limits["max_input_tokens_per_episode"]),
+                max_output_tokens_episode=int(limits["max_output_tokens_per_episode"]),
+            )
+        except LlmReservationError as exc:
+            raise LlmBudgetError(str(exc)) from exc
 
         token = _IN_COMPONENT_CALL.set(True)
         started = time.monotonic()
@@ -138,18 +150,21 @@ class HostLlmClient:
             belief_id=None,
             detail={"schema_name": schema_name},
         )
-        events = self._store.append_events(
-            episode_id,
-            [
-                _record_draft("LLM_USAGE_RECORDED", "llm_usage", usage_record.id, usage_record),
-                _record_draft(
-                    "COMPONENT_VERDICT_RECORDED",
-                    "component_verdict",
-                    verdict.id,
-                    verdict,
-                ),
-            ],
-        )
+        try:
+            events = self._store.append_events(
+                episode_id,
+                [
+                    _record_draft("LLM_USAGE_RECORDED", "llm_usage", usage_record.id, usage_record),
+                    _record_draft(
+                        "COMPONENT_VERDICT_RECORDED",
+                        "component_verdict",
+                        verdict.id,
+                        verdict,
+                    ),
+                ],
+            )
+        finally:
+            self._store.release_llm_reservation(reservation_id)
         if caught is not None:
             raise LlmComponentError(f"{purpose} failed: {type(caught).__name__}") from caught
         return StructuredCallResult(

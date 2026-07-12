@@ -25,11 +25,13 @@ class PreparedEvidence:
     observed_chars: int
 
 
-def prepare_evidence(result: str, *, mode: str, max_excerpt_chars: int) -> PreparedEvidence:
+def prepare_evidence(
+    result: str, *, mode: str, max_excerpt_chars: int, redact: bool = True
+) -> PreparedEvidence:
     """Hash the complete observed result, then redact before persistence."""
 
     full_hash = content_hash(result)
-    redacted_text, redacted = redact_secrets(result)
+    redacted_text, redacted = redact_secrets(result) if redact else (result, False)
     if mode == "hash_only":
         return PreparedEvidence(None, full_hash, redacted, None, None, len(result))
     if mode == "full":

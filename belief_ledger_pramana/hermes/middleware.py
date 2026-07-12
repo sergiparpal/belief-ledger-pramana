@@ -31,6 +31,7 @@ class LlmRequestMiddleware:
                 request,
                 api_mode=str(kwargs.get("api_mode") or ""),
                 context=rendered.text,
+                binding=request_id or f"{service.episode_id}:{service.episode.current_turn}",
             )
             if not result.changed:
                 return None

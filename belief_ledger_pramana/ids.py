@@ -19,6 +19,7 @@ _PREFIXES = {
     "support": "is_",
     "verdict": "cv_",
     "usage": "lu_",
+    "reservation": "lr_",
 }
 _ID_RE = re.compile(r"^[a-z][a-z0-9]*_[A-Za-z0-9_-]{16,}$")
 

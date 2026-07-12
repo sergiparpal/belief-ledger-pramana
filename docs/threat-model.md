@@ -15,7 +15,8 @@ history mutation but provides no secret key, signature, remote witness, or prote
 attacker who can replace both database and plugin.
 
 Controls include parameterized SQL, strict structured schemas plus local validation, input/graph/
-event/context/model-call bounds, authenticated internal context markers, path-local atomic writes,
-secret-pattern redaction, conservative unknown action classification, no provider overrides, and
-HIGH/CRITICAL fail-closed callback boundaries.
-
+event/context/model-call bounds, request-bound authenticated internal context markers, path-local
+atomic writes, secret-pattern redaction, a strict non-compositional terminal read grammar,
+conservative unknown action classification, no provider overrides, and HIGH/CRITICAL fail-closed
+callback boundaries. Generic execution stdout is not treated as a factual source; only typed
+adapters may promote content claims.

@@ -9,7 +9,7 @@ import pytest
 
 from belief_ledger_pramana.ids import new_id
 from belief_ledger_pramana.models import CompatibilityMode, Episode, Stakes
-from belief_ledger_pramana.store import EventDraft, LedgerStore
+from belief_ledger_pramana.store import EventDraft, LedgerStore, LlmReservationError
 
 
 def _episode() -> Episode:
@@ -66,6 +66,72 @@ def test_idempotency_deduplicates_parallel_callbacks(tmp_path: Path) -> None:
         results = list(pool.map(lambda _: append(), range(20)))
     assert len({result for result in results}) == 1
     assert [event.kind for event in store.events(episode.id)].count("CALLBACK") == 1
+
+
+def test_idempotency_replays_the_entire_batch_and_is_episode_scoped(tmp_path: Path) -> None:
+    store = LedgerStore(tmp_path / "ledger.sqlite3")
+    first = _episode()
+    second = _episode()
+    store.create_episode(first)
+    store.create_episode(second)
+    drafts = [
+        EventDraft("FIRST", "episode", first.id, {"value": 1}),
+        EventDraft("SECOND", "episode", first.id, {"value": 2}),
+    ]
+    appended = store.append_events(first.id, drafts, idempotency_key="same-key")
+    repeated = store.append_events(first.id, drafts, idempotency_key="same-key")
+    assert [event.id for event in repeated] == [event.id for event in appended]
+    other = store.append_events(
+        second.id,
+        [EventDraft("OTHER", "episode", second.id, {"value": 3})],
+        idempotency_key="same-key",
+    )
+    assert len(other) == 1
+    assert store.replay().deterministic
+
+
+def test_llm_budget_reservations_are_atomic(tmp_path: Path) -> None:
+    store = LedgerStore(tmp_path / "ledger.sqlite3")
+    episode = _episode()
+    store.create_episode(episode)
+
+    def reserve() -> str | None:
+        try:
+            return store.reserve_llm_budget(
+                episode.id,
+                0,
+                input_tokens=10,
+                output_tokens=10,
+                max_calls_turn=1,
+                max_calls_episode=1,
+                max_input_tokens_episode=100,
+                max_output_tokens_episode=100,
+            )
+        except LlmReservationError:
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        reservations = list(pool.map(lambda _: reserve(), range(4)))
+    accepted = [reservation for reservation in reservations if reservation]
+    assert len(accepted) == 1
+    store.release_llm_reservation(accepted[0])
+
+
+def test_v1_database_migrates_with_online_backup(tmp_path: Path) -> None:
+    database = tmp_path / "ledger.sqlite3"
+    store = LedgerStore(database)
+    store.create_episode(_episode())
+    with store.connect() as connection:
+        connection.execute("DROP TABLE llm_reservations")
+        connection.execute("DELETE FROM schema_migrations WHERE version=2")
+    migrated = LedgerStore(database)
+    assert migrated.migration.from_version == 1
+    assert migrated.migration.to_version == 2
+    assert migrated.migration.backup is not None and migrated.migration.backup.exists()
+    with migrated.connect() as connection:
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='llm_reservations'"
+        ).fetchone()
 
 
 def test_hash_chain_detects_payload_mutation_even_if_trigger_removed(tmp_path: Path) -> None:

@@ -32,13 +32,17 @@ def normalize_content(content: str) -> str:
     return normalized.casefold()
 
 
-def validate_content(content: str, *, max_words: int = 40) -> tuple[str, ...]:
+def validate_content(
+    content: str, *, max_words: int = 40, max_chars: int = 2_000
+) -> tuple[str, ...]:
     reasons: list[str] = []
     stripped = re.sub(r"\s+", " ", content).strip()
     if not stripped:
         reasons.append("content is empty")
     if len(stripped.split()) > max_words:
         reasons.append(f"content exceeds {max_words} words")
+    if len(stripped) > max_chars:
+        reasons.append(f"content exceeds {max_chars} characters")
     if _CONJUNCTION.search(stripped):
         reasons.append("content appears non-atomic")
     if _DEICTIC.search(stripped):
@@ -53,12 +57,13 @@ def validate_belief(
     evidence_payloads: Mapping[str, str | None] | None = None,
     evidence_mode: str = "excerpt",
     max_words: int = 40,
+    max_chars: int = 2_000,
     yogyata_min_coverage: float = 0.85,
     yogyata_min_recall: float = 0.85,
 ) -> ValidityResult:
     """Apply content and type-specific conditions without making trust decisions."""
 
-    reasons = list(validate_content(belief.content, max_words=max_words))
+    reasons = list(validate_content(belief.content, max_words=max_words, max_chars=max_chars))
     checks: dict[str, bool] = {
         "atomic": not any("atomic" in reason for reason in reasons),
         "self_contained": not any("self-contained" in reason for reason in reasons),

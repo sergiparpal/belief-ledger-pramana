@@ -61,11 +61,20 @@ def reconcile_qualifiers(
         if key in lq and key in rq and lq[key] != rq[key]:
             return ScopeReconciliation(False, lq, rq, {}, f"disjoint {key}")
 
+    if _has_invalid_temporal(lq) or _has_invalid_temporal(rq):
+        # Never compare arbitrary strings as dates.  An invalid time scope is
+        # insufficient to establish a contradiction and must be verified.
+        return ScopeReconciliation(False, lq, rq, {}, "invalid temporal qualifier")
+
     left_interval = _interval(lq)
     right_interval = _interval(rq)
     if left_interval and right_interval and not _overlaps(left_interval, right_interval):
         return ScopeReconciliation(False, lq, rq, {}, "disjoint validity intervals")
-    if "as_of" in lq and "as_of" in rq and lq["as_of"] != rq["as_of"]:
+    if (
+        "as_of" in lq
+        and "as_of" in rq
+        and _parse_temporal(lq["as_of"]) != _parse_temporal(rq["as_of"])
+    ):
         return ScopeReconciliation(False, lq, rq, {}, "different as_of qualifiers")
 
     shared = {key: value for key, value in lq.items() if rq.get(key) == value}
@@ -103,11 +112,38 @@ def _canonical_date(value: str) -> str:
             return value
 
 
-def _interval(qualifiers: Mapping[str, str]) -> tuple[str, str] | None:
+def _has_invalid_temporal(qualifiers: Mapping[str, str]) -> bool:
+    return any(
+        _parse_temporal(value) is None
+        for key, value in qualifiers.items()
+        if key in {"as_of", "valid_from", "valid_to"}
+    )
+
+
+def _interval(qualifiers: Mapping[str, str]) -> tuple[datetime, datetime] | None:
     start = qualifiers.get("valid_from") or qualifiers.get("as_of")
     end = qualifiers.get("valid_to") or qualifiers.get("as_of")
-    return (start or "0000", end or "9999") if start or end else None
+    if not start and not end:
+        return None
+    start_time = _parse_temporal(start) if start else datetime.min.replace(tzinfo=UTC)
+    end_time = _parse_temporal(end) if end else datetime.max.replace(tzinfo=UTC)
+    if start_time is None or end_time is None:
+        return None
+    return start_time, end_time
 
 
-def _overlaps(left: tuple[str, str], right: tuple[str, str]) -> bool:
+def _overlaps(left: tuple[datetime, datetime], right: tuple[datetime, datetime]) -> bool:
     return left[0] <= right[1] and right[0] <= left[1]
+
+
+def _parse_temporal(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    except ValueError:
+        try:
+            return datetime.combine(date.fromisoformat(value), datetime.min.time(), tzinfo=UTC)
+        except ValueError:
+            return None

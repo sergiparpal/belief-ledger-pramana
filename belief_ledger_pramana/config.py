@@ -74,10 +74,23 @@ def get_hermes_home() -> Path:
         return Path(configured or "~/.hermes").expanduser().resolve()
 
 
-def state_paths(hermes_home: Path | None = None, database: str | None = None) -> StatePaths:
+def state_paths(
+    hermes_home: Path | None = None,
+    database: str | None = None,
+    *,
+    database_base: Path | None = None,
+) -> StatePaths:
     home = (hermes_home or get_hermes_home()).expanduser().resolve()
     root = home / PLUGIN_STATE_DIR
-    database_path = Path(database).expanduser().resolve() if database else root / "ledger.sqlite3"
+    if database:
+        configured = Path(database).expanduser()
+        database_path = (
+            configured
+            if configured.is_absolute()
+            else (database_base or root).expanduser() / configured
+        ).resolve()
+    else:
+        database_path = root / "ledger.sqlite3"
     return StatePaths(
         hermes_home=home,
         root=root,
@@ -92,9 +105,12 @@ def state_paths(hermes_home: Path | None = None, database: str | None = None) ->
 def ensure_state_directories(paths: StatePaths) -> None:
     """Create private mutable-state directories."""
 
-    for path in (paths.root, paths.evidence, paths.exports, paths.locks, paths.database.parent):
+    for path in (paths.root, paths.evidence, paths.exports, paths.locks):
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
         _chmod_if_posix(path, 0o700)
+    paths.database.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if paths.database.parent == paths.root or paths.root in paths.database.parent.parents:
+        _chmod_if_posix(paths.database.parent, 0o700)
 
 
 def packaged_yaml(name: str) -> dict[str, Any]:
@@ -150,7 +166,11 @@ def load_config(
     merged = _deep_merge(defaults, override)
     warnings.extend(validate_config(merged))
     database_value = merged["storage"].get("database")
-    paths = state_paths(hermes_home, str(database_value) if database_value else None)
+    paths = state_paths(
+        hermes_home,
+        str(database_value) if database_value else None,
+        database_base=source.parent if source is not None else initial_paths.config.parent,
+    )
     if initialize:
         ensure_state_directories(paths)
     mtime_ns = source.stat().st_mtime_ns if source and source.exists() else None
@@ -179,6 +199,8 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     storage = _mapping(config, "storage")
     if storage.get("evidence_mode") not in {"hash_only", "excerpt", "full"}:
         raise ConfigError("storage.evidence_mode must be hash_only, excerpt, or full")
+    if not isinstance(storage.get("redact_secrets"), bool):
+        raise ConfigError("storage.redact_secrets must be a boolean")
     _bounded_int(storage, "max_excerpt_chars", 0, 1_000_000)
     _bounded_int(storage, "busy_timeout_ms", 1, 120_000)
 
@@ -191,6 +213,11 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     _bounded_int(ingestion, "max_claims_per_evidence", 0, 200)
     _bounded_int(ingestion, "max_unpromoted_per_request", 0, 50)
     _bounded_int(ingestion, "max_atomic_claim_words", 5, 100)
+    _bounded_int(ingestion, "max_atomic_claim_chars", 80, 20_000)
+    if not isinstance(ingestion.get("lazy_claim_extraction"), bool):
+        raise ConfigError("ingestion.lazy_claim_extraction must be a boolean")
+    if not isinstance(ingestion.get("trusted_workspace_files"), bool):
+        raise ConfigError("ingestion.trusted_workspace_files must be a boolean")
     threshold = ingestion.get("near_duplicate_threshold")
     if (
         isinstance(threshold, bool)
@@ -198,6 +225,16 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         or not 0.0 <= float(threshold) <= 1.0
     ):
         raise ConfigError("ingestion.near_duplicate_threshold must be in [0,1]")
+
+    ttl = _mapping(config, "perishability_ttl")
+    for name in ("stable", "slow", "fast", "live"):
+        value = ttl.get(f"{name}_seconds")
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 31_536_000
+        ):
+            raise ConfigError(
+                f"perishability_ttl.{name}_seconds must be null or an integer in [0,31536000]"
+            )
 
     verification = _mapping(config, "verification")
     for key in (
@@ -208,26 +245,43 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         "structured_timeout_seconds",
     ):
         _bounded_int(verification, key, 0, 10_000_000)
+    if not isinstance(verification.get("critical_human_confirmation"), bool):
+        raise ConfigError("verification.critical_human_confirmation must be a boolean")
 
     lint = _mapping(config, "lint")
     allowed_lint = {"annotate", "rewrite_once", "block", "allow"}
     for stake in ("low", "med", "high", "critical"):
         if lint.get(stake) not in allowed_lint:
             raise ConfigError(f"lint.{stake} is invalid")
-    if int(lint.get("max_rewrite_attempts", -1)) > 1:
-        raise ConfigError("lint.max_rewrite_attempts may not exceed 1")
+    _bounded_int(lint, "max_rewrite_attempts", 0, 1)
 
     gating = _mapping(config, "gating")
     if gating.get("unknown_tool_policy") not in {"conservative", "allow_read_only"}:
         raise ConfigError("gating.unknown_tool_policy is invalid")
     if gating.get("fail_closed_at") not in {"high", "critical"}:
         raise ConfigError("gating.fail_closed_at must be high or critical")
+    _bounded_int(gating, "confirmation_ttl_seconds", 1, 86_400)
+    if not isinstance(gating.get("enabled"), bool) or not isinstance(
+        gating.get("allow_human_approval"), bool
+    ):
+        raise ConfigError("gating enabled and allow_human_approval must be booleans")
     _string_paths(gating, "policy_files")
 
     priority = _mapping(config, "priority")
     integrity = _mapping(priority, "integrity_rank")
     if not all(isinstance(integrity.get(key), int) for key in ("trusted", "semi", "untrusted")):
         raise ConfigError("priority.integrity_rank must define integer ranks")
+    bands = _mapping(priority, "reliability_bands")
+    high = bands.get("high")
+    medium = bands.get("medium")
+    if (
+        isinstance(high, bool)
+        or isinstance(medium, bool)
+        or not isinstance(high, (int, float))
+        or not isinstance(medium, (int, float))
+        or not 0 <= float(medium) <= float(high) <= 1
+    ):
+        raise ConfigError("priority.reliability_bands must satisfy 0 <= medium <= high <= 1")
 
     trust = _mapping(config, "trust")
     _string_paths(trust, "source_profile_files")

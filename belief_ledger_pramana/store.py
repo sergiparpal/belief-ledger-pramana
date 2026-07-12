@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal
@@ -23,7 +24,9 @@ from .events import (
     isoformat_utc,
     parse_datetime,
     to_primitive,
+    utc_now,
 )
+from .ids import new_id
 from .migrations import PROJECTION_TABLES, MigrationResult, configure_connection, migrate
 from .models import (
     Belief,
@@ -60,6 +63,10 @@ class StoreError(RuntimeError):
 
 
 class HashChainError(StoreError):
+    pass
+
+
+class LlmReservationError(StoreError):
     pass
 
 
@@ -133,6 +140,7 @@ class LedgerStore:
         *,
         correlation: dict[str, str] | None = None,
         idempotency_key: str | None = None,
+        require_open_verification_task_id: str | None = None,
     ) -> list[Event]:
         """Append a batch and update projections in one immediate transaction."""
 
@@ -145,6 +153,9 @@ class LedgerStore:
         }
         if idempotency_key:
             clean_correlation["idempotency_key"] = idempotency_key
+        storage_idempotency_key = (
+            _idempotency_storage_key(episode_id, idempotency_key) if idempotency_key else None
+        )
 
         deadline = time.monotonic() + self.busy_timeout_ms / 1_000
         attempt = 0
@@ -152,10 +163,19 @@ class LedgerStore:
             connection = self.connect()
             try:
                 connection.execute("BEGIN IMMEDIATE")
+                if require_open_verification_task_id:
+                    task = connection.execute(
+                        "SELECT state FROM verification_tasks WHERE id=? AND episode_id=?",
+                        (require_open_verification_task_id, episode_id),
+                    ).fetchone()
+                    if task is None or str(task["state"]) != "open":
+                        connection.rollback()
+                        return []
                 if idempotency_key:
                     existing = connection.execute(
-                        "SELECT event_ids_json FROM idempotency WHERE idempotency_key=?",
-                        (idempotency_key,),
+                        "SELECT event_ids_json FROM idempotency "
+                        "WHERE episode_id=? AND idempotency_key IN (?,?)",
+                        (episode_id, storage_idempotency_key, idempotency_key),
                     ).fetchone()
                     if existing:
                         connection.rollback()
@@ -206,6 +226,17 @@ class LedgerStore:
                     apply_event(connection, event)
                     events.append(event)
                     previous_hash = event.event_hash
+                if storage_idempotency_key:
+                    connection.execute(
+                        "INSERT INTO idempotency(idempotency_key,episode_id,event_ids_json,created_at) "
+                        "VALUES (?,?,?,?)",
+                        (
+                            storage_idempotency_key,
+                            episode_id,
+                            canonical_json([event.id for event in events]),
+                            isoformat_utc(events[0].timestamp),
+                        ),
+                    )
                 connection.commit()
                 return events
             except sqlite3.OperationalError as exc:
@@ -299,9 +330,7 @@ class LedgerStore:
             row = connection.execute("SELECT * FROM beliefs WHERE id=?", (belief_id,)).fetchone()
             if not row:
                 return None
-            evidence = _belief_evidence(connection, belief_id)
-            justifications = _belief_justifications(connection, belief_id)
-        return _belief_from_row(row, evidence, justifications)
+            return _hydrate_beliefs(connection, [row])[0]
 
     def list_beliefs(
         self,
@@ -327,23 +356,15 @@ class LedgerStore:
         )
         with self.connect() as connection:
             rows = connection.execute(query, params).fetchall()
-            beliefs = [
-                _belief_from_row(
-                    row,
-                    _belief_evidence(connection, str(row["id"])),
-                    _belief_justifications(connection, str(row["id"])),
-                )
-                for row in rows
-            ]
-        return beliefs
+            return _hydrate_beliefs(connection, rows)
 
     def find_exact_beliefs(self, episode_id: str, normalized_content: str) -> list[Belief]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT id FROM beliefs WHERE episode_id=? AND normalized_content=? ORDER BY id",
+                "SELECT * FROM beliefs WHERE episode_id=? AND normalized_content=? ORDER BY id",
                 (episode_id, normalized_content),
             ).fetchall()
-        return [belief for row in rows if (belief := self.get_belief(str(row[0]))) is not None]
+            return _hydrate_beliefs(connection, rows)
 
     def list_justifications(self, episode_id: str) -> list[Justification]:
         with self.connect() as connection:
@@ -473,6 +494,15 @@ class LedgerStore:
             for row in rows
         ]
 
+    def is_unpromoted(self, episode_id: str, evidence_id: str) -> bool:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM unpromoted_evidence "
+                "WHERE episode_id=? AND evidence_id=? AND state='open'",
+                (episode_id, evidence_id),
+            ).fetchone()
+        return row is not None
+
     def latest_assistant_response(self, episode_id: str) -> str | None:
         with self.connect() as connection:
             row = connection.execute(
@@ -488,6 +518,99 @@ class LedgerStore:
                 (episode_id, turn_number),
             ).fetchone()
         return int(row[0]) if row else 0
+
+    def reserve_llm_budget(
+        self,
+        episode_id: str,
+        turn_number: int,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        max_calls_turn: int,
+        max_calls_episode: int,
+        max_input_tokens_episode: int,
+        max_output_tokens_episode: int,
+        stale_after_seconds: int = 300,
+    ) -> str:
+        """Atomically reserve one component-call budget across callbacks/processes."""
+
+        if min(input_tokens, output_tokens, max_calls_turn, max_calls_episode) < 0:
+            raise LlmReservationError("LLM budget values must be non-negative")
+        reservation_id = new_id("reservation")
+        deadline = time.monotonic() + self.busy_timeout_ms / 1_000
+        attempt = 0
+        while True:
+            connection = self.connect()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                now = utc_now()
+                cutoff = isoformat_utc(now - timedelta(seconds=max(1, stale_after_seconds)))
+                connection.execute("DELETE FROM llm_reservations WHERE created_at<?", (cutoff,))
+                episode = connection.execute(
+                    "SELECT llm_calls_used,input_tokens_used,output_tokens_used FROM episodes WHERE id=?",
+                    (episode_id,),
+                ).fetchone()
+                if episode is None:
+                    raise LlmReservationError("episode does not exist")
+                reserved = connection.execute(
+                    "SELECT COUNT(*) AS calls,COALESCE(SUM(input_tokens),0) AS input_tokens,"
+                    "COALESCE(SUM(output_tokens),0) AS output_tokens "
+                    "FROM llm_reservations WHERE episode_id=?",
+                    (episode_id,),
+                ).fetchone()
+                turn_calls = connection.execute(
+                    "SELECT COUNT(*) FROM llm_reservations WHERE episode_id=? AND turn_number=?",
+                    (episode_id, turn_number),
+                ).fetchone()
+                used_turn = connection.execute(
+                    "SELECT COUNT(*) FROM llm_usage WHERE episode_id=? AND turn_number=?",
+                    (episode_id, turn_number),
+                ).fetchone()
+                if int(used_turn[0]) + int(turn_calls[0]) >= max_calls_turn:
+                    raise LlmReservationError("turn LLM call budget exhausted")
+                if int(episode["llm_calls_used"]) + int(reserved["calls"]) >= max_calls_episode:
+                    raise LlmReservationError("episode LLM call budget exhausted")
+                if (
+                    int(episode["input_tokens_used"]) + int(reserved["input_tokens"]) + input_tokens
+                    > max_input_tokens_episode
+                ):
+                    raise LlmReservationError("episode input-token budget exhausted")
+                if (
+                    int(episode["output_tokens_used"])
+                    + int(reserved["output_tokens"])
+                    + output_tokens
+                    > max_output_tokens_episode
+                ):
+                    raise LlmReservationError("episode output-token budget exhausted")
+                connection.execute(
+                    "INSERT INTO llm_reservations(id,episode_id,turn_number,input_tokens,output_tokens,created_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (
+                        reservation_id,
+                        episode_id,
+                        turn_number,
+                        input_tokens,
+                        output_tokens,
+                        isoformat_utc(now),
+                    ),
+                )
+                connection.commit()
+                return reservation_id
+            except sqlite3.OperationalError as exc:
+                connection.rollback()
+                if not _is_busy(exc) or time.monotonic() >= deadline:
+                    raise LlmReservationError(str(exc)) from exc
+                attempt += 1
+                time.sleep(min(0.05, 0.002 * (2 ** min(attempt, 5))) + random.random() * 0.003)
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+
+    def release_llm_reservation(self, reservation_id: str) -> None:
+        with self.connect() as connection:
+            connection.execute("DELETE FROM llm_reservations WHERE id=?", (reservation_id,))
 
     def fts_belief_ids(self, episode_id: str, query: str, *, limit: int = 200) -> tuple[str, ...]:
         tokens = re.findall(r"[\w.-]+", query, re.UNICODE)[:20]
@@ -589,11 +712,18 @@ class LedgerStore:
             before = _projection_hash(connection)
             with suppress(sqlite3.OperationalError):
                 connection.execute("DELETE FROM beliefs_fts")
+            connection.execute("DELETE FROM llm_reservations")
             for table in PROJECTION_TABLES:
                 connection.execute(f"DELETE FROM {table}")
             rows = connection.execute("SELECT * FROM events ORDER BY seq").fetchall()
+            idempotency_batches: dict[tuple[str, str], list[Event]] = {}
             for row in rows:
-                apply_event(connection, _event_from_row(row))
+                event = _event_from_row(row)
+                apply_event(connection, event)
+                key = event.correlation.get("idempotency_key")
+                if key:
+                    idempotency_batches.setdefault((event.episode_id, key), []).append(event)
+            _restore_idempotency(connection, idempotency_batches)
             after = _projection_hash(connection)
             if before != after:
                 connection.rollback()
@@ -659,6 +789,10 @@ class LedgerStore:
                     ),
                 )
                 apply_event(destination, event)
+            _restore_idempotency(
+                destination,
+                _idempotency_batches(preserved),
+            )
             destination.commit()
         except Exception:
             destination.rollback()
@@ -780,6 +914,68 @@ def _belief_from_row(
     )
 
 
+def _hydrate_beliefs(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) -> list[Belief]:
+    """Hydrate belief relations in batched queries instead of N+1 lookups."""
+
+    if not rows:
+        return []
+    belief_ids = [str(row["id"]) for row in rows]
+    evidence_by_belief: dict[str, list[EvidenceRef]] = {belief_id: [] for belief_id in belief_ids}
+    justification_rows: list[sqlite3.Row] = []
+    for ids in _chunks(belief_ids):
+        placeholders = ",".join("?" for _ in ids)
+        for row in connection.execute(
+            f"SELECT belief_id,evidence_id,span_json FROM belief_evidence "
+            f"WHERE belief_id IN ({placeholders}) ORDER BY belief_id,evidence_id,span_json",
+            ids,
+        ).fetchall():
+            evidence_by_belief[str(row["belief_id"])].append(
+                EvidenceRef(
+                    evidence_id=str(row["evidence_id"]),
+                    span=tuple(json.loads(str(row["span_json"]))) if row["span_json"] else None,
+                )
+            )
+        justification_rows.extend(
+            connection.execute(
+                f"SELECT id,belief_id,warrant,audit_json,alternatives_json FROM justifications "
+                f"WHERE belief_id IN ({placeholders}) ORDER BY belief_id,id",
+                ids,
+            ).fetchall()
+        )
+    premise_by_justification: dict[str, list[str]] = {
+        str(row["id"]): [] for row in justification_rows
+    }
+    for ids in _chunks(list(premise_by_justification)):
+        placeholders = ",".join("?" for _ in ids)
+        for row in connection.execute(
+            f"SELECT justification_id,premise_belief_id FROM justification_premises "
+            f"WHERE justification_id IN ({placeholders}) ORDER BY justification_id,ordinal",
+            ids,
+        ).fetchall():
+            premise_by_justification[str(row["justification_id"])].append(
+                str(row["premise_belief_id"])
+            )
+    justifications_by_belief: dict[str, list[Justification]] = {
+        belief_id: [] for belief_id in belief_ids
+    }
+    for row in justification_rows:
+        justification = _justification_from_parts(row, premise_by_justification[str(row["id"])])
+        justifications_by_belief[justification.belief_id].append(justification)
+    return [
+        _belief_from_row(
+            row,
+            tuple(evidence_by_belief[str(row["id"])]),
+            tuple(justifications_by_belief[str(row["id"])]),
+        )
+        for row in rows
+    ]
+
+
+def _chunks(values: Sequence[str], size: int = 900) -> Iterable[list[str]]:
+    for offset in range(0, len(values), size):
+        yield list(values[offset : offset + size])
+
+
 def _belief_evidence(connection: sqlite3.Connection, belief_id: str) -> tuple[EvidenceRef, ...]:
     rows = connection.execute(
         "SELECT evidence_id,span_json FROM belief_evidence WHERE belief_id=? ORDER BY evidence_id,span_json",
@@ -809,6 +1005,10 @@ def _justification_from_row(connection: sqlite3.Connection, row: sqlite3.Row) ->
         "SELECT premise_belief_id FROM justification_premises WHERE justification_id=? ORDER BY ordinal",
         (str(row["id"]),),
     ).fetchall()
+    return _justification_from_parts(row, [str(item[0]) for item in premise_rows])
+
+
+def _justification_from_parts(row: sqlite3.Row, premises: Sequence[str]) -> Justification:
     audit_data = json.loads(str(row["audit_json"])) if row["audit_json"] else None
     audit = (
         ChainAudit(
@@ -824,7 +1024,7 @@ def _justification_from_row(connection: sqlite3.Connection, row: sqlite3.Row) ->
     return Justification(
         id=str(row["id"]),
         belief_id=str(row["belief_id"]),
-        premises=tuple(str(item[0]) for item in premise_rows),
+        premises=tuple(premises),
         warrant=str(row["warrant"]),
         audit=audit,
         alternatives=tuple(json.loads(str(row["alternatives_json"]))),
@@ -859,3 +1059,34 @@ def _projection_hash(connection: sqlite3.Connection) -> str:
 def _is_busy(exc: sqlite3.OperationalError) -> bool:
     message = str(exc).lower()
     return "locked" in message or "busy" in message
+
+
+def _idempotency_storage_key(episode_id: str, idempotency_key: str) -> str:
+    """Scope caller-provided keys without changing the public API."""
+
+    return f"{episode_id}:{idempotency_key}"
+
+
+def _idempotency_batches(events: Iterable[Event]) -> dict[tuple[str, str], list[Event]]:
+    batches: dict[tuple[str, str], list[Event]] = {}
+    for event in events:
+        key = event.correlation.get("idempotency_key")
+        if key:
+            batches.setdefault((event.episode_id, key), []).append(event)
+    return batches
+
+
+def _restore_idempotency(
+    connection: sqlite3.Connection,
+    batches: dict[tuple[str, str], list[Event]],
+) -> None:
+    for (episode_id, key), events in sorted(batches.items()):
+        connection.execute(
+            "INSERT INTO idempotency(idempotency_key,episode_id,event_ids_json,created_at) VALUES (?,?,?,?)",
+            (
+                _idempotency_storage_key(episode_id, key),
+                episode_id,
+                canonical_json([event.id for event in events]),
+                isoformat_utc(events[0].timestamp),
+            ),
+        )

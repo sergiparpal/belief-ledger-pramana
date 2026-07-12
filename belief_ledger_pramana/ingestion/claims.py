@@ -95,10 +95,11 @@ def validate_candidate(
     payload: str,
     *,
     max_words: int,
+    max_chars: int = 2_000,
     allowed_source_identity: str = "",
     allowed_pramanas: set[Pramana] | None = None,
 ) -> ClaimValidation:
-    reasons = list(validate_content(candidate.content, max_words=max_words))
+    reasons = list(validate_content(candidate.content, max_words=max_words, max_chars=max_chars))
     if not (0 <= candidate.span_start < candidate.span_end <= len(payload)):
         reasons.append("span is outside persisted evidence")
     elif payload[candidate.span_start : candidate.span_end] != candidate.exact_excerpt:

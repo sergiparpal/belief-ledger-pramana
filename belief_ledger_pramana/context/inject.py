@@ -27,23 +27,31 @@ class HermesRequestInjector:
     def __init__(self, secret: bytes | None = None) -> None:
         self._secret = secret or secrets.token_bytes(32)
         self._marker = re.compile(
-            r"<!-- BELIEF_LEDGER_PRAMANA:BEGIN sig=([0-9a-f]{64}) -->\n(.*?)\n<!-- BELIEF_LEDGER_PRAMANA:END -->",
+            r"<!-- BELIEF_LEDGER_PRAMANA:BEGIN bind=([0-9a-f]{64}) sig=([0-9a-f]{64}) -->\n(.*?)\n<!-- BELIEF_LEDGER_PRAMANA:END -->",
             re.DOTALL,
         )
 
-    def wrap(self, context: str) -> str:
-        signature = hmac.new(self._secret, context.encode("utf-8"), hashlib.sha256).hexdigest()
+    def wrap(self, context: str, *, binding: str = "") -> str:
+        binding_digest = _binding_digest(binding)
+        signature = hmac.new(
+            self._secret,
+            f"{binding_digest}\0{context}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
         return (
-            f"<!-- BELIEF_LEDGER_PRAMANA:BEGIN sig={signature} -->\n"
+            f"<!-- BELIEF_LEDGER_PRAMANA:BEGIN bind={binding_digest} sig={signature} -->\n"
             f"{context}\n"
             "<!-- BELIEF_LEDGER_PRAMANA:END -->"
         )
 
-    def inject(self, request: dict[str, Any], *, api_mode: str, context: str) -> InjectionResult:
+    def inject(
+        self, request: dict[str, Any], *, api_mode: str, context: str, binding: str = ""
+    ) -> InjectionResult:
         copied = copy.deepcopy(request)
-        if self._request_has_valid_marker(copied):
+        target = _target_user_message(copied, api_mode)
+        if self._message_has_valid_marker(target, binding=binding):
             return InjectionResult(copied, False)
-        block = self.wrap(context)
+        block = self.wrap(context, binding=binding)
         if api_mode == "chat_completions":
             self._inject_chat(copied, block)
         elif api_mode == "anthropic_messages":
@@ -99,12 +107,19 @@ class HermesRequestInjector:
         else:
             raise ContextInjectionError("codex_responses last user input has an unknown shape")
 
-    def _request_has_valid_marker(self, request: dict[str, Any]) -> bool:
-        for text in _all_text(request):
+    def _message_has_valid_marker(self, message: dict[str, Any], *, binding: str) -> bool:
+        expected_binding = _binding_digest(binding)
+        for text in _all_text(message.get("content")):
             for match in self._marker.finditer(text):
-                body = match.group(2)
-                expected = hmac.new(self._secret, body.encode("utf-8"), hashlib.sha256).hexdigest()
-                if hmac.compare_digest(match.group(1), expected):
+                marker_binding, signature, body = match.groups()
+                expected = hmac.new(
+                    self._secret,
+                    f"{expected_binding}\0{body}".encode(),
+                    hashlib.sha256,
+                ).hexdigest()
+                if hmac.compare_digest(marker_binding, expected_binding) and hmac.compare_digest(
+                    signature, expected
+                ):
                     return True
         return False
 
@@ -116,6 +131,18 @@ def _last_user(value: Any) -> dict[str, Any]:
         if isinstance(item, dict) and item.get("role") == "user":
             return item
     raise ContextInjectionError("provider request has no user item")
+
+
+def _target_user_message(request: dict[str, Any], api_mode: str) -> dict[str, Any]:
+    if api_mode == "codex_responses":
+        return _last_user(request.get("input"))
+    if api_mode in {"chat_completions", "anthropic_messages", "bedrock_converse"}:
+        return _last_user(request.get("messages"))
+    raise ContextInjectionError(f"unknown Hermes api_mode: {api_mode or '<missing>'}")
+
+
+def _binding_digest(binding: str) -> str:
+    return hashlib.sha256(binding.encode("utf-8")).hexdigest()
 
 
 def _all_text(value: Any) -> list[str]:

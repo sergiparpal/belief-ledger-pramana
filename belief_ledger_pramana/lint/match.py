@@ -48,16 +48,17 @@ def match_claim(
                 "valid citation deterministically entails claim",
             )
 
-    # Uncited exact matches are still grounded, but the generation-contract
-    # violation remains visible in the reason and can be annotated by policy.
+    # The generation contract requires an auditable citation.  A matching
+    # ledger belief is useful diagnostic information, but it must not turn an
+    # uncited assertion into a pass.
     for belief in sorted(beliefs.values(), key=lambda item: item.id):
         if belief.status is Status.IN and deterministic_entailment(clean_claim, belief.content):
             return LintClaim(
                 claim.text,
-                LintDisposition.GROUNDED,
+                LintDisposition.VIKALPA,
                 claim.cited_beliefs,
                 (belief.id,),
-                "active belief entails claim; citation was omitted",
+                "active belief entails claim but its required citation was omitted",
             )
         if (
             belief.status is Status.PENDING
@@ -66,10 +67,10 @@ def match_claim(
         ):
             return LintClaim(
                 claim.text,
-                LintDisposition.PENDING_MARKED,
+                LintDisposition.VIKALPA,
                 claim.cited_beliefs,
                 (belief.id,),
-                "marked pending belief entails claim",
+                "pending belief entails claim but its required citation was omitted",
             )
 
     reason = "; ".join(invalid_reasons) if invalid_reasons else "no active belief entails claim"

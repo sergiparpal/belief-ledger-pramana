@@ -60,6 +60,19 @@ def test_environment_override_has_precedence(
     assert snapshot.source == explicit.resolve()
 
 
+def test_relative_external_database_resolves_from_config_without_chmodding_parent(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "external"
+    config_dir.mkdir(mode=0o755)
+    config = config_dir / "config.yaml"
+    config.write_text("storage:\n  database: state/ledger.sqlite3\n", encoding="utf-8")
+    _, paths = load_config(hermes_home=tmp_path / "home", explicit_path=config)
+    assert paths.database == (config_dir / "state" / "ledger.sqlite3").resolve()
+    if os.name != "nt":
+        assert stat.S_IMODE(config_dir.stat().st_mode) == 0o755
+
+
 @pytest.mark.parametrize(
     ("path", "value", "message"),
     [

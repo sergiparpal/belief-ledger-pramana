@@ -52,3 +52,9 @@ def test_qualifier_aliases_are_canonical() -> None:
         "units": "sec",
     }
     assert not reconcile_qualifiers({"scope": "local"}, {"scope": "remote"}).compatible
+
+
+def test_invalid_temporal_qualifiers_never_compare_lexically() -> None:
+    scope = reconcile_qualifiers({"valid_from": "tomorrow-ish"}, {"valid_to": "2026-01-01"})
+    assert not scope.compatible
+    assert scope.reason == "invalid temporal qualifier"

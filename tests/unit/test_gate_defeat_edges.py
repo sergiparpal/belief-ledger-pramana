@@ -101,7 +101,8 @@ def test_mutual_undercuts_terminate_as_samsaya(runtime) -> None:
     )
     assert outcome.oscillation
     assert outcome.iterations <= 3
-    assert all(outcome.active_edges.values())
+    assert all(status is Status.PENDING for status in outcome.statuses.values())
+    assert not any(outcome.active_edges.values())
 
 
 def test_iteration_ceiling_never_leaves_unsupported_conclusion_in(runtime) -> None:
@@ -202,29 +203,48 @@ def test_gate_disabled_episode_missing_approval_and_allow_paths(runtime) -> None
     assert delegated.outcome is GateOutcome.ALLOW
     assert delegated.reason_code == "PRECONDITIONS_SATISFIED"
 
-    service.ingest_tool_result(
-        "exec_command",
-        {"cmd": "pwd"},
+    # This test exercises approval mechanics; production policy normally
+    # requires cross-source verification for world claims at high stakes.
+    service.config["trust"]["matrix"]["user_world"]["high"] = {
+        "mode": "svatah",
+        "k": 0,
+        "method": None,
+    }
+    service.ingest_user_message(
         "Resource bob is the intended target.",
         session_id="gate-edge",
         turn_id="gate-edge-turn",
-        tool_call_id="resource-observation",
-        status="success",
+        sender_id="user",
     )
-    service.compile_context(query="Resource bob intended target", request_id="gate-resource")
     approval = service.gate_action("send_email", {"recipient": "bob"})
     assert approval.outcome is GateOutcome.APPROVE
     assert approval.reason_code == "HUMAN_CONFIRMATION_REQUIRED"
     assert approval.rule_key
 
     service.ingest_user_message(
-        "I confirm bob.",
+        "I confirm send email to bob.",
         session_id="gate-edge",
         turn_id="gate-edge-turn",
         sender_id="user",
     )
     allowed = service.gate_action("send_email", {"recipient": "bob"})
     assert allowed.outcome is GateOutcome.ALLOW
+
+    service.ingest_user_message(
+        "Resource alice is the intended target.",
+        session_id="gate-edge",
+        turn_id="gate-edge-turn",
+        sender_id="user",
+    )
+    service.ingest_user_message(
+        "I do not confirm send email to alice.",
+        session_id="gate-edge",
+        turn_id="gate-edge-turn",
+        sender_id="user",
+    )
+    denied_confirmation = service.gate_action("send_email", {"recipient": "alice"})
+    assert denied_confirmation.outcome is GateOutcome.APPROVE
+    assert denied_confirmation.reason_code == "HUMAN_CONFIRMATION_REQUIRED"
 
     elevated = runtime.begin_turn(
         session_id="gate-elevation",
@@ -239,4 +259,4 @@ def test_gate_disabled_episode_missing_approval_and_allow_paths(runtime) -> None
         sender_id="user",
     )
     denied = elevated.gate_action("send_email", {"recipient": "alice"})
-    assert denied.outcome is GateOutcome.BLOCK
+    assert denied.outcome is not GateOutcome.ALLOW

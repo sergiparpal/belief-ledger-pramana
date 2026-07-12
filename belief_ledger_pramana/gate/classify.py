@@ -16,11 +16,33 @@ _MUTATION_WORDS = re.compile(
 _READ_WORDS = re.compile(
     r"\b(read|get|list|search|find|query|inspect|view|fetch|stat|show)\b", re.IGNORECASE
 )
-_TERMINAL_MUTATORS = re.compile(
-    r"(?:^|[;&|]\s*|\bsudo\s+)(?:rm|mv|cp|chmod|chown|dd|mkfs|mount|git\s+(?:push|commit|reset|checkout)|npm\s+(?:install|publish)|pip\s+install|curl\b.*\s(?:-X|--request)\s*(?:POST|PUT|PATCH|DELETE))\b",
-    re.IGNORECASE,
+# A terminal command must prove that it is read-only; matching a harmless first
+# word is not sufficient.  In particular, shell composition turns otherwise
+# safe-looking commands into arbitrary execution.
+_SHELL_SYNTAX = re.compile(r"[;&|`$<>\n\r]")
+_FIND_MUTATING_ACTION = re.compile(
+    r"^-(?:delete|exec(?:dir)?|ok(?:dir)?|fls|fprint(?:f|0)?|fprintf)$"
 )
-_TERMINAL_READ = {"pwd", "ls", "find", "rg", "grep", "cat", "head", "tail", "stat", "wc", "git"}
+_RG_EXECUTION_OPTION = re.compile(r"^--pre(?:=|$)")
+_GIT_EXECUTION_OPTION = re.compile(r"^--(?:ext-diff|textconv|paginate)(?:=|$)")
+_SAFE_GIT_SUBCOMMANDS = frozenset(
+    {
+        "blame",
+        "branch",
+        "describe",
+        "diff",
+        "grep",
+        "log",
+        "ls-files",
+        "remote",
+        "rev-parse",
+        "show",
+        "status",
+        "tag",
+        "version",
+    }
+)
+_SIMPLE_READ_COMMANDS = frozenset({"pwd", "ls", "rg", "grep", "cat", "head", "tail", "stat", "wc"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +78,7 @@ class ActionPolicyRegistry:
         *,
         description: str = "",
         enforce: bool = True,
+        unknown_tool_policy: str = "conservative",
     ) -> ActionClassification:
         name = tool_name.casefold().strip()
         for rule in self.rules:
@@ -69,13 +92,17 @@ class ActionPolicyRegistry:
             return ActionClassification(
                 _unknown_policy(Stakes.HIGH, True), False, "unknown tool appears effectful"
             )
-        if _READ_WORDS.search(material):
+        if unknown_tool_policy == "allow_read_only" and _READ_WORDS.search(material):
             return ActionClassification(
                 _unknown_policy(Stakes.MED, False), False, "unknown tool appears read-only"
             )
         stakes = Stakes.HIGH if enforce else Stakes.MED
         return ActionClassification(
-            _unknown_policy(stakes, enforce), False, "unknown tool is ambiguous"
+            _unknown_policy(stakes, enforce),
+            False,
+            "unknown tool is ambiguous"
+            if unknown_tool_policy == "allow_read_only"
+            else "unknown tool is conservatively effectful",
         )
 
     def _terminal_adjust(self, rule: ActionPolicy, args: dict[str, Any]) -> ActionClassification:
@@ -86,15 +113,17 @@ class ActionPolicyRegistry:
             return ActionClassification(
                 rule, True, "terminal command is missing and conservatively effectful"
             )
-        if _TERMINAL_MUTATORS.search(command):
+        if _SHELL_SYNTAX.search(command):
             return ActionClassification(
-                rule, True, "terminal command contains a mutation primitive"
+                rule,
+                True,
+                "terminal command uses shell composition and is conservatively effectful",
             )
         try:
-            first = shlex.split(command)[0]
-        except (ValueError, IndexError):
+            tokens = shlex.split(command)
+        except ValueError:
             return ActionClassification(rule, True, "terminal command could not be parsed")
-        if first in _TERMINAL_READ:
+        if _is_strictly_read_only_command(tokens):
             read_rule = ActionPolicy(
                 "terminal_read_only",
                 Stakes.MED,
@@ -109,6 +138,41 @@ class ActionPolicyRegistry:
                 read_rule, True, "terminal command matches a read-only primitive"
             )
         return ActionClassification(rule, True, "terminal command is conservatively effectful")
+
+
+def _is_strictly_read_only_command(tokens: list[str]) -> bool:
+    """Recognize a deliberately small terminal read-only grammar.
+
+    This is intentionally a proof obligation rather than a blacklist.  New
+    commands stay effectful until an operator adds a policy or this grammar is
+    extended with tests for their argument semantics.
+    """
+
+    if not tokens:
+        return False
+    command = tokens[0]
+    if command in _SIMPLE_READ_COMMANDS:
+        # rg can delegate to an arbitrary executable through --pre.  The
+        # remaining commands above have no command-execution option.
+        return not any(_RG_EXECUTION_OPTION.match(token) for token in tokens[1:])
+    if command == "find":
+        return not any(_FIND_MUTATING_ACTION.match(token) for token in tokens[1:])
+    if command != "git":
+        return False
+
+    # Permit only -C as a leading location selector, then require a known
+    # observational subcommand.  Global -c/--config options can define aliases
+    # or alter hooks, so they are intentionally not part of the grammar.
+    index = 1
+    while index < len(tokens) and tokens[index] == "-C":
+        if index + 1 >= len(tokens) or not tokens[index + 1] or tokens[index + 1].startswith("-"):
+            return False
+        index += 2
+    return (
+        index < len(tokens)
+        and tokens[index] in _SAFE_GIT_SUBCOMMANDS
+        and not any(_GIT_EXECUTION_OPTION.match(token) for token in tokens[index + 1 :])
+    )
 
 
 def _parse_rule(value: Any) -> ActionPolicy:

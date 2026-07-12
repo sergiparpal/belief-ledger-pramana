@@ -9,7 +9,7 @@ _CODE_FENCE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE = re.compile(r"`[^`]+`")
 _SENTENCE = re.compile(r"[^\n]+?(?:[.!?](?=\s|$)|$)", re.UNICODE)
 _FACTUAL = re.compile(
-    r"\b(?:is|are|was|were|has|have|will|does|did|requires|supports|contains|exists|equals|implemented|created|updated|fixed|passes|es|son|tiene|requiere|contiene|existe)\b",
+    r"\b(?:is|are|was|were|has|have|will|does|did|requires|supports|contains|exists|equals|implemented|created|updated|fixed|passes|uses|runs|depends|depends on|installed|available|failed|succeeded|es|son|tiene|requiere|contiene|existe)\b",
     re.IGNORECASE,
 )
 _SPECULATION = re.compile(
@@ -28,7 +28,9 @@ class ExtractedClaim:
     pending_marked: bool
 
 
-def extract_claims(response: str, *, pending_marker: str) -> tuple[ExtractedClaim, ...]:
+def extract_claims(
+    response: str, *, pending_marker: str, require_coverage: bool = False
+) -> tuple[ExtractedClaim, ...]:
     masked = _mask(_CODE_FENCE, response)
     masked = _mask(_INLINE_CODE, masked)
     claims: list[ExtractedClaim] = []
@@ -36,7 +38,9 @@ def extract_claims(response: str, *, pending_marker: str) -> tuple[ExtractedClai
         text = response[match.start() : match.end()].strip()
         if not text or text.endswith("?") or text.startswith("#") or _SPECULATION.search(text):
             continue
-        if _FACTUAL.search(text) is None:
+        if _FACTUAL.search(text) is None and not (
+            require_coverage and _looks_substantive_declarative(text)
+        ):
             continue
         claims.append(
             ExtractedClaim(
@@ -48,6 +52,17 @@ def extract_claims(response: str, *, pending_marker: str) -> tuple[ExtractedClai
             )
         )
     return tuple(claims)
+
+
+def _looks_substantive_declarative(text: str) -> bool:
+    """Fail closed on prose that evades the narrow factual-verb heuristic."""
+
+    clean = _CITATION.sub("", text)
+    clean = re.sub(r"^\s*[-*]\s*", "", clean).strip()
+    words = re.findall(r"[\w.-]+", clean, flags=re.UNICODE)
+    if len(words) < 3 and not any(char.isdigit() for char in clean):
+        return False
+    return clean.casefold() not in {"thanks", "thank you", "ok", "okay", "done"}
 
 
 def strip_citations(text: str, pending_marker: str) -> str:

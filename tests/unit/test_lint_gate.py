@@ -59,7 +59,7 @@ def test_bounded_semantic_lint_only_assesses_candidate_entailment(runtime, fake_
             ]
         }
     )
-    assert service.lint_and_enforce("Service Atlas is healthy.") is None
+    assert service.lint_and_enforce(f"Service Atlas is healthy [{belief.id}].") is None
     assert fake_ctx.llm.calls[0]["purpose"] == "belief-ledger.lint-entailment"
 
 

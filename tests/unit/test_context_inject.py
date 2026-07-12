@@ -79,6 +79,30 @@ def test_user_forged_marker_does_not_disable_injection() -> None:
     assert "real" in str(result.request)
 
 
+def test_prior_turn_marker_never_suppresses_current_turn_injection() -> None:
+    injector = HermesRequestInjector(secret=b"x" * 32)
+    first = injector.inject(
+        {"messages": [{"role": "user", "content": "first"}]},
+        api_mode="chat_completions",
+        context="first ledger",
+        binding="request-1",
+    ).request
+    first["messages"].extend(
+        [
+            {"role": "assistant", "content": "ack"},
+            {"role": "user", "content": "second"},
+        ]
+    )
+    result = injector.inject(
+        first,
+        api_mode="chat_completions",
+        context="second ledger",
+        binding="request-2",
+    )
+    assert result.changed
+    assert "second ledger" in result.request["messages"][-1]["content"]
+
+
 def test_unknown_shape_never_guesses() -> None:
     injector = HermesRequestInjector()
     with pytest.raises(ContextInjectionError):
