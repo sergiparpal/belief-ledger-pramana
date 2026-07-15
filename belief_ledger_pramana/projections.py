@@ -69,12 +69,18 @@ def _apply_source_stats_updated(connection: sqlite3.Connection, event: Event) ->
     payload = event.payload
     connection.execute(
         "UPDATE sources SET stats_json=?, competence_json=? WHERE id=?",
-        (canonical_json(payload["stats"]), canonical_json(payload["competence"]), event.aggregate_id),
+        (
+            canonical_json(payload["stats"]),
+            canonical_json(payload["competence"]),
+            event.aggregate_id,
+        ),
     )
 
 
 def _apply_source_stats_delta(connection: sqlite3.Connection, event: Event) -> None:
-    row = connection.execute("SELECT stats_json FROM sources WHERE id=?", (event.aggregate_id,)).fetchone()
+    row = connection.execute(
+        "SELECT stats_json FROM sources WHERE id=?", (event.aggregate_id,)
+    ).fetchone()
     if row is None:
         return
     existing = json.loads(str(row["stats_json"]))
@@ -135,13 +141,15 @@ def _apply_belief_status_changed(connection: sqlite3.Connection, event: Event) -
 
 def _apply_belief_admission_changed(connection: sqlite3.Connection, event: Event) -> None:
     connection.execute(
-        "UPDATE beliefs SET admission_status=? WHERE id=?", (str(event.payload["to"]), event.aggregate_id)
+        "UPDATE beliefs SET admission_status=? WHERE id=?",
+        (str(event.payload["to"]), event.aggregate_id),
     )
 
 
 def _apply_belief_corroboration_changed(connection: sqlite3.Connection, event: Event) -> None:
     connection.execute(
-        "UPDATE beliefs SET corroboration=? WHERE id=?", (int(event.payload["to"]), event.aggregate_id)
+        "UPDATE beliefs SET corroboration=? WHERE id=?",
+        (int(event.payload["to"]), event.aggregate_id),
     )
 
 
@@ -152,7 +160,11 @@ def _apply_verification_created(connection: sqlite3.Connection, event: Event) ->
 def _apply_verification_completed(connection: sqlite3.Connection, event: Event) -> None:
     connection.execute(
         "UPDATE verification_tasks SET result=?, state=? WHERE id=?",
-        (event.payload.get("result"), str(event.payload.get("state", "completed")), event.aggregate_id),
+        (
+            event.payload.get("result"),
+            str(event.payload.get("state", "completed")),
+            event.aggregate_id,
+        ),
     )
 
 
@@ -170,7 +182,9 @@ def _apply_retraction_created(connection: sqlite3.Connection, event: Event) -> N
 
 def _apply_retraction_state_changed(connection: sqlite3.Connection, event: Event) -> None:
     state = "acknowledged" if event.kind.endswith("ACKNOWLEDGED") else "expired"
-    connection.execute("UPDATE retraction_notices SET state=? WHERE id=?", (state, event.aggregate_id))
+    connection.execute(
+        "UPDATE retraction_notices SET state=? WHERE id=?", (state, event.aggregate_id)
+    )
 
 
 def _apply_context_compiled(connection: sqlite3.Connection, event: Event) -> None:

@@ -233,7 +233,9 @@ class LedgerStore:
                 "SELECT seq,event_hash FROM event_heads WHERE episode_id=?", (episode_id,)
             ).fetchone()
             previous_hash = str(head["event_hash"]) if head else ZERO_HASH
-            next_seq = int(connection.execute("SELECT COALESCE(MAX(seq),0)+1 FROM events").fetchone()[0])
+            next_seq = int(
+                connection.execute("SELECT COALESCE(MAX(seq),0)+1 FROM events").fetchone()[0]
+            )
             events: list[Event] = []
             for offset, draft in enumerate(drafts):
                 event = build_event(

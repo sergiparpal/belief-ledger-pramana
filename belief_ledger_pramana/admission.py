@@ -57,7 +57,9 @@ class BeliefAdmissionService:
                 evidence_id=support_evidence_id,
                 validity=dict(support_validity or belief.validity),
             )
-            drafts.append(_record_draft("INGESTION_SUPPORT_ADDED", "ingestion_support", support.id, support))
+            drafts.append(
+                _record_draft("INGESTION_SUPPORT_ADDED", "ingestion_support", support.id, support)
+            )
         return AdmissionResult(belief, trust, tuple(drafts))
 
 

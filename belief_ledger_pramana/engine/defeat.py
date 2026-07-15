@@ -198,7 +198,9 @@ def relabel(
             current[belief_id] = Status.PENDING
             causes[belief_id] = "samsaya:iteration_ceiling"
     active = _active_edges(defeat_list, beliefs, current, sources, config, rebut_comparisons)
-    return RelabelResult(current, active, tuple(sorted(conflict_pairs)), causes, max_iterations, True)
+    return RelabelResult(
+        current, active, tuple(sorted(conflict_pairs)), causes, max_iterations, True
+    )
 
 
 def _candidate_status(belief: Belief, supported: bool) -> Status:

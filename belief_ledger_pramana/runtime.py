@@ -1007,7 +1007,9 @@ class EpisodeService:
         self._after_new_beliefs()
         return tuple(event.id for event in events)
 
-    def _extract_claim_candidates(self, evidence: Evidence) -> tuple[tuple[ClaimCandidate, ...], bool]:
+    def _extract_claim_candidates(
+        self, evidence: Evidence
+    ) -> tuple[tuple[ClaimCandidate, ...], bool]:
         """Prefer bounded structured extraction, with deterministic extraction as fallback."""
 
         payload = evidence.payload
@@ -1531,7 +1533,9 @@ class EpisodeService:
                         created_turn=current_turn,
                         ttl_turns=ttl_turns,
                     )
-                    drafts.append(_record_draft("RETRACTION_CREATED", "retraction", notice.id, notice))
+                    drafts.append(
+                        _record_draft("RETRACTION_CREATED", "retraction", notice.id, notice)
+                    )
         return drafts, defeated_by_source
 
     def _conflict_transition_drafts(self, outcome: RelabelResult) -> list[EventDraft]:
