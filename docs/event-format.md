@@ -16,14 +16,18 @@ Every event contains:
   "causal_event_id": null,
   "payload": {"from": "in", "to": "out", "cause": "rebut:b_..."},
   "previous_hash": "...",
-  "event_hash": "..."
+  "event_hash": "...",
+  "auth_tag": "..."
 }
 ```
 
 Canonical JSON is UTF-8, sorted by key, compact, rejects NaN, and serializes aware datetimes in
 UTC. `event_hash = SHA256(previous_hash || NUL || canonical_event_without_hash)`. Heads are per
-episode even though `seq` is database-global. This detects accidental/local mutation; it is not
-a signature or remote attestation.
+episode even though `seq` is database-global. A separate `event_auth` table stores an
+`HMAC-SHA-256(event_id || NUL || event_hash)` tag made with a random, private, profile-local
+256-bit key. The tag is verified before replay, so rewriting a database and recomputing plain
+SHA-256 hashes is rejected unless the attacker can also read and replace the key. This remains
+local integrity protection, not a remote signature, witness, or availability guarantee.
 
 Stable event families cover episode lifecycle, evidence/redaction, source registration/stat
 updates, belief admission/status, justification/support, defeat activity, verification,

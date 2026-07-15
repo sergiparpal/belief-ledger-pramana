@@ -6,8 +6,9 @@ import logging
 from typing import Any
 
 from ..config import packaged_yaml
-from ..events import canonical_json, content_hash, utc_now
+from ..events import canonical_json, utc_now
 from ..gate.classify import ActionPolicyRegistry
+from ..ingestion.tool import redacted_content_hash
 from ..lint.enforce import linter_failure_response
 from ..models import CompatibilityMode, GateOutcome, Health, Stakes, max_stakes
 from ..runtime import PluginRuntime
@@ -263,12 +264,12 @@ class HermesHooks:
                     EventDraft(
                         "SUBAGENT_STARTED",
                         "subagent",
-                        str(kwargs.get("child_session_id") or content_hash(str(kwargs))),
+                        str(kwargs.get("child_session_id") or redacted_content_hash(str(kwargs))),
                         {
                             "parent_turn_id": str(kwargs.get("parent_turn_id") or ""),
                             "child_session_id": str(kwargs.get("child_session_id") or ""),
                             "child_role": str(kwargs.get("child_role") or ""),
-                            "goal_hash": content_hash(str(kwargs.get("child_goal") or "")),
+                            "goal_hash": redacted_content_hash(str(kwargs.get("child_goal") or "")),
                         },
                     )
                 ],
@@ -316,7 +317,7 @@ class HermesHooks:
                     EventDraft(
                         "APPROVAL_RESPONSE_RECORDED",
                         "approval",
-                        content_hash(
+                        redacted_content_hash(
                             canonical_json(
                                 [
                                     str(kwargs.get("command") or ""),
@@ -328,7 +329,7 @@ class HermesHooks:
                         {
                             "choice": choice,
                             "surface": str(kwargs.get("surface") or ""),
-                            "command_hash": content_hash(str(kwargs.get("command") or "")),
+                            "command_hash": redacted_content_hash(str(kwargs.get("command") or "")),
                             "confirmed": choice in {"once", "session", "always"},
                         },
                     )

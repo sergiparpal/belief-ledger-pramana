@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 from ..models import Integrity, SourceKind
 from .provenance import provenance_root
+from .tool import redact_secrets
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,17 +71,23 @@ class ToolAdapterRegistry:
                     provenance_root(SourceKind.WEB, identity=url),
                     {"general": 0.5},
                 )
-                metadata["url"] = url
+                metadata["url"] = redact_secrets(url)[0]
         elif family == "file":
             path = str(args.get("path") or args.get("file_path") or "unknown")
+            safe_path = redact_secrets(path)[0]
             content_source = SourceDescriptor(
                 SourceKind.DOCUMENT,
                 Integrity.SEMI,
-                path,
-                provenance_root(SourceKind.DOCUMENT, identity=path, origin=path, content=result),
+                safe_path,
+                provenance_root(
+                    SourceKind.DOCUMENT,
+                    identity=safe_path,
+                    origin=safe_path,
+                    content=result,
+                ),
                 {"general": 0.75, "library_internals": 0.85},
             )
-            metadata["path"] = path
+            metadata["path"] = safe_path
         elif family == "memory":
             identity = str(
                 args.get("source_root")
@@ -98,7 +105,7 @@ class ToolAdapterRegistry:
             metadata.update(
                 {
                     "transport_only": True,
-                    "prior_source_root": str(args.get("source_root") or ""),
+                    "prior_source_root": redact_secrets(str(args.get("source_root") or ""))[0],
                 }
             )
         elif family == "retrieval":

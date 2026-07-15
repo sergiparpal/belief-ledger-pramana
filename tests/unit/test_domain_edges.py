@@ -169,19 +169,19 @@ def test_absence_requires_complete_yogyata() -> None:
 
 def test_action_classifier_terminal_and_unknown_edges() -> None:
     registry = ActionPolicyRegistry(packaged_yaml("action-policies.yaml"))
-    assert not registry.classify("exec_command", {"cmd": "rg needle"}).policy.effectful
-    assert registry.classify("exec_command", {"cmd": "rm target"}).policy.effectful
-    assert registry.classify("exec_command", {}).policy.effectful
-    assert registry.classify("exec_command", {"cmd": "'broken"}).policy.effectful
-    for bypass in (
-        "git -C repo commit -m x",
+    for command in (
+        "rg needle",
+        "rm target",
+        "git status",
         "find . -exec rm {} \\;",
         "ls $(rm -rf /tmp/probe)",
-        "rg --pre evil needle",
-        "git diff --ext-diff",
-        "find . -fprint0 output.txt",
+        "ls (Start-Process calc)",
     ):
-        assert registry.classify("exec_command", {"cmd": bypass}).policy.effectful
+        classification = registry.classify("exec_command", {"cmd": command})
+        assert classification.policy.effectful
+        assert classification.policy.id == "terminal"
+    terminal = next(rule for rule in registry.rules if rule.id == "terminal")
+    assert "explicit_user_confirmation" in terminal.preconditions
     assert registry.classify("mystery", {}, enforce=True).policy.effectful
     assert not registry.classify("mystery", {}, enforce=False).policy.effectful
     assert registry.classify("future_lookup", {"query": "x"}).policy.effectful

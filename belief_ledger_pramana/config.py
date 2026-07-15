@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import os
 import stat
+import subprocess
 import tempfile
 from contextlib import suppress
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ class StatePaths:
     evidence: Path
     exports: Path
     locks: Path
+    integrity_key: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +93,8 @@ def state_paths(
         ).resolve()
     else:
         database_path = root / "ledger.sqlite3"
+    if not _is_within(database_path, root):
+        raise ConfigError("storage.database must resolve inside the plugin state directory")
     return StatePaths(
         hermes_home=home,
         root=root,
@@ -99,18 +103,25 @@ def state_paths(
         evidence=root / "evidence",
         exports=root / "exports",
         locks=root / "locks",
+        integrity_key=root / "locks" / "ledger.integrity.key",
     )
 
 
 def ensure_state_directories(paths: StatePaths) -> None:
     """Create private mutable-state directories."""
 
-    for path in (paths.root, paths.evidence, paths.exports, paths.locks):
+    managed = [paths.root, paths.evidence, paths.exports, paths.locks]
+    paths.database.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    managed.extend(_directories_within(paths.root, paths.database.parent))
+    for path in dict.fromkeys(managed):
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
         _chmod_if_posix(path, 0o700)
-    paths.database.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if paths.database.parent == paths.root or paths.root in paths.database.parent.parents:
-        _chmod_if_posix(paths.database.parent, 0o700)
+        require_private_path(path, "state directory", directory=True)
+    if paths.database.is_symlink():
+        require_private_path(paths.database, "ledger database")
+    elif paths.database.exists():
+        _chmod_if_posix(paths.database, 0o600)
+        require_private_path(paths.database, "ledger database")
 
 
 def packaged_yaml(name: str) -> dict[str, Any]:
@@ -144,8 +155,11 @@ def load_config(
     override: dict[str, Any] = {}
     if source is not None:
         source = source.resolve()
+        if not _is_within(source, initial_paths.root):
+            raise ConfigError("configuration file must be inside the plugin state directory")
         if not source.is_file():
             raise ConfigError(f"configuration file does not exist: {source}")
+        require_private_path(source, "configuration file")
         parsed = yaml.safe_load(source.read_text(encoding="utf-8"))
         if parsed is None:
             parsed = {}
@@ -173,6 +187,7 @@ def load_config(
     )
     if initialize:
         ensure_state_directories(paths)
+    _resolve_private_extension_paths(merged, paths.root)
     mtime_ns = source.stat().st_mtime_ns if source and source.exists() else None
     snapshot = ConfigSnapshot(
         data=merged,
@@ -400,3 +415,92 @@ def _chmod_if_posix(path: Path, mode: int) -> None:
             path.chmod(mode)
     except OSError:
         return
+
+
+def require_private_path(path: Path, label: str, *, directory: bool = False) -> None:
+    """Reject links and state paths readable by non-owner principals."""
+
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ConfigError(f"unable to inspect {label}: {path}: {exc}") from exc
+    if stat.S_ISLNK(metadata.st_mode):
+        raise ConfigError(f"{label} must not be a symbolic link: {path}")
+    if directory and not stat.S_ISDIR(metadata.st_mode):
+        raise ConfigError(f"{label} must be a directory: {path}")
+    if not directory and not stat.S_ISREG(metadata.st_mode):
+        raise ConfigError(f"{label} must be a regular file: {path}")
+    if os.name == "nt":
+        _require_private_windows_acl(path, label)
+        return
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise ConfigError(f"{label} must be owned by the current user and inaccessible to group/other")
+
+
+def _resolve_private_extension_paths(config: dict[str, Any], root: Path) -> None:
+    for section, key, label in (
+        ("gating", "policy_files", "action policy extension"),
+        ("trust", "source_profile_files", "source profile extension"),
+    ):
+        values = _mapping(config, section).get(key, [])
+        resolved: list[str] = []
+        for raw_path in values:
+            candidate = Path(str(raw_path)).expanduser()
+            path = (candidate if candidate.is_absolute() else root / candidate).resolve()
+            if not _is_within(path, root):
+                raise ConfigError(f"{label} must be inside the plugin state directory: {path}")
+            if not path.is_file() or path.stat().st_size > 1_000_000:
+                raise ConfigError(f"{label} is unavailable or too large: {path}")
+            require_private_path(path, label)
+            resolved.append(str(path))
+        _mapping(config, section)[key] = resolved
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _directories_within(root: Path, target: Path) -> tuple[Path, ...]:
+    directories: list[Path] = []
+    current = target
+    while True:
+        directories.append(current)
+        if current == root:
+            return tuple(reversed(directories))
+        current = current.parent
+
+
+def _require_private_windows_acl(path: Path, label: str) -> None:
+    """Reject ACLs granting broad Windows principals access to sensitive state."""
+
+    try:
+        result = subprocess.run(
+            ["icacls", str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        raise ConfigError(f"unable to inspect ACL for {label}: {path}: {exc}") from exc
+    if result.returncode != 0:
+        raise ConfigError(f"unable to inspect ACL for {label}: {path}: {result.stderr.strip()}")
+    broad_principals = {
+        "everyone",
+        "nt authority\\authenticated users",
+        "builtin\\users",
+        "builtin\\guests",
+        "users",
+        "guests",
+    }
+    for line in result.stdout.splitlines():
+        if ":" not in line:
+            continue
+        principal = line.split(":", 1)[0].strip().casefold()
+        if principal in broad_principals:
+            raise ConfigError(f"{label} ACL grants a broad principal access: {path}")

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import shlex
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,35 +15,6 @@ _MUTATION_WORDS = re.compile(
 _READ_WORDS = re.compile(
     r"\b(read|get|list|search|find|query|inspect|view|fetch|stat|show)\b", re.IGNORECASE
 )
-# A terminal command must prove that it is read-only; matching a harmless first
-# word is not sufficient.  In particular, shell composition turns otherwise
-# safe-looking commands into arbitrary execution.
-_SHELL_SYNTAX = re.compile(r"[;&|`$<>\n\r]")
-_FIND_MUTATING_ACTION = re.compile(
-    r"^-(?:delete|exec(?:dir)?|ok(?:dir)?|fls|fprint(?:f|0)?|fprintf)$"
-)
-_RG_EXECUTION_OPTION = re.compile(r"^--pre(?:=|$)")
-_GIT_EXECUTION_OPTION = re.compile(r"^--(?:ext-diff|textconv|paginate)(?:=|$)")
-_SAFE_GIT_SUBCOMMANDS = frozenset(
-    {
-        "blame",
-        "branch",
-        "describe",
-        "diff",
-        "grep",
-        "log",
-        "ls-files",
-        "remote",
-        "rev-parse",
-        "show",
-        "status",
-        "tag",
-        "version",
-    }
-)
-_SIMPLE_READ_COMMANDS = frozenset({"pwd", "ls", "rg", "grep", "cat", "head", "tail", "stat", "wc"})
-
-
 @dataclass(frozen=True, slots=True)
 class ActionPolicy:
     id: str
@@ -108,71 +78,18 @@ class ActionPolicyRegistry:
     def _terminal_adjust(self, rule: ActionPolicy, args: dict[str, Any]) -> ActionClassification:
         if rule.id != "terminal":
             return ActionClassification(rule, True, f"matched policy {rule.id}")
-        command = str(args.get("command") or args.get("cmd") or "").strip()
-        if not command:
-            return ActionClassification(
-                rule, True, "terminal command is missing and conservatively effectful"
-            )
-        if _SHELL_SYNTAX.search(command):
-            return ActionClassification(
-                rule,
-                True,
-                "terminal command uses shell composition and is conservatively effectful",
-            )
-        try:
-            tokens = shlex.split(command)
-        except ValueError:
-            return ActionClassification(rule, True, "terminal command could not be parsed")
-        if _is_strictly_read_only_command(tokens):
-            read_rule = ActionPolicy(
-                "terminal_read_only",
-                Stakes.MED,
-                False,
-                "untrusted",
-                False,
-                rule.target_fields,
-                (),
-                exact=rule.exact,
-            )
-            return ActionClassification(
-                read_rule, True, "terminal command matches a read-only primitive"
-            )
-        return ActionClassification(rule, True, "terminal command is conservatively effectful")
-
-
-def _is_strictly_read_only_command(tokens: list[str]) -> bool:
-    """Recognize a deliberately small terminal read-only grammar.
-
-    This is intentionally a proof obligation rather than a blacklist.  New
-    commands stay effectful until an operator adds a policy or this grammar is
-    extended with tests for their argument semantics.
-    """
-
-    if not tokens:
-        return False
-    command = tokens[0]
-    if command in _SIMPLE_READ_COMMANDS:
-        # rg can delegate to an arbitrary executable through --pre.  The
-        # remaining commands above have no command-execution option.
-        return not any(_RG_EXECUTION_OPTION.match(token) for token in tokens[1:])
-    if command == "find":
-        return not any(_FIND_MUTATING_ACTION.match(token) for token in tokens[1:])
-    if command != "git":
-        return False
-
-    # Permit only -C as a leading location selector, then require a known
-    # observational subcommand.  Global -c/--config options can define aliases
-    # or alter hooks, so they are intentionally not part of the grammar.
-    index = 1
-    while index < len(tokens) and tokens[index] == "-C":
-        if index + 1 >= len(tokens) or not tokens[index + 1] or tokens[index + 1].startswith("-"):
-            return False
-        index += 2
-    return (
-        index < len(tokens)
-        and tokens[index] in _SAFE_GIT_SUBCOMMANDS
-        and not any(_GIT_EXECUTION_OPTION.match(token) for token in tokens[index + 1 :])
-    )
+        # A command string is interpreted by the host-selected shell.  The
+        # plugin does not receive a shell dialect or an argv vector, so it
+        # cannot prove that even a familiar command name is observational on
+        # every supported backend.  Treat every terminal invocation as an
+        # effectful action and leave any read-only optimization to a host API
+        # that supplies structured argv plus a non-shell execution guarantee.
+        del args
+        return ActionClassification(
+            rule,
+            True,
+            "terminal command is conservatively effectful across shell backends",
+        )
 
 
 def _parse_rule(value: Any) -> ActionPolicy:

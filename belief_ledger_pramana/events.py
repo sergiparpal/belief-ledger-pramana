@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import hmac
 import json
 from datetime import UTC, datetime
 from enum import Enum
@@ -73,6 +74,15 @@ def compute_event_hash(previous_hash: str, event_without_hash: dict[str, Any]) -
         previous_hash.encode("ascii") + b"\x00" + canonical_json(event_without_hash).encode("utf-8")
     )
     return hashlib.sha256(material).hexdigest()
+
+
+def compute_event_auth(key: bytes, event_id: str, event_hash: str) -> str:
+    """Authenticate one chained event with a key kept outside SQLite."""
+
+    if len(key) < 32:
+        raise ValueError("ledger integrity key must contain at least 256 bits")
+    material = event_id.encode("utf-8") + b"\x00" + event_hash.encode("ascii")
+    return hmac.new(key, material, hashlib.sha256).hexdigest()
 
 
 def build_event(

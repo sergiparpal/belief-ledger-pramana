@@ -54,8 +54,8 @@ ephemeral block appended to the active user item. Tool results remain byte-for-b
 in the Hermes transcript; the plugin separately records an immutable evidence object, a
 PRATYAKṢA tool wrapper, and lazily validated content beliefs with the actual source.
 Generic command stdout is only evidence that the command returned; it is never promoted into a
-domain fact. Terminal commands are read-only only when they match the plugin's strict,
-non-compositional read grammar.
+domain fact. Every terminal command string is treated as effectful because the plugin cannot
+prove equivalent read-only semantics across host-selected shells.
 
 Final responses are linted under the episode stakes:
 
@@ -110,13 +110,13 @@ $HERMES_HOME/belief-ledger-pramana/config.yaml
 $HERMES_HOME/belief-ledger-pramana/ledger.sqlite3
 ```
 
-Set `BELIEF_LEDGER_PRAMANA_CONFIG` for an explicit read-only configuration source. Unknown
-keys warn only in `observe`; they are errors in `enforce`. One turn uses one immutable config
-snapshot. See [config.example.yaml](config.example.yaml) and
+Set `BELIEF_LEDGER_PRAMANA_CONFIG` for an explicit private configuration file beneath that
+profile-local state directory. Unknown keys warn only in `observe`; they are errors in `enforce`.
+One turn uses one immutable config snapshot. See [config.example.yaml](config.example.yaml) and
 [docs/configuration.md](docs/configuration.md).
 
-The default evidence mode stores a bounded, additionally redacted excerpt and the hash of the
-complete post-Hermes result. `hash_only` cannot promote claims needing citation spans; `full`
+The default evidence mode stores a bounded, additionally redacted excerpt and a hash of the
+redacted post-Hermes result. `hash_only` cannot promote claims needing citation spans; `full`
 is explicit opt-in. Credentials, authorization headers, raw environment dumps, and Hermes auth
 files are never intentionally persisted. Directories use `0700` and files `0600` on POSIX.
 

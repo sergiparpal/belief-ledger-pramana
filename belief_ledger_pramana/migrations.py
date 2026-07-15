@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .events import compute_event_auth
+
 
 @dataclass(frozen=True, slots=True)
 class MigrationResult:
@@ -304,6 +306,15 @@ CREATE INDEX IF NOT EXISTS llm_reservations_episode_turn_idx
 """
 
 
+SCHEMA_V3 = r"""
+CREATE TABLE IF NOT EXISTS event_auth (
+  event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+  event_hash TEXT NOT NULL,
+  auth_tag TEXT NOT NULL
+);
+"""
+
+
 PROJECTION_TABLES: tuple[str, ...] = (
     "assistant_responses",
     "gate_decisions",
@@ -338,7 +349,7 @@ def configure_connection(connection: sqlite3.Connection, busy_timeout_ms: int) -
     connection.execute("PRAGMA synchronous=FULL")
 
 
-def migrate(database: Path, busy_timeout_ms: int = 5_000) -> MigrationResult:
+def migrate(database: Path, integrity_key: bytes, busy_timeout_ms: int = 5_000) -> MigrationResult:
     """Apply all forward migrations and make a backup before upgrading existing data."""
 
     database.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -354,9 +365,9 @@ def migrate(database: Path, busy_timeout_ms: int = 5_000) -> MigrationResult:
             "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
         ).fetchone()
         from_version = int(row[0]) if row else 0
-        if from_version > 2:
-            raise RuntimeError(f"database schema {from_version} is newer than supported schema 2")
-        if existed and from_version < 2:
+        if from_version > 3:
+            raise RuntimeError(f"database schema {from_version} is newer than supported schema 3")
+        if existed and from_version < 3:
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             backup = database.with_name(f"{database.name}.pre-v{from_version + 1}.{stamp}.bak")
             _online_backup(connection, backup)
@@ -372,6 +383,21 @@ def migrate(database: Path, busy_timeout_ms: int = 5_000) -> MigrationResult:
             connection.execute(
                 "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (2, now)
             )
+        if from_version < 3:
+            connection.executescript(SCHEMA_V3)
+            for event_id, event_hash in connection.execute("SELECT id,event_hash FROM events"):
+                connection.execute(
+                    "INSERT OR REPLACE INTO event_auth(event_id,event_hash,auth_tag) VALUES (?,?,?)",
+                    (
+                        str(event_id),
+                        str(event_hash),
+                        compute_event_auth(integrity_key, str(event_id), str(event_hash)),
+                    ),
+                )
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (3, now)
+            )
         fts5 = _ensure_fts(connection)
     finally:
         connection.close()
@@ -382,7 +408,7 @@ def migrate(database: Path, busy_timeout_ms: int = 5_000) -> MigrationResult:
     except OSError:
         pass
     return MigrationResult(
-        from_version=from_version, to_version=2, backup=backup, fts5_available=fts5
+        from_version=from_version, to_version=3, backup=backup, fts5_available=fts5
     )
 
 

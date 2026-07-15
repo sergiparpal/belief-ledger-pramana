@@ -23,8 +23,10 @@ from .config import (
     ConfigSnapshot,
     StatePaths,
     config_needs_reload,
+    ensure_state_directories,
     load_config,
     packaged_yaml,
+    require_private_path,
     state_paths,
 )
 from .context.inject import HermesRequestInjector
@@ -50,7 +52,7 @@ from .ingestion.claims import (
     validate_candidate,
 )
 from .ingestion.provenance import fingerprint
-from .ingestion.tool import prepare_evidence, redact_secrets
+from .ingestion.tool import prepare_evidence, redact_secrets, redacted_content_hash
 from .ingestion.user import is_about_user_self, user_source
 from .lint.enforce import enforce_report, linter_failure_response
 from .lint.report import lint_response
@@ -177,13 +179,16 @@ class PluginRuntime:
                     None,
                 )
                 paths = state_paths(self.hermes_home)
-                paths.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                ensure_state_directories(paths)
             try:
                 store = LedgerStore(
                     paths.database,
                     busy_timeout_ms=int(snapshot.data["storage"]["busy_timeout_ms"]),
+                    integrity_key_path=paths.integrity_key,
                 )
                 store.verify_hash_chain()
+                require_private_path(store.database, "ledger database")
+                require_private_path(paths.integrity_key, "ledger integrity key")
             except Exception as exc:
                 self.health = Health.UNAVAILABLE
                 self.health_reasons.append(f"database unavailable: {type(exc).__name__}: {exc}")
@@ -466,7 +471,7 @@ class EpisodeService:
             payload=prepared.payload,
             content_hash=prepared.full_hash,
             metadata={
-                "sender_id_hash": content_hash(_clean(kwargs.get("sender_id"))),
+                "sender_id_hash": _safe_text_hash(_clean(kwargs.get("sender_id"))),
                 "channel": _clean(kwargs.get("platform")),
                 "excerpt_start": prepared.excerpt_start,
                 "excerpt_end": prepared.excerpt_end,
@@ -1159,7 +1164,7 @@ class EpisodeService:
             audit = result.parsed
             verdict_drafts = self._component_verdict_drafts(
                 "chain_auditor",
-                content_hash(payload),
+                _safe_text_hash(payload),
                 "passed" if not audit.fallacies else "failed",
                 {"fallacies": list(audit.fallacies)},
                 premise_ids=justification.premises,
@@ -1412,7 +1417,7 @@ class EpisodeService:
                     {
                         "request_id": resolved_request_id,
                         "config_digest": self.snapshot.digest,
-                        "query_hash": content_hash(effective_query),
+                        "query_hash": _safe_text_hash(effective_query),
                         "truncated": rendered.truncated,
                         "rendered": [
                             {
@@ -1497,7 +1502,7 @@ class EpisodeService:
         final_text = enforced.replacement if enforced.replacement is not None else response
         verdict_drafts = self._component_verdict_drafts(
             "output_linter",
-            content_hash(response),
+            _safe_text_hash(response),
             "passed" if enforced.passed else "failed",
             {"claims": len(enforced.claims), "warnings": list(enforced.warnings)},
             premise_ids=tuple(
@@ -1517,9 +1522,9 @@ class EpisodeService:
             EventDraft(
                 "LINT_RECORDED",
                 "response",
-                content_hash(response),
+                _safe_text_hash(response),
                 {
-                    "response_hash": content_hash(response),
+                    "response_hash": _safe_text_hash(response),
                     "passed": enforced.passed,
                     "report": to_primitive(enforced),
                 },
@@ -1533,7 +1538,7 @@ class EpisodeService:
                         "RETRACTION_ACKNOWLEDGED",
                         "retraction",
                         notice.id,
-                        {"response_hash": content_hash(final_text)},
+                        {"response_hash": _safe_text_hash(final_text)},
                     )
                 )
         self.store.append_events(
@@ -1644,7 +1649,7 @@ class EpisodeService:
             self.episode_id,
             self._component_verdict_drafts(
                 "lint_entailment",
-                content_hash(payload),
+                _safe_text_hash(payload),
                 "completed",
                 {
                     "candidate_pairs": len(allowed),
@@ -1662,7 +1667,14 @@ class EpisodeService:
     def _observe_component_input(self, component: str, text: str) -> Belief:
         """Record the runtime observation from which a component verdict is inferred."""
 
-        input_hash = content_hash(text)
+        storage = self.config["storage"]
+        prepared = prepare_evidence(
+            text,
+            mode=str(storage["evidence_mode"]),
+            max_excerpt_chars=int(storage["max_excerpt_chars"]),
+            redact=bool(storage["redact_secrets"]),
+        )
+        input_hash = prepared.full_hash
         content = f"The {component} directly received candidate input {input_hash[:12]}"
         normalized = normalize_content(content)
         for existing in self.store.find_exact_beliefs(self.episode_id, normalized):
@@ -1676,13 +1688,6 @@ class EpisodeService:
                 f"ledger:component-input:{component}",
                 {"monitoring": 1.0, "general": 1.0},
             )
-        )
-        storage = self.config["storage"]
-        prepared = prepare_evidence(
-            text,
-            mode=str(storage["evidence_mode"]),
-            max_excerpt_chars=int(storage["max_excerpt_chars"]),
-            redact=bool(storage["redact_secrets"]),
         )
         evidence = Evidence(
             id=new_id("evidence"),
@@ -1792,10 +1797,10 @@ class EpisodeService:
                 EventDraft(
                     "ASSISTANT_RESPONSE_RECORDED",
                     "response",
-                    content_hash(response),
+                    _safe_text_hash(response),
                     {
                         "turn_id": _clean(kwargs.get("turn_id")),
-                        "content_hash": content_hash(response),
+                        "content_hash": _safe_text_hash(response),
                         "content": redacted,
                     },
                 )
@@ -2422,7 +2427,7 @@ class EpisodeService:
         outcome = result.parsed
         drafts = self._component_verdict_drafts(
             "contradiction_classifier",
-            content_hash(payload),
+            _safe_text_hash(payload),
             outcome["outcome"],
             {"basis": outcome["basis"], "left": left.id, "right": right.id},
             premise_ids=(left.id, right.id),
@@ -2489,6 +2494,10 @@ def _args_hash(args: dict[str, Any], *, redact: bool = True) -> str:
     )
     value, _ = redact_secrets(serialized) if redact else (serialized, False)
     return content_hash(value)
+
+
+def _safe_text_hash(value: str) -> str:
+    return redacted_content_hash(value)
 
 
 def _validate_claim_result(value: Any, *, max_claims: int = 24) -> tuple[ClaimCandidate, ...]:

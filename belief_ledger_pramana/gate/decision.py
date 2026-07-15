@@ -7,6 +7,7 @@ from typing import Any
 
 from ..engine.trust import determine_admission
 from ..events import canonical_json, content_hash
+from ..ingestion.tool import redact_secrets
 from ..models import GateDecision, GateOutcome, Stakes, max_stakes
 from ..store import EventDraft, LedgerStore
 from .classify import ActionPolicyRegistry
@@ -168,7 +169,7 @@ class ActionGate:
     ) -> None:
         payload = {
             "tool_name": tool_name,
-            "args_hash": content_hash(canonical_json(args)),
+            "args_hash": content_hash(redact_secrets(canonical_json(args))[0]),
             "outcome": decision.outcome.value,
             "reason_code": decision.reason_code,
             "detail": {

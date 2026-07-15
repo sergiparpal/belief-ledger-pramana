@@ -296,6 +296,7 @@ class Event:
     payload: dict[str, Any]
     previous_hash: str
     event_hash: str
+    auth_tag: str = ""
 
 
 @dataclass(frozen=True, slots=True)

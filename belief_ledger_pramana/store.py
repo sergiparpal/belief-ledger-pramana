@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import random
@@ -11,7 +12,7 @@ import tempfile
 import time
 from collections.abc import Iterable, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from types import TracebackType
@@ -20,6 +21,7 @@ from typing import Any, Literal
 from .events import (
     build_event,
     canonical_json,
+    compute_event_auth,
     compute_event_hash,
     isoformat_utc,
     parse_datetime,
@@ -27,6 +29,7 @@ from .events import (
     utc_now,
 )
 from .ids import new_id
+from .integrity import load_or_create_integrity_key
 from .migrations import PROJECTION_TABLES, MigrationResult, configure_connection, migrate
 from .models import (
     Belief,
@@ -116,10 +119,32 @@ class PurgeResult:
 class LedgerStore:
     """A connection-per-operation event store safe for threaded Hermes callbacks."""
 
-    def __init__(self, database: Path, *, busy_timeout_ms: int = 5_000) -> None:
-        self.database = database.resolve()
+    def __init__(
+        self,
+        database: Path,
+        *,
+        busy_timeout_ms: int = 5_000,
+        integrity_key_path: Path | None = None,
+    ) -> None:
+        requested_database = database.absolute()
+        if requested_database.is_symlink():
+            raise StoreError("ledger database must not be a symbolic link")
+        self.database = requested_database.resolve()
         self.busy_timeout_ms = busy_timeout_ms
-        self.migration: MigrationResult = migrate(self.database, busy_timeout_ms)
+        requested_key = (
+            integrity_key_path.absolute()
+            if integrity_key_path is not None
+            else self.database.with_name(f".{self.database.name}.integrity.key")
+        )
+        if requested_key.is_symlink():
+            raise StoreError("ledger integrity key must not be a symbolic link")
+        self.integrity_key_path = requested_key
+        self._integrity_key = load_or_create_integrity_key(self.integrity_key_path)
+        self.migration: MigrationResult = migrate(
+            self.database,
+            self._integrity_key,
+            busy_timeout_ms,
+        )
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
@@ -204,6 +229,10 @@ class LedgerStore:
                         correlation=clean_correlation,
                         causal_event_id=draft.causal_event_id,
                     )
+                    event = replace(
+                        event,
+                        auth_tag=compute_event_auth(self._integrity_key, event.id, event.event_hash),
+                    )
                     connection.execute(
                         "INSERT INTO events(seq,id,episode_id,ts,kind,schema_version,aggregate_type,aggregate_id,correlation_json,causal_event_id,payload_json,previous_hash,event_hash) "
                         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -222,6 +251,10 @@ class LedgerStore:
                             event.previous_hash,
                             event.event_hash,
                         ),
+                    )
+                    connection.execute(
+                        "INSERT INTO event_auth(event_id,event_hash,auth_tag) VALUES (?,?,?)",
+                        (event.id, event.event_hash, event.auth_tag),
                     )
                     apply_event(connection, event)
                     events.append(event)
@@ -650,7 +683,7 @@ class LedgerStore:
         query += " ORDER BY seq"
         with self.connect() as connection:
             rows = connection.execute(query, params).fetchall()
-        return [_event_from_row(row) for row in rows]
+            return self._authenticated_events(connection, rows)
 
     def events_by_ids(self, event_ids: Iterable[str]) -> list[Event]:
         ids = list(event_ids)
@@ -661,7 +694,7 @@ class LedgerStore:
             rows = connection.execute(
                 f"SELECT * FROM events WHERE id IN ({placeholders}) ORDER BY seq", ids
             ).fetchall()
-        return [_event_from_row(row) for row in rows]
+            return self._authenticated_events(connection, rows)
 
     def verify_hash_chain(self) -> tuple[bool, str]:
         expected_heads: dict[str, tuple[int, str]] = {}
@@ -688,6 +721,9 @@ class LedgerStore:
             calculated = compute_event_hash(previous, body)
             if calculated != event.event_hash:
                 raise HashChainError(f"event {event.id} hash mismatch")
+            expected_auth = compute_event_auth(self._integrity_key, event.id, event.event_hash)
+            if not hmac.compare_digest(event.auth_tag, expected_auth):
+                raise HashChainError(f"event {event.id} authentication mismatch")
             expected_heads[event.episode_id] = (event.seq, event.event_hash)
 
         with self.connect() as connection:
@@ -699,6 +735,32 @@ class LedgerStore:
             raise HashChainError("event head projection does not match event history")
         digest = canonical_json(expected_heads)
         return True, digest
+
+    def _authenticated_events(
+        self, connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]
+    ) -> list[Event]:
+        events = [_event_from_row(row) for row in rows]
+        if not events:
+            return []
+        ids = [event.id for event in events]
+        auth_rows = connection.execute(
+            f"SELECT event_id,event_hash,auth_tag FROM event_auth WHERE event_id IN ({','.join('?' for _ in ids)})",
+            ids,
+        ).fetchall()
+        auth = {
+            str(row["event_id"]): (str(row["event_hash"]), str(row["auth_tag"]))
+            for row in auth_rows
+        }
+        hydrated: list[Event] = []
+        for event in events:
+            stored = auth.get(event.id)
+            if stored is None or stored[0] != event.event_hash:
+                raise HashChainError(f"event {event.id} authentication record is missing or stale")
+            expected_auth = compute_event_auth(self._integrity_key, event.id, event.event_hash)
+            if not hmac.compare_digest(stored[1], expected_auth):
+                raise HashChainError(f"event {event.id} authentication mismatch")
+            hydrated.append(replace(event, auth_tag=stored[1]))
+        return hydrated
 
     def projection_hash(self) -> str:
         with self.connect() as connection:
@@ -764,7 +826,11 @@ class LedgerStore:
         os.close(fd)
         temporary = Path(temporary_name)
         temporary.unlink()
-        replacement = LedgerStore(temporary, busy_timeout_ms=self.busy_timeout_ms)
+        replacement = LedgerStore(
+            temporary,
+            busy_timeout_ms=self.busy_timeout_ms,
+            integrity_key_path=self.integrity_key_path,
+        )
         destination = replacement.connect()
         try:
             destination.execute("BEGIN IMMEDIATE")
@@ -787,6 +853,10 @@ class LedgerStore:
                         event.previous_hash,
                         event.event_hash,
                     ),
+                )
+                destination.execute(
+                    "INSERT INTO event_auth(event_id,event_hash,auth_tag) VALUES (?,?,?)",
+                    (event.id, event.event_hash, event.auth_tag),
                 )
                 apply_event(destination, event)
             _restore_idempotency(

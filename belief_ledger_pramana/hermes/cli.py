@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import stat
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -13,7 +12,7 @@ from typing import Any
 import yaml
 
 from ..compatibility import competing_transformers, transformer_has_precedence
-from ..config import load_config, validate_config
+from ..config import ConfigError, load_config, require_private_path, validate_config
 from ..events import canonical_json, to_primitive, utc_now
 from ..runtime import PluginRuntime
 
@@ -316,15 +315,17 @@ def _permission_issues(runtime: PluginRuntime) -> list[str]:
         runtime.paths.exports,
         runtime.paths.locks,
     ):
-        if directory.exists() and stat.S_IMODE(directory.stat().st_mode) & 0o077:
-            issues.append(f"directory is accessible by group/other: {directory}")
-    for file_path in (runtime.store.database, runtime.config.source):
-        if (
-            file_path
-            and Path(file_path).exists()
-            and stat.S_IMODE(Path(file_path).stat().st_mode) & 0o077
-        ):
-            issues.append(f"file is accessible by group/other: {file_path}")
+        if directory.exists():
+            try:
+                require_private_path(directory, "state directory", directory=True)
+            except ConfigError as exc:
+                issues.append(str(exc))
+    for file_path in (runtime.store.database, runtime.paths.integrity_key, runtime.config.source):
+        if file_path and Path(file_path).exists():
+            try:
+                require_private_path(Path(file_path), "state file")
+            except ConfigError as exc:
+                issues.append(str(exc))
     return issues
 
 

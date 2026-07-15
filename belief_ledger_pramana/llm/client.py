@@ -8,8 +8,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from ..events import content_hash
 from ..ids import new_id
+from ..ingestion.tool import redacted_content_hash
 from ..models import ComponentVerdict, LlmUsage
 from ..store import LedgerStore, LlmReservationError
 
@@ -145,7 +145,7 @@ class HostLlmClient:
             episode_id=episode_id,
             component=purpose.split(".")[-1],
             purpose=purpose,
-            input_hash=content_hash(text),
+            input_hash=redacted_content_hash(text),
             outcome=outcome,
             belief_id=None,
             detail={"schema_name": schema_name},

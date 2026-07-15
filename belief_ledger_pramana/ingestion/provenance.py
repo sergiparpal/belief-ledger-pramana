@@ -7,8 +7,8 @@ from difflib import SequenceMatcher
 from urllib.parse import urlsplit, urlunsplit
 
 from ..engine.validity import normalize_content
-from ..events import content_hash
 from ..models import SourceKind
+from .tool import redact_secrets, redacted_content_hash
 
 
 def normalize_url(value: str) -> str:
@@ -39,27 +39,29 @@ def provenance_root(
     origin: str = "",
     content: str | bytes | None = None,
 ) -> str:
+    safe_identity = redact_secrets(identity)[0]
+    safe_origin = redact_secrets(origin)[0]
     if kind is SourceKind.WEB:
-        domain = registrable_domain(identity)
+        domain = registrable_domain(safe_identity)
         publisher_part = re.sub(r"\s+", "-", publisher.casefold().strip()) or "unknown"
         return f"web:{domain}:{publisher_part}"
     if kind is SourceKind.DOCUMENT:
-        payload = content if content is not None else identity
-        digest = content_hash(payload if isinstance(payload, bytes) else str(payload))
-        return f"document:{digest}:{origin or identity}"
+        payload = content if content is not None else safe_identity
+        digest = redacted_content_hash(payload if isinstance(payload, bytes) else str(payload))
+        return f"document:{digest}:{safe_origin or safe_identity}"
     if kind is SourceKind.USER:
-        return f"user:{identity}"
+        return f"user:{safe_identity}"
     if kind is SourceKind.TOOL:
-        return f"tool:{identity}"
+        return f"tool:{safe_identity}"
     if kind is SourceKind.MODEL:
-        return f"model:{identity}"
+        return f"model:{safe_identity}"
     if kind is SourceKind.LEDGER:
-        return f"ledger:{origin or identity}"
-    return f"retriever:{identity}"
+        return f"ledger:{safe_origin or safe_identity}"
+    return f"retriever:{safe_identity}"
 
 
 def fingerprint(content: str) -> str:
-    return content_hash(normalize_content(content))
+    return redacted_content_hash(normalize_content(content))
 
 
 def similarity(left: str, right: str) -> float:

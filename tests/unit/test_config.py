@@ -9,12 +9,24 @@ from pathlib import Path
 import pytest
 
 from belief_ledger_pramana.config import (
+    PLUGIN_STATE_DIR,
     ConfigError,
     config_needs_reload,
     load_config,
     packaged_yaml,
     validate_config,
 )
+
+
+def _private_config(home: Path, text: str, name: str = "config.yaml") -> Path:
+    root = home / PLUGIN_STATE_DIR
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = root / name
+    path.write_text(text, encoding="utf-8")
+    if os.name != "nt":
+        root.chmod(0o700)
+        path.chmod(0o600)
+    return path
 
 
 def test_config_is_initialized_privately(tmp_path: Path) -> None:
@@ -28,49 +40,57 @@ def test_config_is_initialized_privately(tmp_path: Path) -> None:
 
 
 def test_unknown_key_rejected_in_enforce(tmp_path: Path) -> None:
-    config = tmp_path / "custom.yaml"
-    config.write_text("schema_version: 1\nmode: enforce\nunknown: true\n", encoding="utf-8")
+    home = tmp_path / "home"
+    config = _private_config(home, "schema_version: 1\nmode: enforce\nunknown: true\n")
     with pytest.raises(ConfigError, match="unknown configuration key"):
-        load_config(hermes_home=tmp_path / "home", explicit_path=config)
+        load_config(hermes_home=home, explicit_path=config)
 
 
 def test_unknown_key_warns_in_observe(tmp_path: Path) -> None:
-    config = tmp_path / "custom.yaml"
-    config.write_text("schema_version: 1\nmode: observe\nunknown: true\n", encoding="utf-8")
-    snapshot, _ = load_config(hermes_home=tmp_path / "home", explicit_path=config)
+    home = tmp_path / "home"
+    config = _private_config(home, "schema_version: 1\nmode: observe\nunknown: true\n")
+    snapshot, _ = load_config(hermes_home=home, explicit_path=config)
     assert snapshot.mode == "observe"
     assert snapshot.warnings == ("unknown configuration key: unknown",)
 
 
 def test_unsafe_context_budget_rejected(tmp_path: Path) -> None:
-    config = tmp_path / "custom.yaml"
-    config.write_text("context:\n  max_chars: 9000\n", encoding="utf-8")
+    home = tmp_path / "home"
+    config = _private_config(home, "context:\n  max_chars: 9000\n")
     with pytest.raises(ConfigError, match="max_chars"):
-        load_config(hermes_home=tmp_path / "home", explicit_path=config)
+        load_config(hermes_home=home, explicit_path=config)
 
 
 def test_environment_override_has_precedence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    explicit = tmp_path / "external.yaml"
-    explicit.write_text("mode: warn\n", encoding="utf-8")
+    home = tmp_path / "home"
+    explicit = _private_config(home, "mode: warn\n", "environment.yaml")
     monkeypatch.setenv("BELIEF_LEDGER_PRAMANA_CONFIG", str(explicit))
-    snapshot, _ = load_config(hermes_home=tmp_path / "home")
+    snapshot, _ = load_config(hermes_home=home)
     assert snapshot.mode == "warn"
     assert snapshot.source == explicit.resolve()
 
 
-def test_relative_external_database_resolves_from_config_without_chmodding_parent(
-    tmp_path: Path,
-) -> None:
-    config_dir = tmp_path / "external"
-    config_dir.mkdir(mode=0o755)
-    config = config_dir / "config.yaml"
-    config.write_text("storage:\n  database: state/ledger.sqlite3\n", encoding="utf-8")
-    _, paths = load_config(hermes_home=tmp_path / "home", explicit_path=config)
-    assert paths.database == (config_dir / "state" / "ledger.sqlite3").resolve()
-    if os.name != "nt":
-        assert stat.S_IMODE(config_dir.stat().st_mode) == 0o755
+def test_database_outside_private_state_directory_is_rejected(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    config = _private_config(home, "storage:\n  database: ../../outside/ledger.sqlite3\n")
+    with pytest.raises(ConfigError, match=r"storage\.database"):
+        load_config(hermes_home=home, explicit_path=config)
+
+
+def test_external_configuration_is_rejected(tmp_path: Path) -> None:
+    external = tmp_path / "external.yaml"
+    external.write_text("mode: warn\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="configuration file must be inside"):
+        load_config(hermes_home=tmp_path / "home", explicit_path=external)
+
+
+def test_extension_outside_private_state_directory_is_rejected(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    config = _private_config(home, "gating:\n  policy_files:\n    - ../policy.yaml\n")
+    with pytest.raises(ConfigError, match="action policy extension must be inside"):
+        load_config(hermes_home=home, explicit_path=config)
 
 
 @pytest.mark.parametrize(

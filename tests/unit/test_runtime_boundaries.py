@@ -234,7 +234,7 @@ def test_episode_resolution_reload_and_runtime_helpers(
     assert result.config.data["context"]["max_chars"] == 7_000
 
     changed_database = copy.deepcopy(result.config.data)
-    changed_database["storage"]["database"] = str(tmp_path / "different.sqlite3")
+    changed_database["storage"]["database"] = "different.sqlite3"
     prior_mtime = result.config.source.stat().st_mtime_ns
     result.config.source.write_text(
         yaml.safe_dump(changed_database, sort_keys=False), encoding="utf-8"

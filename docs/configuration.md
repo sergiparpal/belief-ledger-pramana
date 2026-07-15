@@ -24,6 +24,8 @@ Invalid safety-critical settings make component health visibly degraded. No perm
 is silent. Action/source registries are packaged, versioned YAML; operator extensions must use
 exact names or anchored regular expressions.
 
-An absolute database path is used as written. A relative database path in an explicit config is
-resolved relative to that config file, not the process working directory; external parent
-directories are never chmodded by the plugin.
+Configuration, the ledger database, and operator policy/source-profile extensions must all be
+regular files below the profile-local plugin state directory. Relative database and extension
+paths resolve there; escaping that directory, symbolic links, files larger than 1 MB, or paths
+with group/other POSIX access are rejected. On Windows, the plugin also rejects ACLs granting
+access to broad principals such as `Users`, `Authenticated Users`, or `Everyone`.

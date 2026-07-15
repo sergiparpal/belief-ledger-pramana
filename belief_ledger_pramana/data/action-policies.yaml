@@ -23,7 +23,7 @@ rules:
     minimum_priority: trusted
     allow_human_approval: true
     target_fields: [command, cmd]
-    preconditions: [environment_known]
+    preconditions: [environment_known, explicit_user_confirmation]
   - id: messaging
     pattern: "^(send|post|publish|reply|message)_.*$"
     base_stakes: high

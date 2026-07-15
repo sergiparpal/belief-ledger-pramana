@@ -2,14 +2,47 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from ..events import content_hash
 
-_SECRET_PATTERNS = (
-    re.compile(r"(?i)\b(authorization\s*:\s*(?:bearer|basic)\s+)[^\s,;]+"),
-    re.compile(r"(?i)\b(api[_-]?key|token|secret|password)\s*[:=]\s*([^\s,;]+)"),
+_SENSITIVE_FIELD_PATTERN = (
+    r"(?:"
+    r"[a-z0-9_.-]*?(?:api[_-]?key|access[_-]?key(?:[_-]?id)?|account[_-]?key|"
+    r"access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?token|token|auth(?:orization)?|"
+    r"secret(?:[_-]?key)?|password|passwd|credential|private[_-]?key|"
+    r"client[_-]?secret|session(?:[_-]?id)?|cookie)"
+    r")"
+)
+_SENSITIVE_FIELD = re.compile(_SENSITIVE_FIELD_PATTERN, re.IGNORECASE)
+_QUOTED_ASSIGNMENT = re.compile(
+    rf"(?P<prefix>[\"']?{_SENSITIVE_FIELD_PATTERN}[\"']?\s*[:=]\s*)"
+    r"(?P<quote>[\"'])(?P<value>.*?)(?P=quote)",
+    re.IGNORECASE,
+)
+_BARE_ASSIGNMENT = re.compile(
+    rf"(?P<prefix>[\"']?{_SENSITIVE_FIELD_PATTERN}[\"']?\s*[:=]\s*)"
+    r"(?P<value>[^\s,;}\]]+)",
+    re.IGNORECASE,
+)
+_AUTHORIZATION = re.compile(
+    r"(?im)^(?P<prefix>\s*(?:proxy-)?authorization\s*:\s*).+$"
+)
+_COOKIE = re.compile(r"(?im)^(?P<prefix>\s*(?:set-cookie|cookie)\s*:\s*).+$")
+_URI_CREDENTIALS = re.compile(
+    r"\b(?P<prefix>[a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@",
+    re.IGNORECASE,
+)
+_PEM_PRIVATE_KEY = re.compile(
+    r"-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----.*?(?:-----END(?: [A-Z0-9]+)* PRIVATE KEY-----|\Z)",
+    re.DOTALL,
+)
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b")
+_AWS_ACCESS_KEY = re.compile(r"\b(?:AKIA|ASIA|A3T[A-Z]|AGPA|AROA)[A-Z0-9]{16}\b")
+_KNOWN_TOKENS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
 )
@@ -28,10 +61,12 @@ class PreparedEvidence:
 def prepare_evidence(
     result: str, *, mode: str, max_excerpt_chars: int, redact: bool = True
 ) -> PreparedEvidence:
-    """Hash the complete observed result, then redact before persistence."""
+    """Redact before deriving any persistent representation of an observation."""
 
-    full_hash = content_hash(result)
     redacted_text, redacted = redact_secrets(result) if redact else (result, False)
+    # A plain SHA-256 hash of the original can reveal a known short secret by
+    # comparison. Persist only a hash of the redacted representation.
+    full_hash = redacted_content_hash(result)
     if mode == "hash_only":
         return PreparedEvidence(None, full_hash, redacted, None, None, len(result))
     if mode == "full":
@@ -46,12 +81,68 @@ def prepare_evidence(
 
 
 def redact_secrets(text: str) -> tuple[str, bool]:
-    result = text
-    for pattern in _SECRET_PATTERNS:
-        if pattern.groups >= 2:
-            result = pattern.sub(lambda match: f"{match.group(1)}=[REDACTED]", result)
-        elif pattern.groups == 1:
-            result = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]", result)
-        else:
-            result = pattern.sub("[REDACTED]", result)
+    """Remove common credentials from structured and unstructured observations.
+
+    This is a privacy control, not a claim that arbitrary text can be perfectly
+    classified. It deliberately prefers false positives to persisting a
+    credential in the evidence ledger.
+    """
+
+    result, _ = _redact_json_document(text)
+    result = _AUTHORIZATION.sub(lambda match: f"{match.group('prefix')}[REDACTED]", result)
+    result = _COOKIE.sub(lambda match: f"{match.group('prefix')}[REDACTED]", result)
+    result = _URI_CREDENTIALS.sub(lambda match: f"{match.group('prefix')}[REDACTED]@", result)
+    result = _QUOTED_ASSIGNMENT.sub(
+        lambda match: f"{match.group('prefix')}{match.group('quote')}[REDACTED]{match.group('quote')}",
+        result,
+    )
+    result = _BARE_ASSIGNMENT.sub(lambda match: f"{match.group('prefix')}[REDACTED]", result)
+    result = _PEM_PRIVATE_KEY.sub("[REDACTED PRIVATE KEY]", result)
+    result = _JWT.sub("[REDACTED JWT]", result)
+    result = _AWS_ACCESS_KEY.sub("[REDACTED AWS ACCESS KEY]", result)
+    for pattern in _KNOWN_TOKENS:
+        result = pattern.sub("[REDACTED]", result)
     return result, result != text
+
+
+def redacted_content_hash(value: str | bytes) -> str:
+    """Return a stable digest that cannot be used to confirm detected secrets."""
+
+    text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+    return content_hash(redact_secrets(text)[0])
+
+
+def _redact_json_document(text: str) -> tuple[str, bool]:
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError):
+        return text, False
+    redacted, changed = _redact_json_value(value)
+    if not changed:
+        return text, False
+    return json.dumps(redacted, ensure_ascii=False, separators=(",", ":")), True
+
+
+def _redact_json_value(value: Any, *, sensitive: bool = False) -> tuple[Any, bool]:
+    if sensitive:
+        return "[REDACTED]", True
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        changed = False
+        for key, item in value.items():
+            item_redacted, item_changed = _redact_json_value(
+                item,
+                sensitive=bool(_SENSITIVE_FIELD.fullmatch(str(key))),
+            )
+            result[str(key)] = item_redacted
+            changed = changed or item_changed
+        return result, changed
+    if isinstance(value, list):
+        result: list[Any] = []
+        changed = False
+        for item in value:
+            item_redacted, item_changed = _redact_json_value(item)
+            result.append(item_redacted)
+            changed = changed or item_changed
+        return result, changed
+    return value, False

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import concurrent.futures
+import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from belief_ledger_pramana.events import canonical_json, compute_event_hash
 from belief_ledger_pramana.ids import new_id
 from belief_ledger_pramana.models import CompatibilityMode, Episode, Stakes
-from belief_ledger_pramana.store import EventDraft, LedgerStore, LlmReservationError
+from belief_ledger_pramana.store import EventDraft, LedgerStore, LlmReservationError, StoreError
 
 
 def _episode() -> Episode:
@@ -117,21 +119,22 @@ def test_llm_budget_reservations_are_atomic(tmp_path: Path) -> None:
     store.release_llm_reservation(accepted[0])
 
 
-def test_v1_database_migrates_with_online_backup(tmp_path: Path) -> None:
+def test_v2_database_migrates_authenticated_events_with_online_backup(tmp_path: Path) -> None:
     database = tmp_path / "ledger.sqlite3"
     store = LedgerStore(database)
     store.create_episode(_episode())
     with store.connect() as connection:
-        connection.execute("DROP TABLE llm_reservations")
-        connection.execute("DELETE FROM schema_migrations WHERE version=2")
+        connection.execute("DROP TABLE event_auth")
+        connection.execute("DELETE FROM schema_migrations WHERE version=3")
     migrated = LedgerStore(database)
-    assert migrated.migration.from_version == 1
-    assert migrated.migration.to_version == 2
+    assert migrated.migration.from_version == 2
+    assert migrated.migration.to_version == 3
     assert migrated.migration.backup is not None and migrated.migration.backup.exists()
     with migrated.connect() as connection:
         assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='llm_reservations'"
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='event_auth'"
         ).fetchone()
+    assert migrated.verify_hash_chain()[0]
 
 
 def test_hash_chain_detects_payload_mutation_even_if_trigger_removed(tmp_path: Path) -> None:
@@ -143,6 +146,52 @@ def test_hash_chain_detects_payload_mutation_even_if_trigger_removed(tmp_path: P
         connection.execute("UPDATE events SET payload_json='{}' WHERE seq=1")
     with pytest.raises(Exception, match="hash mismatch"):
         store.verify_hash_chain()
+
+
+def test_hash_chain_rejects_recomputed_hash_without_integrity_key(tmp_path: Path) -> None:
+    store = LedgerStore(tmp_path / "ledger.sqlite3")
+    episode = _episode()
+    store.create_episode(episode)
+    event = store.append_events(
+        episode.id,
+        [EventDraft("NOTE", "episode", episode.id, {"value": 1})],
+    )[0]
+    tampered_payload = {"value": 2}
+    tampered_hash = compute_event_hash(
+        event.previous_hash,
+        {
+            "seq": event.seq,
+            "id": event.id,
+            "episode_id": event.episode_id,
+            "timestamp": event.timestamp,
+            "kind": event.kind,
+            "schema_version": event.schema_version,
+            "aggregate_type": event.aggregate_type,
+            "aggregate_id": event.aggregate_id,
+            "correlation": event.correlation,
+            "causal_event_id": event.causal_event_id,
+            "payload": tampered_payload,
+            "previous_hash": event.previous_hash,
+        },
+    )
+    with store.connect() as connection:
+        connection.execute("DROP TRIGGER events_no_update")
+        connection.execute(
+            "UPDATE events SET payload_json=?,event_hash=? WHERE id=?",
+            (canonical_json(tampered_payload), tampered_hash, event.id),
+        )
+    with pytest.raises(Exception, match="authentication"):
+        store.verify_hash_chain()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="creating symbolic links requires elevated Windows policy")
+def test_store_rejects_symbolic_link_integrity_key(tmp_path: Path) -> None:
+    target = tmp_path / "key-target"
+    target.write_bytes(b"x" * 32)
+    linked_key = tmp_path / "linked-key"
+    linked_key.symlink_to(target)
+    with pytest.raises(StoreError, match="integrity key must not be a symbolic link"):
+        LedgerStore(tmp_path / "ledger.sqlite3", integrity_key_path=linked_key)
 
 
 def test_confirmed_offline_purge_rewrites_only_other_episodes(tmp_path: Path) -> None:
