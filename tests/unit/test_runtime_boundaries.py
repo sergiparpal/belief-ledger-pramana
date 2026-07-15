@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import os
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -32,6 +35,18 @@ from belief_ledger_pramana.runtime import (
     _validate_entailment,
     _validate_rewrite,
 )
+
+
+class _BlockingLlm:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def complete_structured(self, **kwargs: object) -> object:
+        del kwargs
+        self.started.set()
+        self.release.wait(timeout=5.0)
+        raise RuntimeError("simulated component timeout")
 
 
 def test_structured_component_validators_reject_out_of_contract_data() -> None:
@@ -249,6 +264,60 @@ def test_episode_resolution_reload_and_runtime_helpers(
     assert not result.injection_failed(service.episode_id)
     rotated = result.service(session_id="reload-session", turn_id="reload-four")
     assert rotated.episode_id != service.episode_id
+
+
+def test_runtime_callback_and_ephemeral_context_caches_are_bounded(runtime) -> None:
+    runtime._CALLBACK_CACHE_LIMIT = 2
+    runtime._EPISODE_CONTEXT_CACHE_LIMIT = 2
+    for index in range(4):
+        runtime.begin_turn(
+            session_id=f"cache-session-{index}",
+            turn_id=f"cache-turn-{index}",
+            user_message=f"query {index}",
+        )
+        runtime.bind_approval_session_key(f"approval-{index}", f"episode-{index}")
+        runtime.set_recent_tool_result(f"episode-{index}", f"result {index}")
+
+    assert len(runtime._turn_to_episode) == 2
+    assert len(runtime._approval_to_episode) == 2
+    assert len(runtime._begun_turns) == 2
+    assert len(runtime._queries) == 2
+    assert len(runtime._recent_tool_results) == 2
+
+
+def test_async_context_compilation_defers_blocking_component_work(runtime, fake_ctx) -> None:
+    service = runtime.begin_turn(
+        session_id="deferred-session",
+        turn_id="deferred-turn",
+        user_message="What version is Aurora?",
+    )
+    service.ingest_tool_result(
+        "fetch_url",
+        {"url": "https://docs.example.test/aurora"},
+        "Product Aurora version is 7.",
+        session_id="deferred-session",
+        turn_id="deferred-turn",
+        tool_call_id="deferred-fetch",
+        status="success",
+    )
+    blocking_llm = _BlockingLlm()
+    fake_ctx._llm = blocking_llm
+
+    async def compile_on_loop() -> None:
+        assert runtime.in_running_event_loop()
+        service.compile_context(
+            query="Aurora version",
+            request_id="deferred-context",
+            defer_component_work=runtime.in_running_event_loop(),
+        )
+
+    started = time.monotonic()
+    asyncio.run(compile_on_loop())
+    assert time.monotonic() - started < 0.5
+    assert blocking_llm.started.wait(timeout=2.0)
+    assert not runtime.wait_for_context_maintenance(timeout=0.02)
+    blocking_llm.release.set()
+    assert runtime.wait_for_context_maintenance(timeout=5.0)
 
 
 def test_service_boundary_validation_absence_and_manual_defeats(runtime) -> None:

@@ -30,6 +30,7 @@ class HermesHooks:
                 rendered = service.compile_context(
                     query=message,
                     request_id=str(kwargs.get("turn_id") or "compatibility-turn"),
+                    defer_component_work=self.runtime.in_running_event_loop(),
                 )
                 return {
                     "context": self.runtime.injector.wrap(

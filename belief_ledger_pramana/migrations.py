@@ -315,6 +315,32 @@ CREATE TABLE IF NOT EXISTS event_auth (
 """
 
 
+SCHEMA_V4 = r"""
+-- Query paths used on every context compilation, relabel pass, and verification cycle.
+CREATE INDEX IF NOT EXISTS beliefs_episode_observed_idx
+  ON beliefs(episode_id, observed_at, id);
+CREATE INDEX IF NOT EXISTS beliefs_episode_status_observed_idx
+  ON beliefs(episode_id, status, observed_at, id);
+CREATE INDEX IF NOT EXISTS beliefs_episode_normalized_idx
+  ON beliefs(episode_id, normalized_content, id);
+CREATE INDEX IF NOT EXISTS sources_episode_id_idx ON sources(episode_id, id);
+CREATE INDEX IF NOT EXISTS ingestion_supports_episode_belief_idx
+  ON ingestion_supports(episode_id, belief_id, id);
+CREATE INDEX IF NOT EXISTS justifications_episode_id_idx ON justifications(episode_id, id);
+CREATE INDEX IF NOT EXISTS justifications_belief_id_idx ON justifications(belief_id, id);
+CREATE INDEX IF NOT EXISTS justification_premises_belief_idx
+  ON justification_premises(premise_belief_id, justification_id);
+CREATE INDEX IF NOT EXISTS defeats_episode_id_idx ON defeats(episode_id, id);
+CREATE INDEX IF NOT EXISTS verification_tasks_episode_state_idx
+  ON verification_tasks(episode_id, state, id);
+CREATE INDEX IF NOT EXISTS conflicts_episode_state_idx ON conflicts(episode_id, state, id);
+CREATE INDEX IF NOT EXISTS retractions_episode_state_turn_idx
+  ON retraction_notices(episode_id, state, created_turn, id);
+CREATE INDEX IF NOT EXISTS unpromoted_episode_state_idx
+  ON unpromoted_evidence(episode_id, state, evidence_id);
+"""
+
+
 PROJECTION_TABLES: tuple[str, ...] = (
     "assistant_responses",
     "gate_decisions",
@@ -365,9 +391,9 @@ def migrate(database: Path, integrity_key: bytes, busy_timeout_ms: int = 5_000) 
             "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
         ).fetchone()
         from_version = int(row[0]) if row else 0
-        if from_version > 3:
-            raise RuntimeError(f"database schema {from_version} is newer than supported schema 3")
-        if existed and from_version < 3:
+        if from_version > 4:
+            raise RuntimeError(f"database schema {from_version} is newer than supported schema 4")
+        if existed and from_version < 4:
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             backup = database.with_name(f"{database.name}.pre-v{from_version + 1}.{stamp}.bak")
             _online_backup(connection, backup)
@@ -398,6 +424,12 @@ def migrate(database: Path, integrity_key: bytes, busy_timeout_ms: int = 5_000) 
             connection.execute(
                 "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (3, now)
             )
+        if from_version < 4:
+            connection.executescript(SCHEMA_V4)
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (4, now)
+            )
         fts5 = _ensure_fts(connection)
     finally:
         connection.close()
@@ -408,7 +440,7 @@ def migrate(database: Path, integrity_key: bytes, busy_timeout_ms: int = 5_000) 
     except OSError:
         pass
     return MigrationResult(
-        from_version=from_version, to_version=3, backup=backup, fts5_available=fts5
+        from_version=from_version, to_version=4, backup=backup, fts5_available=fts5
     )
 
 

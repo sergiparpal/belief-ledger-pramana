@@ -26,6 +26,7 @@ class LlmRequestMiddleware:
             rendered = service.compile_context(
                 query=self.runtime.query_for(service.episode_id),
                 request_id=request_id,
+                defer_component_work=self.runtime.in_running_event_loop(),
             )
             result = self.runtime.injector.inject(
                 request,

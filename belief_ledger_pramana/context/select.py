@@ -35,8 +35,9 @@ def select_beliefs(
 ) -> Selection:
     belief_map = {belief.id: belief for belief in beliefs}
     query_tokens = _tokens(query)
+    content_tokens = {belief.id: _tokens(belief.content) for belief in belief_map.values()}
     scores = {
-        belief.id: lexical_score(query_tokens, _tokens(belief.content))
+        belief.id: lexical_score(query_tokens, content_tokens[belief.id])
         for belief in belief_map.values()
     }
     for rank, belief_id in enumerate(retrieval_ids):
@@ -63,12 +64,16 @@ def select_beliefs(
             continue
         candidates.append(belief)
 
+    priority_values = {
+        belief.id: priority_trace(belief, sources[belief.source_id], config).value
+        for belief in candidates
+    }
+
     def key(belief: Belief) -> tuple[Any, ...]:
-        trace = priority_trace(belief, sources[belief.source_id], config)
         return (
             1 if belief.id in mandatory else 0,
             scores[belief.id],
-            *trace.value,
+            *priority_values[belief.id],
             belief.id,
         )
 

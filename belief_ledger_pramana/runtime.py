@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import json
 import logging
@@ -9,6 +10,7 @@ import math
 import re
 import sqlite3
 import threading
+from collections import OrderedDict, defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
@@ -32,7 +34,7 @@ from .config import (
 from .context.inject import HermesRequestInjector
 from .context.render import RenderedContext, render_context
 from .context.select import select_beliefs
-from .engine.contradiction import candidate_pair, classify_deterministically
+from .engine.contradiction import candidate_pair, candidate_tokens, classify_deterministically
 from .engine.defeat import relabel as engine_relabel
 from .engine.graph import cycle_path
 from .engine.priority import priority_trace
@@ -107,6 +109,20 @@ from .verification.scheduler import VerificationScheduler
 logger = logging.getLogger(__name__)
 
 
+def _descendant_ids(root_id: str, dependents: Mapping[str, set[str]]) -> tuple[str, ...]:
+    """Return deterministically ordered derived descendants from loaded justifications."""
+
+    descendants: set[str] = set()
+    pending = list(sorted(dependents.get(root_id, ()), reverse=True))
+    while pending:
+        belief_id = pending.pop()
+        if belief_id in descendants:
+            continue
+        descendants.add(belief_id)
+        pending.extend(sorted(dependents.get(belief_id, ()), reverse=True))
+    return tuple(sorted(descendants))
+
+
 class RuntimeUnavailable(RuntimeError):
     pass
 
@@ -117,6 +133,10 @@ class EpisodeResolutionError(ValueError):
 
 class PluginRuntime:
     """Process-local registry; durable truth remains in the event store."""
+
+    _CALLBACK_CACHE_LIMIT = 4_096
+    _EPISODE_CONTEXT_CACHE_LIMIT = 1_024
+    _DEFERRED_MAINTENANCE_LIMIT = 64
 
     def __init__(
         self,
@@ -133,14 +153,18 @@ class PluginRuntime:
         self._initialize_lock = threading.RLock()
         self._registry_lock = threading.RLock()
         self._episode_locks: dict[str, threading.RLock] = {}
-        self._turn_to_episode: dict[str, str] = {}
-        self._approval_to_episode: dict[str, str] = {}
-        self._begun_turns: set[tuple[str, str]] = set()
+        self._turn_to_episode: OrderedDict[str, str] = OrderedDict()
+        self._approval_to_episode: OrderedDict[str, str] = OrderedDict()
+        self._begun_turns: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._turn_configs: dict[str, ConfigSnapshot] = {}
-        self._queries: dict[str, str] = {}
-        self._recent_tool_results: dict[str, str] = {}
+        self._queries: OrderedDict[str, str] = OrderedDict()
+        self._recent_tool_results: OrderedDict[str, str] = OrderedDict()
         self._injection_failures: set[str] = set()
         self._episode_health_reasons: dict[str, list[str]] = {}
+        self._maintenance_queue: OrderedDict[str, str] = OrderedDict()
+        self._maintenance_active = False
+        self._maintenance_idle = threading.Event()
+        self._maintenance_idle.set()
         self._current_episode: contextvars.ContextVar[str] = contextvars.ContextVar(
             "belief_ledger_current_episode", default=""
         )
@@ -209,19 +233,29 @@ class PluginRuntime:
     def operational(self) -> bool:
         return self.compatibility.mode in {CompatibilityMode.FULL, CompatibilityMode.HOOK_CONTEXT}
 
+    @staticmethod
+    def in_running_event_loop() -> bool:
+        """Whether this synchronous callback is executing on an asyncio loop thread."""
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        return True
+
     def begin_turn(self, **kwargs: Any) -> EpisodeService:
         service = self.service(**kwargs)
         turn_id = _clean(kwargs.get("turn_id"))
-        session_id = _clean(kwargs.get("session_id"))
         if turn_id:
             with self._registry_lock:
-                self._turn_to_episode[turn_id] = service.episode_id
+                self._remember_callback(self._turn_to_episode, turn_id, service.episode_id)
         marker = turn_id or f"implicit:{new_id('turn')}"
         key = (service.episode_id, marker)
         with self._registry_lock:
             first = key not in self._begun_turns
             if first:
-                self._begun_turns.add(key)
+                self._begun_turns[key] = None
+                self._trim_callback_caches()
         if first:
             self._reload_at_boundary()
             assert self.store is not None
@@ -244,12 +278,10 @@ class PluginRuntime:
             )
             with self._registry_lock:
                 self._turn_configs[service.episode_id] = self.config
-        if session_id and turn_id:
-            with self._registry_lock:
-                self._turn_to_episode[turn_id] = service.episode_id
         query = _clean(kwargs.get("user_message"))
         if query:
-            self._queries[service.episode_id] = query
+            with self._registry_lock:
+                self._remember_episode_context(self._queries, service.episode_id, query)
         current = self.service_for_id(service.episode_id)
         current.expire_retractions()
         return current
@@ -262,7 +294,8 @@ class PluginRuntime:
     def service_for_id(self, episode_id: str) -> EpisodeService:
         self.ensure_initialized()
         assert self.store is not None
-        snapshot = self._turn_configs.get(episode_id, self.config)
+        with self._registry_lock:
+            snapshot = self._turn_configs.get(episode_id, self.config)
         self._current_episode.set(episode_id)
         return EpisodeService(self, episode_id, self.store, snapshot)
 
@@ -288,12 +321,20 @@ class PluginRuntime:
         task_id = _clean(kwargs.get("task_id"))
         if session_id:
             key = f"session:{session_id}"
-        elif session_key and session_key in self._approval_to_episode:
-            return self._approval_to_episode[session_key]
         elif session_key:
+            with self._registry_lock:
+                approved_episode = self._approval_to_episode.get(session_key)
+                if approved_episode:
+                    self._approval_to_episode.move_to_end(session_key)
+                    return approved_episode
             key = f"approval:{session_key}"
-        elif turn_id and turn_id in self._turn_to_episode:
-            return self._turn_to_episode[turn_id]
+        elif turn_id:
+            with self._registry_lock:
+                mapped_episode = self._turn_to_episode.get(turn_id)
+                if mapped_episode:
+                    self._turn_to_episode.move_to_end(turn_id)
+                    return mapped_episode
+            key = f"task:{task_id}" if task_id else f"oneshot:{new_id('episode')}"
         elif task_id:
             key = f"task:{task_id}"
         else:
@@ -335,7 +376,7 @@ class PluginRuntime:
     def bind_approval_session_key(self, session_key: str, episode_id: str) -> None:
         if session_key:
             with self._registry_lock:
-                self._approval_to_episode[session_key] = episode_id
+                self._remember_callback(self._approval_to_episode, session_key, episode_id)
 
     @contextmanager
     def episode_lock(self, episode_id: str) -> Iterator[None]:
@@ -345,13 +386,88 @@ class PluginRuntime:
             yield
 
     def query_for(self, episode_id: str) -> str:
-        return self._queries.get(episode_id, "")
+        with self._registry_lock:
+            query = self._queries.get(episode_id, "")
+            if query:
+                self._queries.move_to_end(episode_id)
+            return query
 
     def set_recent_tool_result(self, episode_id: str, result: str) -> None:
-        self._recent_tool_results[episode_id] = result[:2_000]
+        with self._registry_lock:
+            self._remember_episode_context(self._recent_tool_results, episode_id, result[:2_000])
 
     def recent_tool_result(self, episode_id: str) -> str:
-        return self._recent_tool_results.get(episode_id, "")
+        with self._registry_lock:
+            result = self._recent_tool_results.get(episode_id, "")
+            if result:
+                self._recent_tool_results.move_to_end(episode_id)
+            return result
+
+    def schedule_context_maintenance(self, episode_id: str, query: str) -> None:
+        """Run optional model-assisted promotion and audits off an async callback loop."""
+
+        with self._registry_lock:
+            self._maintenance_queue[episode_id] = query
+            self._maintenance_queue.move_to_end(episode_id)
+            while len(self._maintenance_queue) > self._DEFERRED_MAINTENANCE_LIMIT:
+                self._maintenance_queue.popitem(last=False)
+            if self._maintenance_active:
+                return
+            self._maintenance_active = True
+            self._maintenance_idle.clear()
+        try:
+            threading.Thread(
+                target=self._drain_context_maintenance,
+                name="belief-ledger-maintenance",
+                daemon=True,
+            ).start()
+        except RuntimeError:
+            with self._registry_lock:
+                self._maintenance_active = False
+                self._maintenance_idle.set()
+            raise
+
+    def wait_for_context_maintenance(self, timeout: float = 5.0) -> bool:
+        """Wait for deferred maintenance; useful to orderly lifecycle code and tests."""
+
+        return self._maintenance_idle.wait(timeout)
+
+    def _drain_context_maintenance(self) -> None:
+        while True:
+            with self._registry_lock:
+                if not self._maintenance_queue:
+                    self._maintenance_active = False
+                    self._maintenance_idle.set()
+                    return
+                episode_id, query = self._maintenance_queue.popitem(last=False)
+            try:
+                service = self.service_for_id(episode_id)
+                episode = service.store.get_episode(episode_id)
+                if episode is not None and episode.state == "active":
+                    service.run_deferred_context_maintenance(query)
+            except Exception:
+                logger.exception("belief-ledger deferred context maintenance failed")
+
+    def _remember_callback(self, cache: OrderedDict[str, str], key: str, episode_id: str) -> None:
+        cache[key] = episode_id
+        cache.move_to_end(key)
+        self._trim_callback_caches()
+
+    def _trim_callback_caches(self) -> None:
+        while len(self._turn_to_episode) > self._CALLBACK_CACHE_LIMIT:
+            self._turn_to_episode.popitem(last=False)
+        while len(self._approval_to_episode) > self._CALLBACK_CACHE_LIMIT:
+            self._approval_to_episode.popitem(last=False)
+        while len(self._begun_turns) > self._CALLBACK_CACHE_LIMIT:
+            self._begun_turns.popitem(last=False)
+
+    def _remember_episode_context(
+        self, cache: OrderedDict[str, str], episode_id: str, value: str
+    ) -> None:
+        cache[episode_id] = value
+        cache.move_to_end(episode_id)
+        while len(cache) > self._EPISODE_CONTEXT_CACHE_LIMIT:
+            cache.popitem(last=False)
 
     def mark_injection_failure(self, episode_id: str, reason: str) -> None:
         self._injection_failures.add(episode_id)
@@ -397,7 +513,9 @@ class PluginRuntime:
             self._injection_failures.discard(episode_id)
             self._episode_health_reasons.pop(episode_id, None)
             self._episode_locks.pop(episode_id, None)
-            self._begun_turns = {key for key in self._begun_turns if key[0] != episode_id}
+            self._begun_turns = OrderedDict(
+                (key, None) for key in self._begun_turns if key[0] != episode_id
+            )
             for turn_id, mapped in list(self._turn_to_episode.items()):
                 if mapped == episode_id:
                     self._turn_to_episode.pop(turn_id, None)
@@ -685,7 +803,12 @@ class EpisodeService:
             and prepared.payload
             and adapted.content_assertive
         ):
-            event_ids.extend(self._promote_evidence(evidence.id))
+            if self.runtime.in_running_event_loop():
+                self.runtime.schedule_context_maintenance(
+                    self.episode_id, self.runtime.query_for(self.episode_id)
+                )
+            else:
+                event_ids.extend(self._promote_evidence(evidence.id))
         self._after_new_beliefs()
         return tuple(event_ids)
 
@@ -735,10 +858,11 @@ class EpisodeService:
         if not items:
             return ()
         # Prefer evidence sharing lexical terms with the current request.
+        evidence_by_id = self.store.get_evidence_many(item["evidence_id"] for item in items)
         scored: list[tuple[int, str]] = []
         query_tokens = set(normalize_content(query).split())
         for item in items:
-            evidence = self.store.get_evidence(item["evidence_id"])
+            evidence = evidence_by_id.get(item["evidence_id"])
             score = (
                 len(query_tokens & set(normalize_content(evidence.payload or "").split()))
                 if evidence
@@ -747,18 +871,45 @@ class EpisodeService:
             scored.append((score, item["evidence_id"]))
         scored.sort(key=lambda item: (-item[0], item[1]))
         all_event_ids: list[str] = []
-        for _, evidence_id in scored[: int(self.config["ingestion"]["max_unpromoted_per_request"])]:
-            all_event_ids.extend(self._promote_evidence(evidence_id))
+        selected_ids = [
+            evidence_id
+            for _, evidence_id in scored[
+                : int(self.config["ingestion"]["max_unpromoted_per_request"])
+            ]
+        ]
+        source_by_id = self.store.get_sources(
+            str(evidence_by_id[evidence_id].metadata.get("content_source_id", ""))
+            for evidence_id in selected_ids
+            if evidence_id in evidence_by_id
+        )
+        for evidence_id in selected_ids:
+            evidence = evidence_by_id.get(evidence_id)
+            content_source = (
+                source_by_id.get(str(evidence.metadata.get("content_source_id", "")))
+                if evidence is not None
+                else None
+            )
+            all_event_ids.extend(
+                self._promote_evidence(
+                    evidence_id, evidence=evidence, content_source=content_source
+                )
+            )
         return tuple(all_event_ids)
 
-    def _promote_evidence(self, evidence_id: str) -> tuple[str, ...]:
+    def _promote_evidence(
+        self,
+        evidence_id: str,
+        *,
+        evidence: Evidence | None = None,
+        content_source: Source | None = None,
+    ) -> tuple[str, ...]:
         if not self.store.is_unpromoted(self.episode_id, evidence_id):
             return ()
-        evidence = self.store.get_evidence(evidence_id)
+        evidence = evidence or self.store.get_evidence(evidence_id)
         if evidence is None or not evidence.payload:
             return ()
         content_source_id = str(evidence.metadata.get("content_source_id", ""))
-        content_source = self.store.get_source(content_source_id)
+        content_source = content_source or self.store.get_source(content_source_id)
         if content_source is None:
             return ()
         if content_source.id == evidence.source_id:
@@ -901,9 +1052,10 @@ class EpisodeService:
             raise ValueError("warrant must be non-empty")
         if not premise_ids:
             raise ValueError("at least one premise is required")
+        premise_by_id = self.store.get_beliefs(premise_ids)
         premise_beliefs: list[Belief] = []
         for premise_id in premise_ids:
-            premise = self.store.get_belief(premise_id)
+            premise = premise_by_id.get(premise_id)
             if premise is None or premise.episode_id != self.episode_id:
                 raise ValueError(f"premise does not exist in episode: {premise_id}")
             if premise.status is not Status.IN:
@@ -1053,15 +1205,8 @@ class EpisodeService:
         if result not in {"confirmed", "disconfirmed", "inconclusive"}:
             raise ValueError("invalid verification result")
         with self.runtime.episode_lock(self.episode_id):
-            current = next(
-                (
-                    item
-                    for item in self.store.list_verification_tasks(self.episode_id)
-                    if item.id == task.id
-                ),
-                None,
-            )
-            if current is None or current.state != "open":
+            current = self.store.get_verification_task(task.id)
+            if current is None or current.episode_id != self.episode_id or current.state != "open":
                 return ()
             belief = self.store.get_belief(current.belief_id)
             if belief is None:
@@ -1121,12 +1266,17 @@ class EpisodeService:
             return self.complete_verification(
                 task, "disconfirmed", cause="derived belief has no justification"
             )
+        premise_by_id = self.store.get_beliefs(
+            premise_id
+            for justification in belief.justifications
+            for premise_id in justification.premises
+        )
         all_events: list[str] = []
         for justification in belief.justifications:
             statuses = {
                 premise_id: premise.status
                 for premise_id in justification.premises
-                if (premise := self.store.get_belief(premise_id)) is not None
+                if (premise := premise_by_id.get(premise_id)) is not None
             }
             missing = local_asiddha(justification, statuses)
             if missing:
@@ -1141,7 +1291,7 @@ class EpisodeService:
                     "premises": [
                         {
                             "id": premise_id,
-                            "content": (self.store.get_belief(premise_id) or belief).content,
+                            "content": (premise_by_id.get(premise_id) or belief).content,
                         }
                         for premise_id in justification.premises
                     ],
@@ -1247,6 +1397,16 @@ class EpisodeService:
                 notice.defeated_belief_id
                 for notice in self.store.list_retractions(self.episode_id, state="active")
             }
+            newly_defeated = [
+                belief_id
+                for belief_id, new_status in outcome.statuses.items()
+                if beliefs[belief_id].status is Status.IN and new_status is Status.OUT
+            ]
+            rendered_ids = self.store.rendered_belief_ids(self.episode_id, newly_defeated)
+            dependents: dict[str, set[str]] = defaultdict(set)
+            for justification in justifications:
+                for premise_id in justification.premises:
+                    dependents[premise_id].add(justification.belief_id)
             current_turn = self.episode.current_turn
             ttl = int(self.config["context"]["retraction_ttl_turns"])
             defeated_by_source: dict[str, int] = {}
@@ -1266,16 +1426,13 @@ class EpisodeService:
                 )
                 if old.status is Status.IN and new_status is Status.OUT:
                     defeated_by_source[old.source_id] = defeated_by_source.get(old.source_id, 0) + 1
-                    if (
-                        self.store.was_rendered(self.episode_id, belief_id)
-                        and belief_id not in active_notices
-                    ):
+                    if belief_id in rendered_ids and belief_id not in active_notices:
                         notice = RetractionNotice(
                             id=new_id("retraction"),
                             episode_id=self.episode_id,
                             defeated_belief_id=belief_id,
                             cause=cause,
-                            descendants=self.store.descendants(self.episode_id, belief_id),
+                            descendants=_descendant_ids(belief_id, dependents),
                             created_turn=current_turn,
                             ttl_turns=ttl,
                         )
@@ -1363,6 +1520,7 @@ class EpisodeService:
         request_id: str = "",
         pending_tool_intent: str = "",
         ascii_only: bool = False,
+        defer_component_work: bool = False,
     ) -> RenderedContext:
         effective_query = "\n".join(
             item
@@ -1373,8 +1531,11 @@ class EpisodeService:
             )
             if item
         )
-        self.promote_relevant(effective_query)
-        self._run_one_relevant_chain_audit(effective_query)
+        if defer_component_work:
+            self.runtime.schedule_context_maintenance(self.episode_id, effective_query)
+        else:
+            self.promote_relevant(effective_query)
+            self._run_one_relevant_chain_audit(effective_query)
         self.relabel()
         beliefs = self.store.list_beliefs(self.episode_id)
         sources = {source.id: source for source in self.store.list_sources(self.episode_id)}
@@ -1434,6 +1595,21 @@ class EpisodeService:
         )
         del event
         return rendered
+
+    def run_deferred_context_maintenance(self, query: str) -> None:
+        """Complete optional model-assisted work outside the host callback loop."""
+
+        # Do not retain the episode lock while an external model call is in
+        # flight: a foreground context render must remain able to take its
+        # short relabel transaction. Mutations below retain their own existing
+        # locks and append-time idempotency guards.
+        self._detect_deterministic_rebuts()
+        self.relabel()
+        if self._complete_passive_tasks():
+            self.relabel()
+        self.promote_relevant(query)
+        self._run_one_relevant_chain_audit(query)
+        self.relabel()
 
     def lint_and_enforce(self, response: str, **kwargs: Any) -> str | None:
         stakes = self.episode.default_stakes
@@ -1887,6 +2063,11 @@ class EpisodeService:
             for task in self.store.list_verification_tasks(self.episode_id, state=None)
             if task.belief_id == belief_id
         ]
+        premise_by_id = self.store.get_beliefs(
+            premise_id
+            for justification in belief.justifications
+            for premise_id in justification.premises
+        )
         return {
             "belief": to_primitive(belief),
             "source": to_primitive(source),
@@ -1900,7 +2081,7 @@ class EpisodeService:
                 justification.id
                 for justification in belief.justifications
                 if all(
-                    (premise := self.store.get_belief(premise_id)) is not None
+                    (premise := premise_by_id.get(premise_id)) is not None
                     and premise.status is Status.IN
                     for premise_id in justification.premises
                 )
@@ -1963,8 +2144,12 @@ class EpisodeService:
                 )
             ]
         normalized = normalize_content(candidate.content)
-        for existing in self.store.find_exact_beliefs(self.episode_id, normalized):
-            existing_source = self.store.get_source(existing.source_id)
+        existing_beliefs = self.store.find_exact_beliefs(self.episode_id, normalized)
+        existing_sources = self.store.get_sources(
+            existing.source_id for existing in existing_beliefs
+        )
+        for existing in existing_beliefs:
+            existing_source = existing_sources.get(existing.source_id)
             if existing_source and existing_source.root == source.root:
                 return [
                     EventDraft(
@@ -2204,11 +2389,12 @@ class EpisodeService:
         *,
         premise_ids: Sequence[str],
     ) -> list[EventDraft]:
+        premise_by_id = self.store.get_beliefs(premise_ids)
         valid_premises = tuple(
             premise_id
             for premise_id in dict.fromkeys(premise_ids)
             if premise_id
-            and (premise := self.store.get_belief(premise_id)) is not None
+            and (premise := premise_by_id.get(premise_id)) is not None
             and premise.status is Status.IN
         )
         verdict_id = new_id("verdict")
@@ -2275,24 +2461,35 @@ class EpisodeService:
         return drafts
 
     def _after_new_beliefs(self) -> None:
-        self._detect_deterministic_rebuts()
+        defer_component_work = self.runtime.in_running_event_loop()
+        self._detect_deterministic_rebuts(allow_semantic=not defer_component_work)
         self.relabel()
         if self._complete_passive_tasks():
             self.relabel()
+        if defer_component_work:
+            self.runtime.schedule_context_maintenance(
+                self.episode_id, self.runtime.query_for(self.episode_id)
+            )
 
     def _complete_passive_tasks(self) -> tuple[str, ...]:
         tasks = self.store.list_verification_tasks(self.episode_id, state="open")
         if not tasks:
             return ()
         beliefs = self.store.list_beliefs(self.episode_id)
+        belief_by_id = {belief.id: belief for belief in beliefs}
+        beliefs_by_normalized: dict[str, list[Belief]] = defaultdict(list)
+        for belief in beliefs:
+            beliefs_by_normalized[belief.normalized_content].append(belief)
         sources = {source.id: source for source in self.store.list_sources(self.episode_id)}
         event_ids: list[str] = []
         for task in tasks:
-            belief = self.store.get_belief(task.belief_id)
-            if belief is None:
+            task_belief = belief_by_id.get(task.belief_id)
+            if task_belief is None:
                 continue
             if task.method is VerificationMethod.CROSS_SOURCE:
-                count = self.scheduler.passive_cross_source_count(belief, beliefs, sources)
+                count = self.scheduler.passive_cross_source_count(
+                    task_belief, beliefs_by_normalized[task_belief.normalized_content], sources
+                )
                 if count >= task.k_required:
                     event_ids.extend(
                         self.complete_verification(
@@ -2304,8 +2501,8 @@ class EpisodeService:
             elif task.method is VerificationMethod.TOOL_RECHECK:
                 observed = [
                     candidate
-                    for candidate in beliefs
-                    if candidate.id != belief.id
+                    for candidate in beliefs_by_normalized[task_belief.normalized_content]
+                    if candidate.id != task_belief.id
                     and candidate.pramana is Pramana.PRATYAKSHA
                     and candidate.status is Status.IN
                     and candidate.normalized_content == belief.normalized_content
@@ -2323,10 +2520,12 @@ class EpisodeService:
     def _run_one_relevant_chain_audit(self, query: str) -> tuple[str, ...]:
         query_tokens = set(normalize_content(query).split())
         candidates: list[tuple[int, VerificationTask]] = []
-        for task in self.store.list_verification_tasks(self.episode_id, state="open"):
+        tasks = self.store.list_verification_tasks(self.episode_id, state="open")
+        belief_by_id = self.store.get_beliefs(task.belief_id for task in tasks)
+        for task in tasks:
             if task.method is not VerificationMethod.CHAIN_AUDIT:
                 continue
-            belief = self.store.get_belief(task.belief_id)
+            belief = belief_by_id.get(task.belief_id)
             if belief is None:
                 continue
             score = len(query_tokens & set(belief.normalized_content.split()))
@@ -2336,18 +2535,19 @@ class EpisodeService:
         candidates.sort(key=lambda item: (-item[0], item[1].id))
         return self.run_chain_audit(candidates[0][1])
 
-    def _detect_deterministic_rebuts(self) -> tuple[str, ...]:
+    def _detect_deterministic_rebuts(self, *, allow_semantic: bool = True) -> tuple[str, ...]:
         beliefs = self.store.list_beliefs(self.episode_id)
         defeats = self.store.list_defeats(self.episode_id)
         existing = {
             (edge.attacker, edge.target) for edge in defeats if edge.kind is DefeatKind.REBUT
         }
         token_index: dict[str, list[Belief]] = {}
+        tokens_by_belief = {belief.id: candidate_tokens(belief.content) for belief in beliefs}
         drafts: list[EventDraft] = []
         considered: set[tuple[str, str]] = set()
         semantic_candidate: tuple[Belief, Belief] | None = None
         for belief in sorted(beliefs, key=lambda item: item.id):
-            tokens = set(belief.normalized_content.split())
+            tokens = tokens_by_belief[belief.id]
             candidates: dict[str, Belief] = {}
             for token in tokens:
                 for candidate in token_index.get(token, ()):
@@ -2357,7 +2557,12 @@ class EpisodeService:
                 if pair in considered:
                     continue
                 considered.add(pair)
-                if not candidate_pair(belief, other):
+                if not candidate_pair(
+                    belief,
+                    other,
+                    left_tokens=tokens,
+                    right_tokens=tokens_by_belief[other.id],
+                ):
                     continue
                 decision = classify_deterministically(belief, other)
                 if (
@@ -2384,7 +2589,7 @@ class EpisodeService:
                     existing.add((attacker.id, target.id))
             for token in tokens:
                 token_index.setdefault(token, []).append(belief)
-        if semantic_candidate is not None:
+        if semantic_candidate is not None and allow_semantic:
             drafts.extend(self._semantic_contradiction_drafts(*semantic_candidate, existing))
         if not drafts:
             return ()

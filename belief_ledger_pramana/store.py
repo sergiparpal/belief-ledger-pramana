@@ -340,6 +340,23 @@ class LedgerStore:
             row = connection.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
         return _source_from_row(row) if row else None
 
+    def get_sources(self, source_ids: Iterable[str]) -> dict[str, Source]:
+        """Return sources by ID without opening one connection per source."""
+
+        ids = sorted({str(source_id) for source_id in source_ids if str(source_id)})
+        if not ids:
+            return {}
+        rows: list[sqlite3.Row] = []
+        with self.connect() as connection:
+            for chunk in _chunks(ids):
+                placeholders = ",".join("?" for _ in chunk)
+                rows.extend(
+                    connection.execute(
+                        f"SELECT * FROM sources WHERE id IN ({placeholders})", chunk
+                    ).fetchall()
+                )
+        return {source.id: source for source in (_source_from_row(row) for row in rows)}
+
     def find_source(self, episode_id: str, root: str, kind: SourceKind) -> Source | None:
         with self.connect() as connection:
             row = connection.execute(
@@ -360,12 +377,47 @@ class LedgerStore:
             row = connection.execute("SELECT * FROM evidence WHERE id=?", (evidence_id,)).fetchone()
         return _evidence_from_row(row) if row else None
 
+    def get_evidence_many(self, evidence_ids: Iterable[str]) -> dict[str, Evidence]:
+        """Return evidence by ID in bounded `IN` queries."""
+
+        ids = sorted({str(evidence_id) for evidence_id in evidence_ids if str(evidence_id)})
+        if not ids:
+            return {}
+        rows: list[sqlite3.Row] = []
+        with self.connect() as connection:
+            for chunk in _chunks(ids):
+                placeholders = ",".join("?" for _ in chunk)
+                rows.extend(
+                    connection.execute(
+                        f"SELECT * FROM evidence WHERE id IN ({placeholders})", chunk
+                    ).fetchall()
+                )
+        return {evidence.id: evidence for evidence in (_evidence_from_row(row) for row in rows)}
+
     def get_belief(self, belief_id: str) -> Belief | None:
         with self.connect() as connection:
             row = connection.execute("SELECT * FROM beliefs WHERE id=?", (belief_id,)).fetchone()
             if not row:
                 return None
             return _hydrate_beliefs(connection, [row])[0]
+
+    def get_beliefs(self, belief_ids: Iterable[str]) -> dict[str, Belief]:
+        """Return a hydrated belief map without N+1 primary-key lookups."""
+
+        ids = sorted({str(belief_id) for belief_id in belief_ids if str(belief_id)})
+        if not ids:
+            return {}
+        rows: list[sqlite3.Row] = []
+        with self.connect() as connection:
+            for chunk in _chunks(ids):
+                placeholders = ",".join("?" for _ in chunk)
+                rows.extend(
+                    connection.execute(
+                        f"SELECT * FROM beliefs WHERE id IN ({placeholders})", chunk
+                    ).fetchall()
+                )
+            beliefs = _hydrate_beliefs(connection, rows)
+        return {belief.id: belief for belief in beliefs}
 
     def list_beliefs(
         self,
@@ -407,7 +459,7 @@ class LedgerStore:
                 "SELECT id,belief_id,warrant,audit_json,alternatives_json FROM justifications WHERE episode_id=? ORDER BY id",
                 (episode_id,),
             ).fetchall()
-            return [_justification_from_row(connection, row) for row in rows]
+            return _hydrate_justifications(connection, rows)
 
     def list_supports(self, episode_id: str) -> list[IngestionSupport]:
         with self.connect() as connection:
@@ -456,6 +508,13 @@ class LedgerStore:
         with self.connect() as connection:
             rows = connection.execute(query, params).fetchall()
         return [_verification_from_row(row) for row in rows]
+
+    def get_verification_task(self, task_id: str) -> VerificationTask | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM verification_tasks WHERE id=?", (task_id,)
+            ).fetchone()
+        return _verification_from_row(row) if row else None
 
     def list_conflicts(self, episode_id: str, *, state: str | None = "open") -> list[Conflict]:
         query = "SELECT * FROM conflicts WHERE episode_id=?"
@@ -511,6 +570,24 @@ class LedgerStore:
                 (episode_id, belief_id),
             ).fetchone()
         return row is not None
+
+    def rendered_belief_ids(self, episode_id: str, belief_ids: Iterable[str]) -> set[str]:
+        """Return rendered IDs for a batch of transition candidates."""
+
+        ids = sorted({str(belief_id) for belief_id in belief_ids if str(belief_id)})
+        if not ids:
+            return set()
+        rendered: set[str] = set()
+        with self.connect() as connection:
+            for chunk in _chunks(ids):
+                placeholders = ",".join("?" for _ in chunk)
+                rows = connection.execute(
+                    "SELECT belief_id FROM rendered_beliefs "
+                    f"WHERE episode_id=? AND belief_id IN ({placeholders})",
+                    [episode_id, *chunk],
+                ).fetchall()
+                rendered.update(str(row[0]) for row in rows)
+        return rendered
 
     def list_unpromoted(self, episode_id: str, *, limit: int = 100) -> list[dict[str, str]]:
         with self.connect() as connection:
@@ -1040,6 +1117,32 @@ def _hydrate_beliefs(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]
             tuple(justifications_by_belief[str(row["id"])]),
         )
         for row in rows
+    ]
+
+
+def _hydrate_justifications(
+    connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]
+) -> list[Justification]:
+    """Hydrate premises for a justification collection in bounded batches."""
+
+    if not rows:
+        return []
+    justification_ids = [str(row["id"]) for row in rows]
+    premise_by_justification: dict[str, list[str]] = {
+        justification_id: [] for justification_id in justification_ids
+    }
+    for ids in _chunks(justification_ids):
+        placeholders = ",".join("?" for _ in ids)
+        for premise in connection.execute(
+            f"SELECT justification_id,premise_belief_id FROM justification_premises "
+            f"WHERE justification_id IN ({placeholders}) ORDER BY justification_id,ordinal",
+            ids,
+        ).fetchall():
+            premise_by_justification[str(premise["justification_id"])].append(
+                str(premise["premise_belief_id"])
+            )
+    return [
+        _justification_from_parts(row, premise_by_justification[str(row["id"])]) for row in rows
     ]
 
 

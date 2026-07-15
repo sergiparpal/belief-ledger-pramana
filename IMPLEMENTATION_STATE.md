@@ -70,3 +70,24 @@ without changing runtime behavior.
 
 Only Python 3.12 is installed locally. GitHub Actions must still execute the configured Python
 3.11 and 3.13 matrix after these changes are committed and pushed.
+
+## Performance remediation — 2026-07-15
+
+The performance audit findings were remediated without weakening event sourcing, retraction,
+priority, or output-enforcement semantics. SQLite durability remains WAL with `synchronous=FULL`.
+
+| Area | Applied change |
+|---|---|
+| N+1 projections | Added bounded batched source, evidence, belief, rendered-status, and verification-task reads; justification hydration now fetches all premises in batches. Runtime promotion, inference, auditing, verification, explanations, duplicate checks, and passive verification use those APIs. |
+| Query planning | Schema v4 adds indexes for the episode/status/observation, normalized-content, support, justification, reverse-premise, defeat, verification, conflict, retraction, and unpromoted-evidence access paths. Existing databases receive an online backup before migration. |
+| Relabel and selection hot paths | Reuses priority comparisons within each fixed-point execution, derives retraction descendants from the already loaded justification graph, memoizes contradiction tokens, and memoizes context-selection tokens and priority values. |
+| Async request-loop work | Model-assisted claim promotion, chain audits, and semantic contradiction review are deferred to a bounded daemon worker when a synchronous host callback is running on an asyncio loop. Deterministic relabeling and safety-critical output linting remain synchronous. |
+| Process memory | Callback routing, begun-turn markers, and ephemeral query/tool-result caches are bounded LRU collections; finalization still removes all state associated with a completed episode. |
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest -m "not live_llm" --cov ...` in short `C:\tmp` checkout | 0 | 163 tests collected; 90.9% line coverage. The short path avoids the source workspace's Windows `MAX_PATH` limit and the default temp directory's access restriction. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | 154 files formatted; no lint findings. |
+| `mypy belief_ledger_pramana` | 0 | No issues in 59 source files. |
+| `python -m build --outdir dist-performance` / `twine check ...` | 0 / 0 | Wheel and sdist built; metadata checks pass. |
+| `python scripts/inspect_artifacts.py <wheel> <sdist>` | 0 | Both distributions contain `0003_performance_indexes.sql`; no forbidden contents. |

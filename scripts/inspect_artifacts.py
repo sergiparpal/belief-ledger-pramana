@@ -41,6 +41,7 @@ def main() -> int:
             "belief_ledger_pramana/data/source-profiles.yaml",
             "belief_ledger_pramana/data/migrations/0001_initial.sql",
             "belief_ledger_pramana/data/migrations/0002_llm_reservations.sql",
+            "belief_ledger_pramana/data/migrations/0003_performance_indexes.sql",
         ]
         if kind == "wheel":
             required.extend((".dist-info/METADATA", ".dist-info/entry_points.txt"))

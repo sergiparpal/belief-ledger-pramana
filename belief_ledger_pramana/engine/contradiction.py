@@ -28,12 +28,22 @@ class ContradictionDecision:
     scope: ScopeReconciliation
 
 
-def candidate_pair(left: Belief, right: Belief) -> bool:
+def candidate_pair(
+    left: Belief,
+    right: Belief,
+    *,
+    left_tokens: set[str] | None = None,
+    right_tokens: set[str] | None = None,
+) -> bool:
     if left.id == right.id:
         return False
-    left_tokens = _content_tokens(left.content)
-    right_tokens = _content_tokens(right.content)
-    shared = left_tokens & right_tokens
+    resolved_left_tokens = (
+        left_tokens if left_tokens is not None else candidate_tokens(left.content)
+    )
+    resolved_right_tokens = (
+        right_tokens if right_tokens is not None else candidate_tokens(right.content)
+    )
+    shared = resolved_left_tokens & resolved_right_tokens
     return len(shared) >= 2 or (
         bool(shared)
         and (left.pramana.value == "anupalabdhi" or right.pramana.value == "anupalabdhi")
@@ -70,7 +80,7 @@ def classify_deterministically(left: Belief, right: Belief) -> ContradictionDeci
     return ContradictionDecision("uncertain", "deterministic rules are insufficient", scope)
 
 
-def _content_tokens(content: str) -> set[str]:
+def candidate_tokens(content: str) -> set[str]:
     stop = {"the", "a", "an", "is", "are", "not", "of", "to", "in", "and", "or"}
     return {
         token

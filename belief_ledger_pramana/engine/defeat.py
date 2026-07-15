@@ -71,6 +71,12 @@ def relabel(
     maximum = int(config.get("engine", {}).get("max_relabel_iterations", 256))
     conflict_pairs: set[tuple[str, str]] = set()
     causes: dict[str, str] = {}
+    rebut_comparisons: dict[str, Any] = {}
+    for edge in rebuts:
+        attacker = beliefs.get(edge.attacker)
+        target = beliefs.get(edge.target)
+        if attacker is not None and target is not None:
+            rebut_comparisons[edge.id] = compare_priority(attacker, target, sources, config)
 
     for iteration in range(1, maximum + 1):
         state_key = tuple(current[item].value for item in ordered_ids)
@@ -104,7 +110,9 @@ def relabel(
             target = beliefs.get(edge.target)
             if attacker is None or target is None:
                 continue
-            comparison = compare_priority(attacker, target, sources, config)
+            comparison = rebut_comparisons.get(edge.id)
+            if comparison is None:
+                continue
             if (
                 comparison.result == 0
                 and supported[attacker.id]
@@ -135,7 +143,9 @@ def relabel(
             )
             if pair in conflict_pairs:
                 continue
-            comparison = compare_priority(attacker, target, sources, config)
+            comparison = rebut_comparisons.get(edge.id)
+            if comparison is None:
+                continue
             if comparison.result > 0 and current[attacker.id] is Status.IN and supported[target.id]:
                 next_status[target.id] = Status.OUT
                 causes[target.id] = f"rebut:{attacker.id}:{comparison.decisive_field}"
@@ -150,7 +160,9 @@ def relabel(
 
         next_key = tuple(next_status[item].value for item in ordered_ids)
         if next_key == state_key:
-            active = _active_edges(defeat_list, beliefs, next_status, sources, config)
+            active = _active_edges(
+                defeat_list, beliefs, next_status, sources, config, rebut_comparisons
+            )
             return RelabelResult(
                 next_status, active, tuple(sorted(conflict_pairs)), causes, iteration, False
             )
@@ -160,7 +172,9 @@ def relabel(
                 if belief_id in next_status and supported.get(belief_id):
                     next_status[belief_id] = Status.PENDING
                     causes[belief_id] = "samsaya:defeat_cycle"
-            active = _active_edges(defeat_list, beliefs, next_status, sources, config)
+            active = _active_edges(
+                defeat_list, beliefs, next_status, sources, config, rebut_comparisons
+            )
             return RelabelResult(
                 next_status, active, tuple(sorted(conflict_pairs)), causes, iteration, True
             )
@@ -183,7 +197,7 @@ def relabel(
         if supported.get(belief_id):
             current[belief_id] = Status.PENDING
             causes[belief_id] = "samsaya:iteration_ceiling"
-    active = _active_edges(defeat_list, beliefs, current, sources, config)
+    active = _active_edges(defeat_list, beliefs, current, sources, config, rebut_comparisons)
     return RelabelResult(current, active, tuple(sorted(conflict_pairs)), causes, maximum, True)
 
 
@@ -273,6 +287,7 @@ def _active_edges(
     statuses: Mapping[str, Status],
     sources: Mapping[str, Source],
     config: dict[str, Any],
+    rebut_comparisons: Mapping[str, Any] | None = None,
 ) -> dict[str, bool]:
     active: dict[str, bool] = {}
     for edge in defeats:
@@ -281,11 +296,18 @@ def _active_edges(
             continue
         attacker = beliefs.get(edge.attacker)
         target = beliefs.get(edge.target)
+        if attacker is None or target is None:
+            active[edge.id] = False
+            continue
+        comparison = (
+            rebut_comparisons.get(edge.id)
+            if rebut_comparisons is not None
+            else compare_priority(attacker, target, sources, config)
+        )
         active[edge.id] = bool(
-            attacker
-            and target
-            and statuses.get(edge.attacker) is Status.IN
-            and compare_priority(attacker, target, sources, config).result > 0
+            statuses.get(edge.attacker) is Status.IN
+            and comparison is not None
+            and comparison.result > 0
         )
     return active
 
