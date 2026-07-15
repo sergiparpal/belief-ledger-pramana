@@ -4,189 +4,291 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from typing import Any
 
 from .events import canonical_json, content_hash
 from .models import Event
 
+ProjectionHandler = Callable[[sqlite3.Connection, Event], None]
+
 
 def apply_event(connection: sqlite3.Connection, event: Event) -> None:
     """Apply one event to projections. The caller owns the transaction."""
 
-    payload = event.payload
-    record = payload.get("record")
-    kind = event.kind
+    handler = _EVENT_HANDLERS.get(event.kind)
+    if handler is not None:
+        handler(connection, event)
+    _advance_event_head(connection, event)
 
-    if kind == "EPISODE_CREATED":
-        _episode_created(connection, _record(record))
-    elif kind == "EPISODE_TURN_STARTED":
-        connection.execute(
-            "UPDATE episodes SET current_turn=?, updated_at=? WHERE id=?",
-            (int(payload["current_turn"]), str(payload["updated_at"]), event.episode_id),
-        )
-    elif kind == "EPISODE_STAKES_CHANGED":
-        connection.execute(
-            "UPDATE episodes SET default_stakes=?,updated_at=? WHERE id=?",
-            (str(payload["to"]), event.timestamp.isoformat(), event.episode_id),
-        )
-    elif kind in {"EPISODE_FINALIZED", "EPISODE_RESET"}:
-        connection.execute(
-            "UPDATE episodes SET state=?, updated_at=?, episode_key=COALESCE(?,episode_key) WHERE id=?",
-            (
-                str(payload.get("state", "finalized")),
-                str(payload["updated_at"]),
-                str(payload["episode_key"]) if payload.get("episode_key") else None,
-                event.episode_id,
-            ),
-        )
-    elif kind == "SOURCE_REGISTERED":
-        _source_registered(connection, _record(record))
-    elif kind == "SOURCE_STATS_UPDATED":
-        connection.execute(
-            "UPDATE sources SET stats_json=?, competence_json=? WHERE id=?",
-            (
-                canonical_json(payload["stats"]),
-                canonical_json(payload["competence"]),
-                event.aggregate_id,
-            ),
-        )
-    elif kind == "SOURCE_STATS_DELTA":
-        row = connection.execute(
-            "SELECT stats_json FROM sources WHERE id=?", (event.aggregate_id,)
-        ).fetchone()
-        if row is not None:
-            existing = json.loads(str(row["stats_json"]))
-            delta = payload.get("delta", {})
-            updated = {
-                key: max(0, int(existing.get(key, 0)) + int(delta.get(key, 0)))
-                for key in ("confirmed", "defeated", "samples")
-            }
-            connection.execute(
-                "UPDATE sources SET stats_json=? WHERE id=?",
-                (canonical_json(updated), event.aggregate_id),
-            )
-    elif kind == "EVIDENCE_INGESTED":
-        _evidence_ingested(connection, _record(record))
-    elif kind == "BELIEF_ADMITTED":
-        _belief_admitted(connection, _record(record))
-    elif kind == "INGESTION_SUPPORT_ADDED":
-        _support_added(connection, _record(record))
-    elif kind == "INGESTION_SUPPORT_ACTIVITY_CHANGED":
-        connection.execute(
-            "UPDATE ingestion_supports SET active=? WHERE id=?",
-            (int(bool(payload["active"])), event.aggregate_id),
-        )
-    elif kind == "JUSTIFICATION_ADDED":
-        _justification_added(connection, event.episode_id, _record(record))
-    elif kind == "JUSTIFICATION_AUDITED":
-        connection.execute(
-            "UPDATE justifications SET audit_json=? WHERE id=?",
-            (canonical_json(payload["audit"]), event.aggregate_id),
-        )
-    elif kind == "DEFEAT_ADDED":
-        _defeat_added(connection, _record(record))
-    elif kind == "DEFEAT_ACTIVITY_CHANGED":
-        connection.execute(
-            "UPDATE defeats SET active=? WHERE id=?",
-            (int(bool(payload["active"])), event.aggregate_id),
-        )
-    elif kind == "BELIEF_STATUS_CHANGED":
-        _belief_status_changed(connection, event.aggregate_id, str(payload["to"]))
-    elif kind == "BELIEF_ADMISSION_CHANGED":
-        connection.execute(
-            "UPDATE beliefs SET admission_status=? WHERE id=?",
-            (str(payload["to"]), event.aggregate_id),
-        )
-    elif kind == "BELIEF_CORROBORATION_CHANGED":
-        connection.execute(
-            "UPDATE beliefs SET corroboration=? WHERE id=?",
-            (int(payload["to"]), event.aggregate_id),
-        )
-    elif kind == "VERIFICATION_TASK_CREATED":
-        _verification_created(connection, _record(record))
-    elif kind == "VERIFICATION_TASK_COMPLETED":
-        connection.execute(
-            "UPDATE verification_tasks SET result=?, state=? WHERE id=?",
-            (payload.get("result"), str(payload.get("state", "completed")), event.aggregate_id),
-        )
-    elif kind == "CONFLICT_OPENED":
-        _conflict_opened(connection, _record(record))
-    elif kind == "CONFLICT_RESOLVED":
-        connection.execute(
-            "UPDATE conflicts SET state='resolved' WHERE id=?",
-            (event.aggregate_id,),
-        )
-    elif kind == "RETRACTION_CREATED":
-        _retraction_created(connection, _record(record))
-    elif kind in {"RETRACTION_ACKNOWLEDGED", "RETRACTION_EXPIRED"}:
-        state = "acknowledged" if kind.endswith("ACKNOWLEDGED") else "expired"
-        connection.execute(
-            "UPDATE retraction_notices SET state=? WHERE id=?", (state, event.aggregate_id)
-        )
-    elif kind == "CONTEXT_COMPILED":
-        _context_compiled(connection, event)
-    elif kind == "COMPONENT_VERDICT_RECORDED":
-        _component_verdict(connection, _record(record))
-    elif kind == "LLM_USAGE_RECORDED":
-        _llm_usage(connection, _record(record))
-    elif kind == "UNPROMOTED_EVIDENCE_ADDED":
-        connection.execute(
-            "INSERT OR REPLACE INTO unpromoted_evidence(episode_id,evidence_id,source_profile,state,reason) VALUES (?,?,?,?,?)",
-            (
-                event.episode_id,
-                str(payload["evidence_id"]),
-                str(payload["source_profile"]),
-                "open",
-                str(payload.get("reason", "lazy_extraction")),
-            ),
-        )
-    elif kind in {"UNPROMOTED_EVIDENCE_RESOLVED", "UNPROMOTED_EVIDENCE_FAILED"}:
-        state = "resolved" if kind.endswith("RESOLVED") else "failed"
-        connection.execute(
-            "UPDATE unpromoted_evidence SET state=?, reason=? WHERE episode_id=? AND evidence_id=?",
-            (state, str(payload.get("reason", "")), event.episode_id, str(payload["evidence_id"])),
-        )
-    elif kind == "LINT_RECORDED":
-        connection.execute(
-            "INSERT INTO lint_reports(event_id,episode_id,response_hash,passed,report_json) VALUES (?,?,?,?,?)",
-            (
-                event.id,
-                event.episode_id,
-                str(payload["response_hash"]),
-                int(bool(payload["passed"])),
-                canonical_json(payload["report"]),
-            ),
-        )
-    elif kind == "GATE_DECIDED":
-        connection.execute(
-            "INSERT INTO gate_decisions(event_id,episode_id,tool_name,args_hash,outcome,reason_code,detail_json) VALUES (?,?,?,?,?,?,?)",
-            (
-                event.id,
-                event.episode_id,
-                str(payload["tool_name"]),
-                str(payload["args_hash"]),
-                str(payload["outcome"]),
-                str(payload["reason_code"]),
-                canonical_json(payload.get("detail", {})),
-            ),
-        )
-    elif kind == "ASSISTANT_RESPONSE_RECORDED":
-        connection.execute(
-            "INSERT INTO assistant_responses(event_id,episode_id,turn_id,content_hash,content) VALUES (?,?,?,?,?)",
-            (
-                event.id,
-                event.episode_id,
-                str(payload.get("turn_id", "")),
-                str(payload["content_hash"]),
-                str(payload["content"]),
-            ),
-        )
 
+def _advance_event_head(connection: sqlite3.Connection, event: Event) -> None:
     connection.execute(
         "INSERT INTO event_heads(episode_id,seq,event_hash) VALUES (?,?,?) "
         "ON CONFLICT(episode_id) DO UPDATE SET seq=excluded.seq,event_hash=excluded.event_hash",
         (event.episode_id, event.seq, event.event_hash),
     )
+
+
+def _apply_episode_created(connection: sqlite3.Connection, event: Event) -> None:
+    _episode_created(connection, _record(event.payload.get("record")))
+
+
+def _apply_episode_turn_started(connection: sqlite3.Connection, event: Event) -> None:
+    connection.execute(
+        "UPDATE episodes SET current_turn=?, updated_at=? WHERE id=?",
+        (int(event.payload["current_turn"]), str(event.payload["updated_at"]), event.episode_id),
+    )
+
+
+def _apply_episode_stakes_changed(connection: sqlite3.Connection, event: Event) -> None:
+    connection.execute(
+        "UPDATE episodes SET default_stakes=?,updated_at=? WHERE id=?",
+        (str(event.payload["to"]), event.timestamp.isoformat(), event.episode_id),
+    )
+
+
+def _apply_episode_state_changed(connection: sqlite3.Connection, event: Event) -> None:
+    payload = event.payload
+    connection.execute(
+        "UPDATE episodes SET state=?, updated_at=?, episode_key=COALESCE(?,episode_key) WHERE id=?",
+        (
+            str(payload.get("state", "finalized")),
+            str(payload["updated_at"]),
+            str(payload["episode_key"]) if payload.get("episode_key") else None,
+            event.episode_id,
+        ),
+    )
+
+
+def _apply_source_registered(connection: sqlite3.Connection, event: Event) -> None:
+    _source_registered(connection, _record(event.payload.get("record")))
+
+
+def _apply_source_stats_updated(connection: sqlite3.Connection, event: Event) -> None:
+    payload = event.payload
+    connection.execute(
+        "UPDATE sources SET stats_json=?, competence_json=? WHERE id=?",
+        (canonical_json(payload["stats"]), canonical_json(payload["competence"]), event.aggregate_id),
+    )
+
+
+def _apply_source_stats_delta(connection: sqlite3.Connection, event: Event) -> None:
+    row = connection.execute("SELECT stats_json FROM sources WHERE id=?", (event.aggregate_id,)).fetchone()
+    if row is None:
+        return
+    existing = json.loads(str(row["stats_json"]))
+    delta = event.payload.get("delta", {})
+    updated = {
+        key: max(0, int(existing.get(key, 0)) + int(delta.get(key, 0)))
+        for key in ("confirmed", "defeated", "samples")
+    }
+    connection.execute(
+        "UPDATE sources SET stats_json=? WHERE id=?", (canonical_json(updated), event.aggregate_id)
+    )
+
+
+def _apply_evidence_ingested(connection: sqlite3.Connection, event: Event) -> None:
+    _evidence_ingested(connection, _record(event.payload.get("record")))
+
+
+def _apply_belief_admitted(connection: sqlite3.Connection, event: Event) -> None:
+    _belief_admitted(connection, _record(event.payload.get("record")))
+
+
+def _apply_support_added(connection: sqlite3.Connection, event: Event) -> None:
+    _support_added(connection, _record(event.payload.get("record")))
+
+
+def _apply_support_activity_changed(connection: sqlite3.Connection, event: Event) -> None:
+    connection.execute(
+        "UPDATE ingestion_supports SET active=? WHERE id=?",
+        (int(bool(event.payload["active"])), event.aggregate_id),
+    )
+
+
+def _apply_justification_added(connection: sqlite3.Connection, event: Event) -> None:
+    _justification_added(connection, event.episode_id, _record(event.payload.get("record")))
+
+
+def _apply_justification_audited(connection: sqlite3.Connection, event: Event) -> None:
+    connection.execute(
+        "UPDATE justifications SET audit_json=? WHERE id=?",
+        (canonical_json(event.payload["audit"]), event.aggregate_id),
+    )
+
+
+def _apply_defeat_added(connection: sqlite3.Connection, event: Event) -> None:
+    _defeat_added(connection, _record(event.payload.get("record")))
+
+
+def _apply_defeat_activity_changed(connection: sqlite3.Connection, event: Event) -> None:
+    connection.execute(
+        "UPDATE defeats SET active=? WHERE id=?",
+        (int(bool(event.payload["active"])), event.aggregate_id),
+    )
+
+
+def _apply_belief_status_changed(connection: sqlite3.Connection, event: Event) -> None:
+    _belief_status_changed(connection, event.aggregate_id, str(event.payload["to"]))
+
+
+def _apply_belief_admission_changed(connection: sqlite3.Connection, event: Event) -> None:
+    connection.execute(
+        "UPDATE beliefs SET admission_status=? WHERE id=?", (str(event.payload["to"]), event.aggregate_id)
+    )
+
+
+def _apply_belief_corroboration_changed(connection: sqlite3.Connection, event: Event) -> None:
+    connection.execute(
+        "UPDATE beliefs SET corroboration=? WHERE id=?", (int(event.payload["to"]), event.aggregate_id)
+    )
+
+
+def _apply_verification_created(connection: sqlite3.Connection, event: Event) -> None:
+    _verification_created(connection, _record(event.payload.get("record")))
+
+
+def _apply_verification_completed(connection: sqlite3.Connection, event: Event) -> None:
+    connection.execute(
+        "UPDATE verification_tasks SET result=?, state=? WHERE id=?",
+        (event.payload.get("result"), str(event.payload.get("state", "completed")), event.aggregate_id),
+    )
+
+
+def _apply_conflict_opened(connection: sqlite3.Connection, event: Event) -> None:
+    _conflict_opened(connection, _record(event.payload.get("record")))
+
+
+def _apply_conflict_resolved(connection: sqlite3.Connection, event: Event) -> None:
+    connection.execute("UPDATE conflicts SET state='resolved' WHERE id=?", (event.aggregate_id,))
+
+
+def _apply_retraction_created(connection: sqlite3.Connection, event: Event) -> None:
+    _retraction_created(connection, _record(event.payload.get("record")))
+
+
+def _apply_retraction_state_changed(connection: sqlite3.Connection, event: Event) -> None:
+    state = "acknowledged" if event.kind.endswith("ACKNOWLEDGED") else "expired"
+    connection.execute("UPDATE retraction_notices SET state=? WHERE id=?", (state, event.aggregate_id))
+
+
+def _apply_context_compiled(connection: sqlite3.Connection, event: Event) -> None:
+    _context_compiled(connection, event)
+
+
+def _apply_component_verdict_recorded(connection: sqlite3.Connection, event: Event) -> None:
+    _component_verdict(connection, _record(event.payload.get("record")))
+
+
+def _apply_llm_usage_recorded(connection: sqlite3.Connection, event: Event) -> None:
+    _llm_usage(connection, _record(event.payload.get("record")))
+
+
+def _apply_unpromoted_evidence_added(connection: sqlite3.Connection, event: Event) -> None:
+    payload = event.payload
+    connection.execute(
+        "INSERT OR REPLACE INTO unpromoted_evidence(episode_id,evidence_id,source_profile,state,reason) VALUES (?,?,?,?,?)",
+        (
+            event.episode_id,
+            str(payload["evidence_id"]),
+            str(payload["source_profile"]),
+            "open",
+            str(payload.get("reason", "lazy_extraction")),
+        ),
+    )
+
+
+def _apply_unpromoted_evidence_finished(connection: sqlite3.Connection, event: Event) -> None:
+    payload = event.payload
+    state = "resolved" if event.kind.endswith("RESOLVED") else "failed"
+    connection.execute(
+        "UPDATE unpromoted_evidence SET state=?, reason=? WHERE episode_id=? AND evidence_id=?",
+        (state, str(payload.get("reason", "")), event.episode_id, str(payload["evidence_id"])),
+    )
+
+
+def _apply_lint_recorded(connection: sqlite3.Connection, event: Event) -> None:
+    payload = event.payload
+    connection.execute(
+        "INSERT INTO lint_reports(event_id,episode_id,response_hash,passed,report_json) VALUES (?,?,?,?,?)",
+        (
+            event.id,
+            event.episode_id,
+            str(payload["response_hash"]),
+            int(bool(payload["passed"])),
+            canonical_json(payload["report"]),
+        ),
+    )
+
+
+def _apply_gate_decided(connection: sqlite3.Connection, event: Event) -> None:
+    payload = event.payload
+    connection.execute(
+        "INSERT INTO gate_decisions(event_id,episode_id,tool_name,args_hash,outcome,reason_code,detail_json) VALUES (?,?,?,?,?,?,?)",
+        (
+            event.id,
+            event.episode_id,
+            str(payload["tool_name"]),
+            str(payload["args_hash"]),
+            str(payload["outcome"]),
+            str(payload["reason_code"]),
+            canonical_json(payload.get("detail", {})),
+        ),
+    )
+
+
+def _apply_assistant_response_recorded(connection: sqlite3.Connection, event: Event) -> None:
+    payload = event.payload
+    connection.execute(
+        "INSERT INTO assistant_responses(event_id,episode_id,turn_id,content_hash,content) VALUES (?,?,?,?,?)",
+        (
+            event.id,
+            event.episode_id,
+            str(payload.get("turn_id", "")),
+            str(payload["content_hash"]),
+            str(payload["content"]),
+        ),
+    )
+
+
+_EVENT_HANDLERS: dict[str, ProjectionHandler] = {
+    "EPISODE_CREATED": _apply_episode_created,
+    "EPISODE_TURN_STARTED": _apply_episode_turn_started,
+    "EPISODE_STAKES_CHANGED": _apply_episode_stakes_changed,
+    "EPISODE_FINALIZED": _apply_episode_state_changed,
+    "EPISODE_RESET": _apply_episode_state_changed,
+    "SOURCE_REGISTERED": _apply_source_registered,
+    "SOURCE_STATS_UPDATED": _apply_source_stats_updated,
+    "SOURCE_STATS_DELTA": _apply_source_stats_delta,
+    "EVIDENCE_INGESTED": _apply_evidence_ingested,
+    "BELIEF_ADMITTED": _apply_belief_admitted,
+    "INGESTION_SUPPORT_ADDED": _apply_support_added,
+    "INGESTION_SUPPORT_ACTIVITY_CHANGED": _apply_support_activity_changed,
+    "JUSTIFICATION_ADDED": _apply_justification_added,
+    "JUSTIFICATION_AUDITED": _apply_justification_audited,
+    "DEFEAT_ADDED": _apply_defeat_added,
+    "DEFEAT_ACTIVITY_CHANGED": _apply_defeat_activity_changed,
+    "BELIEF_STATUS_CHANGED": _apply_belief_status_changed,
+    "BELIEF_ADMISSION_CHANGED": _apply_belief_admission_changed,
+    "BELIEF_CORROBORATION_CHANGED": _apply_belief_corroboration_changed,
+    "VERIFICATION_TASK_CREATED": _apply_verification_created,
+    "VERIFICATION_TASK_COMPLETED": _apply_verification_completed,
+    "CONFLICT_OPENED": _apply_conflict_opened,
+    "CONFLICT_RESOLVED": _apply_conflict_resolved,
+    "RETRACTION_CREATED": _apply_retraction_created,
+    "RETRACTION_ACKNOWLEDGED": _apply_retraction_state_changed,
+    "RETRACTION_EXPIRED": _apply_retraction_state_changed,
+    "CONTEXT_COMPILED": _apply_context_compiled,
+    "COMPONENT_VERDICT_RECORDED": _apply_component_verdict_recorded,
+    "LLM_USAGE_RECORDED": _apply_llm_usage_recorded,
+    "UNPROMOTED_EVIDENCE_ADDED": _apply_unpromoted_evidence_added,
+    "UNPROMOTED_EVIDENCE_RESOLVED": _apply_unpromoted_evidence_finished,
+    "UNPROMOTED_EVIDENCE_FAILED": _apply_unpromoted_evidence_finished,
+    "LINT_RECORDED": _apply_lint_recorded,
+    "GATE_DECIDED": _apply_gate_decided,
+    "ASSISTANT_RESPONSE_RECORDED": _apply_assistant_response_recorded,
+}
 
 
 def _episode_created(connection: sqlite3.Connection, record: dict[str, Any]) -> None:

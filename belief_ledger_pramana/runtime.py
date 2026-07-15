@@ -13,12 +13,13 @@ import threading
 from collections import OrderedDict, defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import yaml
 
+from .admission import BeliefAdmissionService
 from .compatibility import CompatibilityReport, inspect_host
 from .config import (
     ConfigError,
@@ -35,18 +36,19 @@ from .context.inject import HermesRequestInjector
 from .context.render import RenderedContext, render_context
 from .context.select import select_beliefs
 from .engine.contradiction import candidate_pair, candidate_tokens, classify_deterministically
+from .engine.defeat import RelabelResult
 from .engine.defeat import relabel as engine_relabel
 from .engine.graph import cycle_path
 from .engine.priority import priority_trace
 from .engine.qualifiers import canonicalize_qualifiers
-from .engine.trust import TrustDecision, determine_admission
+from .engine.trust import TrustDecision
 from .engine.validity import normalize_content, validate_belief
 from .events import canonical_json, content_hash, to_primitive, utc_now
 from .gate.classify import ActionPolicyRegistry
 from .gate.decision import ActionGate
 from .ids import new_id
 from .ingestion.absence import assess_negative_search
-from .ingestion.adapters import SourceDescriptor, ToolAdapterRegistry
+from .ingestion.adapters import AdaptedToolResult, SourceDescriptor, ToolAdapterRegistry
 from .ingestion.claims import (
     ClaimCandidate,
     candidate_from_structured,
@@ -54,7 +56,12 @@ from .ingestion.claims import (
     validate_candidate,
 )
 from .ingestion.provenance import fingerprint
-from .ingestion.tool import prepare_evidence, redact_secrets, redacted_content_hash
+from .ingestion.tool import (
+    PreparedEvidence,
+    prepare_evidence,
+    redact_secrets,
+    redacted_content_hash,
+)
 from .ingestion.user import is_about_user_self, user_source
 from .lint.enforce import enforce_report, linter_failure_response
 from .lint.report import lint_response
@@ -85,7 +92,6 @@ from .models import (
     EvidenceRef,
     GateDecision,
     Health,
-    IngestionSupport,
     Integrity,
     Justification,
     LintClaim,
@@ -123,12 +129,29 @@ def _descendant_ids(root_id: str, dependents: Mapping[str, set[str]]) -> tuple[s
     return tuple(sorted(descendants))
 
 
+def _ordered_belief_pair(left_id: str, right_id: str) -> tuple[str, str]:
+    """Return a stable key for a symmetric belief conflict."""
+
+    return (left_id, right_id) if left_id <= right_id else (right_id, left_id)
+
+
 class RuntimeUnavailable(RuntimeError):
     pass
 
 
 class EpisodeResolutionError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class ToolEvidence:
+    """The normalized, privacy-preserving result of one tool invocation."""
+
+    adapted: AdaptedToolResult
+    wrapper_source: Source
+    content_source: Source | None
+    prepared: PreparedEvidence
+    evidence: Evidence
 
 
 class PluginRuntime:
@@ -560,6 +583,7 @@ class EpisodeService:
             self.config,
             ActionPolicyRegistry(_action_policy_data(self.config)),
         )
+        self.admission = BeliefAdmissionService(self.config)
         self.llm = HostLlmClient(lambda: runtime.ctx.llm, store, self.config)
 
     @property
@@ -646,12 +670,69 @@ class EpisodeService:
         result: str,
         **kwargs: Any,
     ) -> tuple[str, ...]:
+        tool_evidence = self._prepare_tool_evidence(tool_name, args, result, kwargs)
+        drafts = self._tool_wrapper_drafts(tool_name, args, result, tool_evidence)
+        if tool_evidence.prepared.redacted:
+            drafts.append(
+                EventDraft(
+                    "EVIDENCE_REDACTED",
+                    "evidence",
+                    tool_evidence.evidence.id,
+                    {"reason": "secret-like material removed before persistence"},
+                )
+            )
+        if (
+            tool_evidence.content_source
+            and tool_evidence.prepared.payload
+            and tool_evidence.adapted.content_assertive
+        ):
+            drafts.append(
+                EventDraft(
+                    "UNPROMOTED_EVIDENCE_ADDED",
+                    "evidence",
+                    tool_evidence.evidence.id,
+                    {
+                        "evidence_id": tool_evidence.evidence.id,
+                        "source_profile": tool_evidence.adapted.adapter,
+                        "reason": "lazy content extraction",
+                    },
+                )
+            )
+        idempotency_key = "tool:" + content_hash(
+            canonical_json(
+                [
+                    self.episode_id,
+                    _clean(kwargs.get("tool_call_id")),
+                    "transform_tool_result",
+                    tool_evidence.prepared.full_hash,
+                ]
+            )
+        )
+        events = self.store.append_events(
+            self.episode_id,
+            drafts,
+            correlation=_correlation(kwargs),
+            idempotency_key=idempotency_key,
+        )
+        self.runtime.set_recent_tool_result(self.episode_id, result)
+        event_ids = [event.id for event in events]
+        self._promote_tool_evidence_when_ready(tool_evidence, event_ids)
+        self._after_new_beliefs()
+        return tuple(event_ids)
+
+    def _prepare_tool_evidence(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        result: str,
+        callback: Mapping[str, Any],
+    ) -> ToolEvidence:
         adapted = self.runtime.adapters.adapt(
             tool_name,
             args,
             result,
-            status=_clean(kwargs.get("status")),
-            tool_call_id=_clean(kwargs.get("tool_call_id")),
+            status=_clean(callback.get("status")),
+            tool_call_id=_clean(callback.get("tool_call_id")),
         )
         wrapper_source = self.ensure_source(adapted.wrapper_source)
         content_source = (
@@ -669,9 +750,9 @@ class EpisodeService:
         metadata = {
             **adapted.metadata,
             "args_hash": _args_hash(args, redact=bool(storage["redact_secrets"])),
-            "duration_ms": int(kwargs.get("duration_ms") or 0),
-            "status": _clean(kwargs.get("status")),
-            "error_type": _clean(kwargs.get("error_type")),
+            "duration_ms": int(callback.get("duration_ms") or 0),
+            "status": _clean(callback.get("status")),
+            "error_type": _clean(callback.get("error_type")),
             "excerpt_start": prepared.excerpt_start,
             "excerpt_end": prepared.excerpt_end,
             "observed_chars": prepared.observed_chars,
@@ -689,6 +770,21 @@ class EpisodeService:
             observed_at=utc_now(),
             redacted=prepared.redacted,
         )
+        return ToolEvidence(adapted, wrapper_source, content_source, prepared, evidence)
+
+    def _tool_wrapper_drafts(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        result: str,
+        tool_evidence: ToolEvidence,
+    ) -> list[EventDraft]:
+        adapted = tool_evidence.adapted
+        evidence = tool_evidence.evidence
+        prepared = tool_evidence.prepared
+        wrapper_source = tool_evidence.wrapper_source
+        storage = self.config["storage"]
+        wrapper_id = str(evidence.metadata["wrapper_belief_id"])
         initial = Belief(
             id=wrapper_id,
             episode_id=self.episode_id,
@@ -696,7 +792,7 @@ class EpisodeService:
             normalized_content=normalize_content(adapted.wrapper_content),
             pramana=Pramana.PRATYAKSHA,
             source_id=wrapper_source.id,
-            evidence=(EvidenceRef(evidence_id),),
+            evidence=(EvidenceRef(evidence.id),),
             justifications=(),
             qualifiers={"scope": "hermes tool execution"},
             perishability=Perishability.LIVE,
@@ -713,40 +809,36 @@ class EpisodeService:
                 "tool_reported_success": adapted.successful,
             },
         )
-        trust = determine_admission(
-            initial,
-            wrapper_source,
-            self.config,
-            episode_stakes=self.episode.default_stakes,
-        )
-        wrapper = replace(initial, status=trust.status, admission_status=trust.status)
+        wrapper = initial
         validity = validate_belief(
             wrapper,
-            evidence_payloads={evidence_id: prepared.payload},
+            evidence_payloads={evidence.id: prepared.payload},
             evidence_mode=str(storage["evidence_mode"]),
             max_words=int(self.config["ingestion"]["max_atomic_claim_words"]),
             max_chars=int(self.config["ingestion"]["max_atomic_claim_chars"]),
         )
+        status_override: Status | None = None
         if not validity.valid:
             # A wrapper about observing a failed/unparsed result remains valid as
             # direct evidence only when the measured-only boundary holds. Parser
             # failure itself is what was observed.
             non_parser_reasons = [reason for reason in validity.reasons if "parsed" not in reason]
             if non_parser_reasons:
-                wrapper = replace(wrapper, status=Status.OUT, admission_status=Status.OUT)
-        support = IngestionSupport(
-            id=new_id("support"),
-            episode_id=self.episode_id,
-            belief_id=wrapper.id,
-            evidence_id=evidence.id,
-            validity={**wrapper.validity, "checks": validity.checks},
+                status_override = Status.OUT
+        admission = self.admission.admit(
+            wrapper,
+            wrapper_source,
+            episode_stakes=self.episode.default_stakes,
+            support_evidence_id=evidence.id,
+            support_validity={**wrapper.validity, "checks": validity.checks},
+            status_override=status_override,
         )
+        wrapper = admission.belief
         drafts: list[EventDraft] = [
             _record_draft("EVIDENCE_INGESTED", "evidence", evidence.id, evidence),
-            _record_draft("BELIEF_ADMITTED", "belief", wrapper.id, wrapper),
-            _record_draft("INGESTION_SUPPORT_ADDED", "ingestion_support", support.id, support),
+            *admission.drafts,
         ]
-        drafts.extend(self._verification_drafts(wrapper, trust))
+        drafts.extend(self._verification_drafts(wrapper, admission.trust))
         drafts.extend(
             self._absence_drafts(
                 tool_name=tool_name,
@@ -757,60 +849,25 @@ class EpisodeService:
                 search_succeeded=adapted.successful,
             )
         )
-        if prepared.redacted:
-            drafts.append(
-                EventDraft(
-                    "EVIDENCE_REDACTED",
-                    "evidence",
-                    evidence.id,
-                    {"reason": "secret-like material removed before persistence"},
-                )
-            )
-        if content_source and prepared.payload and adapted.content_assertive:
-            drafts.append(
-                EventDraft(
-                    "UNPROMOTED_EVIDENCE_ADDED",
-                    "evidence",
-                    evidence.id,
-                    {
-                        "evidence_id": evidence.id,
-                        "source_profile": adapted.adapter,
-                        "reason": "lazy content extraction",
-                    },
-                )
-            )
-        idempotency_key = "tool:" + content_hash(
-            canonical_json(
-                [
-                    self.episode_id,
-                    _clean(kwargs.get("tool_call_id")),
-                    "transform_tool_result",
-                    prepared.full_hash,
-                ]
-            )
-        )
-        events = self.store.append_events(
-            self.episode_id,
-            drafts,
-            correlation=_correlation(kwargs),
-            idempotency_key=idempotency_key,
-        )
-        self.runtime.set_recent_tool_result(self.episode_id, result)
-        event_ids = [event.id for event in events]
+        return drafts
+
+    def _promote_tool_evidence_when_ready(
+        self,
+        tool_evidence: ToolEvidence,
+        event_ids: list[str],
+    ) -> None:
         if (
             not bool(self.config["ingestion"]["lazy_claim_extraction"])
-            and content_source is not None
-            and prepared.payload
-            and adapted.content_assertive
+            and tool_evidence.content_source is not None
+            and tool_evidence.prepared.payload
+            and tool_evidence.adapted.content_assertive
         ):
             if self.runtime.in_running_event_loop():
                 self.runtime.schedule_context_maintenance(
                     self.episode_id, self.runtime.query_for(self.episode_id)
                 )
             else:
-                event_ids.extend(self._promote_evidence(evidence.id))
-        self._after_new_beliefs()
-        return tuple(event_ids)
+                event_ids.extend(self._promote_evidence(tool_evidence.evidence.id))
 
     def ensure_source(self, descriptor: SourceDescriptor | None) -> Source:
         if descriptor is None:
@@ -928,16 +985,40 @@ class EpisodeService:
                 ],
             )
             return tuple(event.id for event in events)
-        candidates: tuple[ClaimCandidate, ...]
-        used_model = False
-        # Only typed content adapters reach this path. Generic execution stdout
-        # has no content source and cannot become a domain claim.
+        candidates, model_assisted = self._extract_claim_candidates(evidence)
+        drafts, accepted_claim_count = self._claim_admission_drafts(
+            candidates,
+            evidence,
+            content_source,
+        )
+        drafts.extend(
+            self._promotion_outcome_drafts(evidence, accepted_claim_count, model_assisted)
+        )
+        drafts.extend(
+            self._component_verdict_drafts(
+                "claim_extractor",
+                evidence.content_hash,
+                "accepted" if accepted_claim_count else "inconclusive",
+                {"accepted": accepted_claim_count, "model_assisted": model_assisted},
+                premise_ids=(str(evidence.metadata.get("wrapper_belief_id", "")),),
+            )
+        )
+        events = self.store.append_events(self.episode_id, drafts)
+        self._after_new_beliefs()
+        return tuple(event.id for event in events)
+
+    def _extract_claim_candidates(self, evidence: Evidence) -> tuple[tuple[ClaimCandidate, ...], bool]:
+        """Prefer bounded structured extraction, with deterministic extraction as fallback."""
+
+        payload = evidence.payload
+        if payload is None:
+            raise ValueError("claim extraction requires recoverable evidence")
         try:
             result = self.llm.complete_structured(
                 episode_id=self.episode_id,
                 purpose="belief-ledger.claim-extraction",
                 instructions=CLAIM_EXTRACTION,
-                text=evidence.payload,
+                text=payload,
                 schema=CLAIM_EXTRACTION_SCHEMA,
                 schema_name="belief_ledger_claim_extraction_v1",
                 max_tokens=1_500,
@@ -946,19 +1027,28 @@ class EpisodeService:
                     max_claims=int(self.config["ingestion"]["max_claims_per_evidence"]),
                 ),
             )
-            candidates = result.parsed
-            used_model = True
+            return result.parsed, True
         except LlmComponentError:
-            candidates = deterministic_candidates(
-                evidence.payload,
-                max_claims=int(self.config["ingestion"]["max_claims_per_evidence"]),
+            return (
+                deterministic_candidates(
+                    payload,
+                    max_claims=int(self.config["ingestion"]["max_claims_per_evidence"]),
+                ),
+                False,
             )
+
+    def _claim_admission_drafts(
+        self,
+        candidates: Sequence[ClaimCandidate],
+        evidence: Evidence,
+        content_source: Source,
+    ) -> tuple[list[EventDraft], int]:
         drafts: list[EventDraft] = []
-        accepted = 0
+        accepted_claim_count = 0
         for candidate in candidates:
             validation = validate_candidate(
                 candidate,
-                evidence.payload,
+                evidence.payload or "",
                 max_words=int(self.config["ingestion"]["max_atomic_claim_words"]),
                 max_chars=int(self.config["ingestion"]["max_atomic_claim_chars"]),
                 allowed_source_identity=content_source.name,
@@ -979,56 +1069,42 @@ class EpisodeService:
                 continue
             candidate_drafts = self._candidate_drafts(candidate, evidence, content_source)
             if any(draft.kind == "BELIEF_ADMITTED" for draft in candidate_drafts):
-                accepted += 1
+                accepted_claim_count += 1
             drafts.extend(candidate_drafts)
-        if accepted:
-            drafts.append(
+        return drafts, accepted_claim_count
+
+    @staticmethod
+    def _promotion_outcome_drafts(
+        evidence: Evidence,
+        accepted_claim_count: int,
+        model_assisted: bool,
+    ) -> list[EventDraft]:
+        if accepted_claim_count:
+            return [
                 EventDraft(
                     "UNPROMOTED_EVIDENCE_RESOLVED",
                     "evidence",
                     evidence.id,
                     {
                         "evidence_id": evidence.id,
-                        "reason": f"promoted {accepted} validated claim(s)",
+                        "reason": f"promoted {accepted_claim_count} validated claim(s)",
                     },
                 )
-            )
-        else:
-            drafts.append(
-                EventDraft(
-                    "CLAIM_EXTRACTION_FAILED",
-                    "evidence",
-                    evidence.id,
-                    {
-                        "reason": "no valid recoverable atomic claims",
-                        "model_assisted": used_model,
-                    },
-                )
-            )
-            drafts.append(
-                EventDraft(
-                    "UNPROMOTED_EVIDENCE_FAILED",
-                    "evidence",
-                    evidence.id,
-                    {
-                        "evidence_id": evidence.id,
-                        "reason": "no valid recoverable atomic claims",
-                    },
-                )
-            )
-        verdict_drafts = self._component_verdict_drafts(
-            "claim_extractor",
-            evidence.content_hash,
-            "accepted" if accepted else "inconclusive",
-            {"accepted": accepted, "model_assisted": used_model},
-            premise_ids=(str(evidence.metadata.get("wrapper_belief_id", "")),),
-        )
-        drafts.extend(verdict_drafts)
-        if not drafts:
-            return ()
-        events = self.store.append_events(self.episode_id, drafts)
-        self._after_new_beliefs()
-        return tuple(event.id for event in events)
+            ]
+        return [
+            EventDraft(
+                "CLAIM_EXTRACTION_FAILED",
+                "evidence",
+                evidence.id,
+                {"reason": "no valid recoverable atomic claims", "model_assisted": model_assisted},
+            ),
+            EventDraft(
+                "UNPROMOTED_EVIDENCE_FAILED",
+                "evidence",
+                evidence.id,
+                {"evidence_id": evidence.id, "reason": "no valid recoverable atomic claims"},
+            ),
+        ]
 
     def record_inference(
         self,
@@ -1114,15 +1190,14 @@ class EpisodeService:
         )
         if not validation.valid:
             raise ValueError("invalid inference: " + "; ".join(validation.reasons))
-        trust = determine_admission(
+        admission = self.admission.admit(
             initial,
             source,
-            self.config,
             episode_stakes=self.episode.default_stakes,
         )
-        belief = replace(initial, status=trust.status, admission_status=trust.status)
-        drafts = [_record_draft("BELIEF_ADMITTED", "belief", belief.id, belief)]
-        drafts.extend(self._verification_drafts(belief, trust))
+        belief = admission.belief
+        drafts = [*admission.drafts]
+        drafts.extend(self._verification_drafts(belief, admission.trust))
         events = self.store.append_events(
             self.episode_id,
             drafts,
@@ -1380,138 +1455,154 @@ class EpisodeService:
                 self.config,
                 now=utc_now(),
             )
-            drafts: list[EventDraft] = []
-            for edge in defeats:
-                active = outcome.active_edges.get(edge.id, False)
-                if active != edge.active:
-                    drafts.append(
-                        EventDraft(
-                            "DEFEAT_ACTIVITY_CHANGED",
-                            "defeat",
-                            edge.id,
-                            {"active": active},
-                        )
-                    )
-
-            active_notices = {
-                notice.defeated_belief_id
-                for notice in self.store.list_retractions(self.episode_id, state="active")
-            }
-            newly_defeated = [
-                belief_id
-                for belief_id, new_status in outcome.statuses.items()
-                if beliefs[belief_id].status is Status.IN and new_status is Status.OUT
-            ]
-            rendered_ids = self.store.rendered_belief_ids(self.episode_id, newly_defeated)
-            dependents: dict[str, set[str]] = defaultdict(set)
-            for justification in justifications:
-                for premise_id in justification.premises:
-                    dependents[premise_id].add(justification.belief_id)
-            current_turn = self.episode.current_turn
-            ttl = int(self.config["context"]["retraction_ttl_turns"])
-            defeated_by_source: dict[str, int] = {}
-            for belief_id in sorted(outcome.statuses):
-                old = beliefs[belief_id]
-                new_status = outcome.statuses[belief_id]
-                if old.status is new_status:
-                    continue
-                cause = outcome.causes.get(belief_id, "fixed_point_relabel")
-                drafts.append(
-                    EventDraft(
-                        "BELIEF_STATUS_CHANGED",
-                        "belief",
-                        belief_id,
-                        {"from": old.status.value, "to": new_status.value, "cause": cause},
-                    )
-                )
-                if old.status is Status.IN and new_status is Status.OUT:
-                    defeated_by_source[old.source_id] = defeated_by_source.get(old.source_id, 0) + 1
-                    if belief_id in rendered_ids and belief_id not in active_notices:
-                        notice = RetractionNotice(
-                            id=new_id("retraction"),
-                            episode_id=self.episode_id,
-                            defeated_belief_id=belief_id,
-                            cause=cause,
-                            descendants=_descendant_ids(belief_id, dependents),
-                            created_turn=current_turn,
-                            ttl_turns=ttl,
-                        )
-                        drafts.append(
-                            _record_draft("RETRACTION_CREATED", "retraction", notice.id, notice)
-                        )
-
-            existing_conflicts: dict[tuple[str, str], Conflict] = {}
-            for conflict in self.store.list_conflicts(self.episode_id, state="open"):
-                conflict_pair = (
-                    (conflict.left_belief_id, conflict.right_belief_id)
-                    if conflict.left_belief_id <= conflict.right_belief_id
-                    else (conflict.right_belief_id, conflict.left_belief_id)
-                )
-                existing_conflicts[conflict_pair] = conflict
-            new_conflicts = set(outcome.conflicts)
-            existing_tasks = {
-                (task.belief_id, task.method): task
-                for task in self.store.list_verification_tasks(self.episode_id, state="open")
-            }
-            for pair in sorted(new_conflicts - set(existing_conflicts)):
-                task = existing_tasks.get((pair[0], VerificationMethod.CROSS_SOURCE))
-                if task is None:
-                    task = VerificationTask(
-                        id=new_id("verification"),
-                        episode_id=self.episode_id,
-                        belief_id=pair[0],
-                        method=VerificationMethod.CROSS_SOURCE,
-                        k_required=1,
-                        budget=1,
-                    )
-                    existing_tasks[(pair[0], VerificationMethod.CROSS_SOURCE)] = task
-                    drafts.append(
-                        _record_draft(
-                            "VERIFICATION_TASK_CREATED", "verification_task", task.id, task
-                        )
-                    )
-                conflict = Conflict(
-                    id=new_id("conflict"),
-                    episode_id=self.episode_id,
-                    left_belief_id=pair[0],
-                    right_belief_id=pair[1],
-                    normalized_scope={},
-                    verification_task_id=task.id,
-                )
-                drafts.append(_record_draft("CONFLICT_OPENED", "conflict", conflict.id, conflict))
-            for pair in sorted(set(existing_conflicts) - new_conflicts):
-                conflict = existing_conflicts[pair]
-                drafts.append(
-                    EventDraft(
-                        "CONFLICT_RESOLVED",
-                        "conflict",
-                        conflict.id,
-                        {"reason": "fixed point no longer contains equal-priority contradiction"},
-                    )
-                )
-
-            for source_id, count in sorted(defeated_by_source.items()):
-                drafts.append(
-                    EventDraft(
-                        "SOURCE_STATS_DELTA",
-                        "source",
-                        source_id,
-                        {"delta": {"confirmed": 0, "defeated": count, "samples": count}},
-                    )
-                )
-            if outcome.oscillation:
-                drafts.append(
-                    EventDraft(
-                        "DEFEAT_CYCLE_SAMSAYA",
-                        "episode",
-                        self.episode_id,
-                        {"iterations": outcome.iterations},
-                    )
-                )
+            drafts = self._edge_activity_drafts(defeats, outcome)
+            status_drafts, defeated_by_source = self._belief_transition_drafts(
+                beliefs,
+                justifications,
+                outcome,
+            )
+            drafts.extend(status_drafts)
+            drafts.extend(self._conflict_transition_drafts(outcome))
+            drafts.extend(self._relabel_summary_drafts(defeated_by_source, outcome))
             if not drafts:
                 return ()
             events = self.store.append_events(self.episode_id, drafts)
             return tuple(event.id for event in events)
+
+    @staticmethod
+    def _edge_activity_drafts(
+        defeats: Sequence[DefeatEdge], outcome: RelabelResult
+    ) -> list[EventDraft]:
+        return [
+            EventDraft("DEFEAT_ACTIVITY_CHANGED", "defeat", edge.id, {"active": active})
+            for edge in defeats
+            if (active := outcome.active_edges.get(edge.id, False)) != edge.active
+        ]
+
+    def _belief_transition_drafts(
+        self,
+        beliefs: Mapping[str, Belief],
+        justifications: Sequence[Justification],
+        outcome: RelabelResult,
+    ) -> tuple[list[EventDraft], dict[str, int]]:
+        active_notices = {
+            notice.defeated_belief_id
+            for notice in self.store.list_retractions(self.episode_id, state="active")
+        }
+        newly_defeated = [
+            belief_id
+            for belief_id, new_status in outcome.statuses.items()
+            if beliefs[belief_id].status is Status.IN and new_status is Status.OUT
+        ]
+        rendered_ids = self.store.rendered_belief_ids(self.episode_id, newly_defeated)
+        dependents: dict[str, set[str]] = defaultdict(set)
+        for justification in justifications:
+            for premise_id in justification.premises:
+                dependents[premise_id].add(justification.belief_id)
+        current_turn = self.episode.current_turn
+        ttl_turns = int(self.config["context"]["retraction_ttl_turns"])
+        drafts: list[EventDraft] = []
+        defeated_by_source: dict[str, int] = {}
+        for belief_id in sorted(outcome.statuses):
+            old_belief = beliefs[belief_id]
+            new_status = outcome.statuses[belief_id]
+            if old_belief.status is new_status:
+                continue
+            cause = outcome.causes.get(belief_id, "fixed_point_relabel")
+            drafts.append(
+                EventDraft(
+                    "BELIEF_STATUS_CHANGED",
+                    "belief",
+                    belief_id,
+                    {"from": old_belief.status.value, "to": new_status.value, "cause": cause},
+                )
+            )
+            if old_belief.status is Status.IN and new_status is Status.OUT:
+                defeated_by_source[old_belief.source_id] = (
+                    defeated_by_source.get(old_belief.source_id, 0) + 1
+                )
+                if belief_id in rendered_ids and belief_id not in active_notices:
+                    notice = RetractionNotice(
+                        id=new_id("retraction"),
+                        episode_id=self.episode_id,
+                        defeated_belief_id=belief_id,
+                        cause=cause,
+                        descendants=_descendant_ids(belief_id, dependents),
+                        created_turn=current_turn,
+                        ttl_turns=ttl_turns,
+                    )
+                    drafts.append(_record_draft("RETRACTION_CREATED", "retraction", notice.id, notice))
+        return drafts, defeated_by_source
+
+    def _conflict_transition_drafts(self, outcome: RelabelResult) -> list[EventDraft]:
+        existing_conflicts = {
+            _ordered_belief_pair(conflict.left_belief_id, conflict.right_belief_id): conflict
+            for conflict in self.store.list_conflicts(self.episode_id, state="open")
+        }
+        new_conflicts = set(outcome.conflicts)
+        open_tasks = {
+            (task.belief_id, task.method): task
+            for task in self.store.list_verification_tasks(self.episode_id, state="open")
+        }
+        drafts: list[EventDraft] = []
+        for pair in sorted(new_conflicts - set(existing_conflicts)):
+            task = open_tasks.get((pair[0], VerificationMethod.CROSS_SOURCE))
+            if task is None:
+                task = VerificationTask(
+                    id=new_id("verification"),
+                    episode_id=self.episode_id,
+                    belief_id=pair[0],
+                    method=VerificationMethod.CROSS_SOURCE,
+                    k_required=1,
+                    budget=1,
+                )
+                open_tasks[(pair[0], VerificationMethod.CROSS_SOURCE)] = task
+                drafts.append(
+                    _record_draft("VERIFICATION_TASK_CREATED", "verification_task", task.id, task)
+                )
+            conflict = Conflict(
+                id=new_id("conflict"),
+                episode_id=self.episode_id,
+                left_belief_id=pair[0],
+                right_belief_id=pair[1],
+                normalized_scope={},
+                verification_task_id=task.id,
+            )
+            drafts.append(_record_draft("CONFLICT_OPENED", "conflict", conflict.id, conflict))
+        for pair in sorted(set(existing_conflicts) - new_conflicts):
+            conflict = existing_conflicts[pair]
+            drafts.append(
+                EventDraft(
+                    "CONFLICT_RESOLVED",
+                    "conflict",
+                    conflict.id,
+                    {"reason": "fixed point no longer contains equal-priority contradiction"},
+                )
+            )
+        return drafts
+
+    def _relabel_summary_drafts(
+        self, defeated_by_source: Mapping[str, int], outcome: RelabelResult
+    ) -> list[EventDraft]:
+        drafts = [
+            EventDraft(
+                "SOURCE_STATS_DELTA",
+                "source",
+                source_id,
+                {"delta": {"confirmed": 0, "defeated": count, "samples": count}},
+            )
+            for source_id, count in sorted(defeated_by_source.items())
+        ]
+        if outcome.oscillation:
+            drafts.append(
+                EventDraft(
+                    "DEFEAT_CYCLE_SAMSAYA",
+                    "episode",
+                    self.episode_id,
+                    {"iterations": outcome.iterations},
+                )
+            )
+        return drafts
 
     def compile_context(
         self,
@@ -1899,27 +1990,20 @@ class EpisodeService:
                 "environment_integrity": True,
             },
         )
-        trust = determine_admission(
+        admission = self.admission.admit(
             initial,
             source,
-            self.config,
             episode_stakes=self.episode.default_stakes,
+            support_evidence_id=evidence.id,
+            support_validity=initial.validity,
         )
-        belief = replace(initial, status=trust.status, admission_status=trust.status)
-        support = IngestionSupport(
-            id=new_id("support"),
-            episode_id=self.episode_id,
-            belief_id=belief.id,
-            evidence_id=evidence.id,
-            validity=dict(belief.validity),
-        )
+        belief = admission.belief
         events = self.store.append_events(
             self.episode_id,
             [
                 _record_draft("EVIDENCE_INGESTED", "evidence", evidence.id, evidence),
-                _record_draft("BELIEF_ADMITTED", "belief", belief.id, belief),
-                _record_draft("INGESTION_SUPPORT_ADDED", "ingestion_support", support.id, support),
-                *self._verification_drafts(belief, trust),
+                *admission.drafts,
+                *self._verification_drafts(belief, admission.trust),
             ],
             idempotency_key=(
                 f"component-input:{self.episode_id}:{self.episode.current_turn}:"
@@ -2213,25 +2297,16 @@ class EpisodeService:
                     },
                 )
             ]
-        trust = determine_admission(
+        admission = self.admission.admit(
             initial,
             source,
-            self.config,
             episode_stakes=self.episode.default_stakes,
+            support_evidence_id=evidence.id,
+            support_validity={**validity, "checks": validation.checks},
         )
-        belief = replace(initial, status=trust.status, admission_status=trust.status)
-        support = IngestionSupport(
-            id=new_id("support"),
-            episode_id=self.episode_id,
-            belief_id=belief.id,
-            evidence_id=evidence.id,
-            validity={**validity, "checks": validation.checks},
-        )
-        drafts = [
-            _record_draft("BELIEF_ADMITTED", "belief", belief.id, belief),
-            _record_draft("INGESTION_SUPPORT_ADDED", "ingestion_support", support.id, support),
-        ]
-        drafts.extend(self._verification_drafts(belief, trust))
+        belief = admission.belief
+        drafts = [*admission.drafts]
+        drafts.extend(self._verification_drafts(belief, admission.trust))
         return drafts
 
     def _verification_drafts(self, belief: Belief, trust: TrustDecision) -> list[EventDraft]:
@@ -2359,25 +2434,16 @@ class EpisodeService:
                     {"reason": "; ".join(validation.reasons), "tool_name": tool_name},
                 )
             ]
-        trust = determine_admission(
+        admission = self.admission.admit(
             initial,
             source,
-            self.config,
             episode_stakes=self.episode.default_stakes,
+            support_evidence_id=evidence.id,
+            support_validity={**assessment.validity, "checks": validation.checks},
         )
-        belief = replace(initial, status=trust.status, admission_status=trust.status)
-        support = IngestionSupport(
-            id=new_id("support"),
-            episode_id=self.episode_id,
-            belief_id=belief.id,
-            evidence_id=evidence.id,
-            validity={**assessment.validity, "checks": validation.checks},
-        )
-        drafts = [
-            _record_draft("BELIEF_ADMITTED", "belief", belief.id, belief),
-            _record_draft("INGESTION_SUPPORT_ADDED", "ingestion_support", support.id, support),
-        ]
-        drafts.extend(self._verification_drafts(belief, trust))
+        belief = admission.belief
+        drafts = [*admission.drafts]
+        drafts.extend(self._verification_drafts(belief, admission.trust))
         return drafts
 
     def _component_verdict_drafts(
@@ -2445,16 +2511,15 @@ class EpisodeService:
                 domain="monitoring",
                 validity={"component_verdict": True},
             )
-            trust = determine_admission(
+            admission = self.admission.admit(
                 initial,
                 source,
-                self.config,
                 episode_stakes=self.episode.default_stakes,
             )
-            belief = replace(initial, status=trust.status, admission_status=trust.status)
+            belief = admission.belief
             verdict = replace(verdict, belief_id=belief.id)
-            drafts.append(_record_draft("BELIEF_ADMITTED", "belief", belief.id, belief))
-            drafts.extend(self._verification_drafts(belief, trust))
+            drafts.extend(admission.drafts)
+            drafts.extend(self._verification_drafts(belief, admission.trust))
         drafts.append(
             _record_draft("COMPONENT_VERDICT_RECORDED", "component_verdict", verdict.id, verdict)
         )

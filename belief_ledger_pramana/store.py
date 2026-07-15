@@ -10,13 +10,13 @@ import re
 import sqlite3
 import tempfile
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 
 from .events import (
     build_event,
@@ -59,6 +59,7 @@ from .models import (
 from .projections import apply_event
 
 ZERO_HASH = "0" * 64
+_T = TypeVar("_T")
 
 
 class StoreError(RuntimeError):
@@ -158,6 +159,35 @@ class LedgerStore:
         configure_connection(connection, self.busy_timeout_ms)
         return connection
 
+    def _run_immediate_transaction(
+        self,
+        operation: Callable[[sqlite3.Connection], _T],
+        *,
+        error_type: type[StoreError],
+    ) -> _T:
+        """Run one transaction with the store's bounded busy-retry policy."""
+
+        deadline = time.monotonic() + self.busy_timeout_ms / 1_000
+        attempt = 0
+        while True:
+            connection = self.connect()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                result = operation(connection)
+                connection.commit()
+                return result
+            except sqlite3.OperationalError as exc:
+                connection.rollback()
+                if not _is_busy(exc) or time.monotonic() >= deadline:
+                    raise error_type(str(exc)) from exc
+                attempt += 1
+                time.sleep(min(0.05, 0.002 * (2 ** min(attempt, 5))) + random.random() * 0.003)
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+
     def append_events(
         self,
         episode_id: str,
@@ -182,109 +212,63 @@ class LedgerStore:
             _idempotency_storage_key(episode_id, idempotency_key) if idempotency_key else None
         )
 
-        deadline = time.monotonic() + self.busy_timeout_ms / 1_000
-        attempt = 0
-        while True:
-            connection = self.connect()
-            try:
-                connection.execute("BEGIN IMMEDIATE")
-                if require_open_verification_task_id:
-                    task = connection.execute(
-                        "SELECT state FROM verification_tasks WHERE id=? AND episode_id=?",
-                        (require_open_verification_task_id, episode_id),
-                    ).fetchone()
-                    if task is None or str(task["state"]) != "open":
-                        connection.rollback()
-                        return []
-                if idempotency_key:
-                    existing = connection.execute(
-                        "SELECT event_ids_json FROM idempotency "
-                        "WHERE episode_id=? AND idempotency_key IN (?,?)",
-                        (episode_id, storage_idempotency_key, idempotency_key),
-                    ).fetchone()
-                    if existing:
-                        connection.rollback()
-                        ids = json.loads(str(existing[0]))
-                        return self.events_by_ids(str(item) for item in ids)
+        def append(connection: sqlite3.Connection) -> list[Event]:
+            if require_open_verification_task_id:
+                task = connection.execute(
+                    "SELECT state FROM verification_tasks WHERE id=? AND episode_id=?",
+                    (require_open_verification_task_id, episode_id),
+                ).fetchone()
+                if task is None or str(task["state"]) != "open":
+                    return []
+            if idempotency_key:
+                existing = connection.execute(
+                    "SELECT event_ids_json FROM idempotency "
+                    "WHERE episode_id=? AND idempotency_key IN (?,?)",
+                    (episode_id, storage_idempotency_key, idempotency_key),
+                ).fetchone()
+                if existing:
+                    return self._events_by_ids(connection, json.loads(str(existing[0])))
 
-                head = connection.execute(
-                    "SELECT seq,event_hash FROM event_heads WHERE episode_id=?",
-                    (episode_id,),
-                ).fetchone()
-                previous_hash = str(head["event_hash"]) if head else ZERO_HASH
-                next_seq_row = connection.execute(
-                    "SELECT COALESCE(MAX(seq),0)+1 FROM events"
-                ).fetchone()
-                next_seq = int(next_seq_row[0])
-                events: list[Event] = []
-                for offset, draft in enumerate(drafts):
-                    event = build_event(
-                        seq=next_seq + offset,
-                        episode_id=episode_id,
-                        kind=draft.kind,
-                        aggregate_type=draft.aggregate_type,
-                        aggregate_id=draft.aggregate_id,
-                        payload=to_primitive(draft.payload),
-                        previous_hash=previous_hash,
-                        correlation=clean_correlation,
-                        causal_event_id=draft.causal_event_id,
-                    )
-                    event = replace(
-                        event,
-                        auth_tag=compute_event_auth(
-                            self._integrity_key, event.id, event.event_hash
-                        ),
-                    )
-                    connection.execute(
-                        "INSERT INTO events(seq,id,episode_id,ts,kind,schema_version,aggregate_type,aggregate_id,correlation_json,causal_event_id,payload_json,previous_hash,event_hash) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (
-                            event.seq,
-                            event.id,
-                            event.episode_id,
-                            isoformat_utc(event.timestamp),
-                            event.kind,
-                            event.schema_version,
-                            event.aggregate_type,
-                            event.aggregate_id,
-                            canonical_json(event.correlation),
-                            event.causal_event_id,
-                            canonical_json(event.payload),
-                            event.previous_hash,
-                            event.event_hash,
-                        ),
-                    )
-                    connection.execute(
-                        "INSERT INTO event_auth(event_id,event_hash,auth_tag) VALUES (?,?,?)",
-                        (event.id, event.event_hash, event.auth_tag),
-                    )
-                    apply_event(connection, event)
-                    events.append(event)
-                    previous_hash = event.event_hash
-                if storage_idempotency_key:
-                    connection.execute(
-                        "INSERT INTO idempotency(idempotency_key,episode_id,event_ids_json,created_at) "
-                        "VALUES (?,?,?,?)",
-                        (
-                            storage_idempotency_key,
-                            episode_id,
-                            canonical_json([event.id for event in events]),
-                            isoformat_utc(events[0].timestamp),
-                        ),
-                    )
-                connection.commit()
-                return events
-            except sqlite3.OperationalError as exc:
-                connection.rollback()
-                if not _is_busy(exc) or time.monotonic() >= deadline:
-                    raise StoreError(str(exc)) from exc
-                attempt += 1
-                time.sleep(min(0.05, 0.002 * (2 ** min(attempt, 5))) + random.random() * 0.003)
-            except Exception:
-                connection.rollback()
-                raise
-            finally:
-                connection.close()
+            head = connection.execute(
+                "SELECT seq,event_hash FROM event_heads WHERE episode_id=?", (episode_id,)
+            ).fetchone()
+            previous_hash = str(head["event_hash"]) if head else ZERO_HASH
+            next_seq = int(connection.execute("SELECT COALESCE(MAX(seq),0)+1 FROM events").fetchone()[0])
+            events: list[Event] = []
+            for offset, draft in enumerate(drafts):
+                event = build_event(
+                    seq=next_seq + offset,
+                    episode_id=episode_id,
+                    kind=draft.kind,
+                    aggregate_type=draft.aggregate_type,
+                    aggregate_id=draft.aggregate_id,
+                    payload=to_primitive(draft.payload),
+                    previous_hash=previous_hash,
+                    correlation=clean_correlation,
+                    causal_event_id=draft.causal_event_id,
+                )
+                event = replace(
+                    event,
+                    auth_tag=compute_event_auth(self._integrity_key, event.id, event.event_hash),
+                )
+                _insert_event(connection, event)
+                apply_event(connection, event)
+                events.append(event)
+                previous_hash = event.event_hash
+            if storage_idempotency_key:
+                connection.execute(
+                    "INSERT INTO idempotency(idempotency_key,episode_id,event_ids_json,created_at) "
+                    "VALUES (?,?,?,?)",
+                    (
+                        storage_idempotency_key,
+                        episode_id,
+                        canonical_json([event.id for event in events]),
+                        isoformat_utc(events[0].timestamp),
+                    ),
+                )
+            return events
+
+        return self._run_immediate_transaction(append, error_type=StoreError)
 
     def append_record(
         self,
@@ -649,76 +633,60 @@ class LedgerStore:
         if min(input_tokens, output_tokens, max_calls_turn, max_calls_episode) < 0:
             raise LlmReservationError("LLM budget values must be non-negative")
         reservation_id = new_id("reservation")
-        deadline = time.monotonic() + self.busy_timeout_ms / 1_000
-        attempt = 0
-        while True:
-            connection = self.connect()
-            try:
-                connection.execute("BEGIN IMMEDIATE")
-                now = utc_now()
-                cutoff = isoformat_utc(now - timedelta(seconds=max(1, stale_after_seconds)))
-                connection.execute("DELETE FROM llm_reservations WHERE created_at<?", (cutoff,))
-                episode = connection.execute(
-                    "SELECT llm_calls_used,input_tokens_used,output_tokens_used FROM episodes WHERE id=?",
-                    (episode_id,),
-                ).fetchone()
-                if episode is None:
-                    raise LlmReservationError("episode does not exist")
-                reserved = connection.execute(
-                    "SELECT COUNT(*) AS calls,COALESCE(SUM(input_tokens),0) AS input_tokens,"
-                    "COALESCE(SUM(output_tokens),0) AS output_tokens "
-                    "FROM llm_reservations WHERE episode_id=?",
-                    (episode_id,),
-                ).fetchone()
-                turn_calls = connection.execute(
-                    "SELECT COUNT(*) FROM llm_reservations WHERE episode_id=? AND turn_number=?",
-                    (episode_id, turn_number),
-                ).fetchone()
-                used_turn = connection.execute(
-                    "SELECT COUNT(*) FROM llm_usage WHERE episode_id=? AND turn_number=?",
-                    (episode_id, turn_number),
-                ).fetchone()
-                if int(used_turn[0]) + int(turn_calls[0]) >= max_calls_turn:
-                    raise LlmReservationError("turn LLM call budget exhausted")
-                if int(episode["llm_calls_used"]) + int(reserved["calls"]) >= max_calls_episode:
-                    raise LlmReservationError("episode LLM call budget exhausted")
-                if (
-                    int(episode["input_tokens_used"]) + int(reserved["input_tokens"]) + input_tokens
-                    > max_input_tokens_episode
-                ):
-                    raise LlmReservationError("episode input-token budget exhausted")
-                if (
-                    int(episode["output_tokens_used"])
-                    + int(reserved["output_tokens"])
-                    + output_tokens
-                    > max_output_tokens_episode
-                ):
-                    raise LlmReservationError("episode output-token budget exhausted")
-                connection.execute(
-                    "INSERT INTO llm_reservations(id,episode_id,turn_number,input_tokens,output_tokens,created_at) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (
-                        reservation_id,
-                        episode_id,
-                        turn_number,
-                        input_tokens,
-                        output_tokens,
-                        isoformat_utc(now),
-                    ),
-                )
-                connection.commit()
-                return reservation_id
-            except sqlite3.OperationalError as exc:
-                connection.rollback()
-                if not _is_busy(exc) or time.monotonic() >= deadline:
-                    raise LlmReservationError(str(exc)) from exc
-                attempt += 1
-                time.sleep(min(0.05, 0.002 * (2 ** min(attempt, 5))) + random.random() * 0.003)
-            except Exception:
-                connection.rollback()
-                raise
-            finally:
-                connection.close()
+
+        def reserve(connection: sqlite3.Connection) -> str:
+            now = utc_now()
+            cutoff = isoformat_utc(now - timedelta(seconds=max(1, stale_after_seconds)))
+            connection.execute("DELETE FROM llm_reservations WHERE created_at<?", (cutoff,))
+            episode = connection.execute(
+                "SELECT llm_calls_used,input_tokens_used,output_tokens_used FROM episodes WHERE id=?",
+                (episode_id,),
+            ).fetchone()
+            if episode is None:
+                raise LlmReservationError("episode does not exist")
+            reserved = connection.execute(
+                "SELECT COUNT(*) AS calls,COALESCE(SUM(input_tokens),0) AS input_tokens,"
+                "COALESCE(SUM(output_tokens),0) AS output_tokens "
+                "FROM llm_reservations WHERE episode_id=?",
+                (episode_id,),
+            ).fetchone()
+            turn_calls = connection.execute(
+                "SELECT COUNT(*) FROM llm_reservations WHERE episode_id=? AND turn_number=?",
+                (episode_id, turn_number),
+            ).fetchone()
+            used_turn = connection.execute(
+                "SELECT COUNT(*) FROM llm_usage WHERE episode_id=? AND turn_number=?",
+                (episode_id, turn_number),
+            ).fetchone()
+            if int(used_turn[0]) + int(turn_calls[0]) >= max_calls_turn:
+                raise LlmReservationError("turn LLM call budget exhausted")
+            if int(episode["llm_calls_used"]) + int(reserved["calls"]) >= max_calls_episode:
+                raise LlmReservationError("episode LLM call budget exhausted")
+            if (
+                int(episode["input_tokens_used"]) + int(reserved["input_tokens"]) + input_tokens
+                > max_input_tokens_episode
+            ):
+                raise LlmReservationError("episode input-token budget exhausted")
+            if (
+                int(episode["output_tokens_used"]) + int(reserved["output_tokens"]) + output_tokens
+                > max_output_tokens_episode
+            ):
+                raise LlmReservationError("episode output-token budget exhausted")
+            connection.execute(
+                "INSERT INTO llm_reservations(id,episode_id,turn_number,input_tokens,output_tokens,created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (
+                    reservation_id,
+                    episode_id,
+                    turn_number,
+                    input_tokens,
+                    output_tokens,
+                    isoformat_utc(now),
+                ),
+            )
+            return reservation_id
+
+        return self._run_immediate_transaction(reserve, error_type=LlmReservationError)
 
     def release_llm_reservation(self, reservation_id: str) -> None:
         with self.connect() as connection:
@@ -765,15 +733,20 @@ class LedgerStore:
             return self._authenticated_events(connection, rows)
 
     def events_by_ids(self, event_ids: Iterable[str]) -> list[Event]:
-        ids = list(event_ids)
+        with self.connect() as connection:
+            return self._events_by_ids(connection, event_ids)
+
+    def _events_by_ids(
+        self, connection: sqlite3.Connection, event_ids: Iterable[object]
+    ) -> list[Event]:
+        ids = [str(event_id) for event_id in event_ids]
         if not ids:
             return []
         placeholders = ",".join("?" for _ in ids)
-        with self.connect() as connection:
-            rows = connection.execute(
-                f"SELECT * FROM events WHERE id IN ({placeholders}) ORDER BY seq", ids
-            ).fetchall()
-            return self._authenticated_events(connection, rows)
+        rows = connection.execute(
+            f"SELECT * FROM events WHERE id IN ({placeholders}) ORDER BY seq", ids
+        ).fetchall()
+        return self._authenticated_events(connection, rows)
 
     def verify_hash_chain(self) -> tuple[bool, str]:
         expected_heads: dict[str, tuple[int, str]] = {}
@@ -914,29 +887,7 @@ class LedgerStore:
         try:
             destination.execute("BEGIN IMMEDIATE")
             for event in preserved:
-                destination.execute(
-                    "INSERT INTO events(seq,id,episode_id,ts,kind,schema_version,aggregate_type,aggregate_id,correlation_json,causal_event_id,payload_json,previous_hash,event_hash) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (
-                        event.seq,
-                        event.id,
-                        event.episode_id,
-                        isoformat_utc(event.timestamp),
-                        event.kind,
-                        event.schema_version,
-                        event.aggregate_type,
-                        event.aggregate_id,
-                        canonical_json(event.correlation),
-                        event.causal_event_id,
-                        canonical_json(event.payload),
-                        event.previous_hash,
-                        event.event_hash,
-                    ),
-                )
-                destination.execute(
-                    "INSERT INTO event_auth(event_id,event_hash,auth_tag) VALUES (?,?,?)",
-                    (event.id, event.event_hash, event.auth_tag),
-                )
+                _insert_event(destination, event)
                 apply_event(destination, event)
             _restore_idempotency(
                 destination,
@@ -979,6 +930,34 @@ def _event_from_row(row: sqlite3.Row) -> Event:
         payload=json.loads(str(row["payload_json"])),
         previous_hash=str(row["previous_hash"]),
         event_hash=str(row["event_hash"]),
+    )
+
+
+def _insert_event(connection: sqlite3.Connection, event: Event) -> None:
+    """Persist an already-authenticated event before updating its projections."""
+
+    connection.execute(
+        "INSERT INTO events(seq,id,episode_id,ts,kind,schema_version,aggregate_type,aggregate_id,correlation_json,causal_event_id,payload_json,previous_hash,event_hash) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            event.seq,
+            event.id,
+            event.episode_id,
+            isoformat_utc(event.timestamp),
+            event.kind,
+            event.schema_version,
+            event.aggregate_type,
+            event.aggregate_id,
+            canonical_json(event.correlation),
+            event.causal_event_id,
+            canonical_json(event.payload),
+            event.previous_hash,
+            event.event_hash,
+        ),
+    )
+    connection.execute(
+        "INSERT INTO event_auth(event_id,event_hash,auth_tag) VALUES (?,?,?)",
+        (event.id, event.event_hash, event.auth_tag),
     )
 
 

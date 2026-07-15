@@ -147,14 +147,14 @@ class ActionGate:
                 f"belief-ledger:{classification.policy.id}",
             )
         else:
-            first = next(check for check in checks if not check.satisfied)
+            first_unsatisfied_check = next(check for check in checks if not check.satisfied)
             decision = GateDecision(
                 GateOutcome.BLOCK,
                 "MISSING_PRECONDITION",
-                f"BLOCKED [MISSING_PRECONDITION]: {first.proposition}",
+                f"BLOCKED [MISSING_PRECONDITION]: {first_unsatisfied_check.proposition}",
                 stakes,
                 missing_preconditions,
-                first.suggestion,
+                first_unsatisfied_check.suggestion,
             )
         self._record(episode_id, tool_name, args, decision, classification.reason)
         return decision

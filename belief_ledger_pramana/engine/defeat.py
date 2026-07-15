@@ -68,7 +68,7 @@ def relabel(
 
     current = {belief_id: beliefs[belief_id].status for belief_id in ordered_ids}
     seen: set[tuple[str, ...]] = set()
-    maximum = int(config.get("engine", {}).get("max_relabel_iterations", 256))
+    max_iterations = int(config.get("engine", {}).get("max_relabel_iterations", 256))
     conflict_pairs: set[tuple[str, str]] = set()
     causes: dict[str, str] = {}
     rebut_comparisons: dict[str, Any] = {}
@@ -78,7 +78,7 @@ def relabel(
         if attacker is not None and target is not None:
             rebut_comparisons[edge.id] = compare_priority(attacker, target, sources, config)
 
-    for iteration in range(1, maximum + 1):
+    for iteration in range(1, max_iterations + 1):
         state_key = tuple(current[item].value for item in ordered_ids)
         seen.add(state_key)
         supported = {
@@ -198,7 +198,7 @@ def relabel(
             current[belief_id] = Status.PENDING
             causes[belief_id] = "samsaya:iteration_ceiling"
     active = _active_edges(defeat_list, beliefs, current, sources, config, rebut_comparisons)
-    return RelabelResult(current, active, tuple(sorted(conflict_pairs)), causes, maximum, True)
+    return RelabelResult(current, active, tuple(sorted(conflict_pairs)), causes, max_iterations, True)
 
 
 def _candidate_status(belief: Belief, supported: bool) -> Status:

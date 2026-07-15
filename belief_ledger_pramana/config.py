@@ -6,8 +6,6 @@ import copy
 import os
 import stat
 import subprocess
-import tempfile
-from contextlib import suppress
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -16,6 +14,7 @@ from typing import Any
 import yaml
 
 from . import data as data_package
+from .atomic import write_private_text_atomically
 from .events import canonical_json, content_hash
 from .models import Stakes
 
@@ -392,20 +391,7 @@ def _string_paths(container: dict[str, Any], key: str) -> tuple[str, ...]:
 
 
 def _atomic_write(path: Path, text: str, mode: int) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    tmp_path = Path(temporary)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        _chmod_if_posix(tmp_path, mode)
-        os.replace(tmp_path, path)
-        _chmod_if_posix(path, mode)
-    finally:
-        with suppress(FileNotFoundError):
-            tmp_path.unlink()
+    write_private_text_atomically(path, text, mode=mode)
 
 
 def _chmod_if_posix(path: Path, mode: int) -> None:

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import time
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -15,6 +13,7 @@ from typing import Any
 import yaml
 
 from belief_ledger_pramana import __version__
+from belief_ledger_pramana.atomic import write_private_text_atomically
 from belief_ledger_pramana.compatibility import CompatibilityReport
 from belief_ledger_pramana.config import load_config
 from belief_ledger_pramana.engine.defeat import relabel
@@ -421,16 +420,7 @@ def _jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
-    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.chmod(0o600)
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    write_private_text_atomically(
+        path,
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )

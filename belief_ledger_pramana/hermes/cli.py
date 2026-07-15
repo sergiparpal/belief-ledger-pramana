@@ -11,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from ..atomic import write_private_text_atomically
 from ..compatibility import competing_transformers, transformer_has_precedence
 from ..config import ConfigError, load_config, require_private_path, validate_config
 from ..events import canonical_json, to_primitive, utc_now
@@ -290,19 +291,7 @@ def export_episode(runtime: PluginRuntime, episode_id: str, export_format: str) 
         text = "\n".join(lines) + "\n"
     else:
         raise ValueError("export format must be jsonl or markdown")
-    fd, name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
-    temporary = Path(name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.chmod(0o600)
-        os.replace(temporary, target)
-        target.chmod(0o600)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    write_private_text_atomically(target, text)
     return target
 
 

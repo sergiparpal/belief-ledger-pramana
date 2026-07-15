@@ -29,7 +29,7 @@ def build_tool_handlers(runtime: PluginRuntime) -> dict[str, Callable[..., str]]
                 },
             )
             content = _required_string(args, "content", 500)
-            kind = Pramana(_required_enum(args, "kind", {"anumana", "arthapatti", "upamana"}))
+            pramana = Pramana(_required_enum(args, "kind", {"anumana", "arthapatti", "upamana"}))
             premises = _string_list(args, "premise_ids", required=True, maximum=20)
             warrant = _required_string(args, "warrant", 1_000)
             qualifiers = _string_mapping(args.get("qualifiers", {}), "qualifiers")
@@ -43,7 +43,7 @@ def build_tool_handlers(runtime: PluginRuntime) -> dict[str, Callable[..., str]]
             service = runtime.service(**kwargs)
             belief, event_ids = service.record_inference(
                 content=content,
-                pramana=kind,
+                pramana=pramana,
                 premise_ids=premises,
                 warrant=warrant,
                 qualifiers=qualifiers,
@@ -70,12 +70,12 @@ def build_tool_handlers(runtime: PluginRuntime) -> dict[str, Callable[..., str]]
             _validate_keys(args, {"query", "statuses", "types", "limit", "expand_graph"})
             text = _required_string(args, "query", 2_000)
             statuses = tuple(Status(item) for item in _string_list(args, "statuses", maximum=4))
-            types = tuple(Pramana(item) for item in _string_list(args, "types", maximum=6))
+            pramanas = tuple(Pramana(item) for item in _string_list(args, "types", maximum=6))
             limit = _bounded_int(args.get("limit", 20), 1, 100, "limit")
             records = runtime.service(**kwargs).query(
                 text,
                 statuses=statuses,
-                pramanas=types,
+                pramanas=pramanas,
                 limit=limit,
                 expand_graph=bool(args.get("expand_graph", False)),
             )
