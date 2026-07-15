@@ -52,5 +52,10 @@ def _require_private_key_file(path: Path) -> None:
         # The runtime validates the state-root ACL after opening the store.
         return
     metadata = path.stat()
-    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
-        raise IntegrityKeyError("ledger integrity key must be owned by the current user and mode 0600")
+    getuid = getattr(os, "getuid", None)
+    if not callable(getuid):
+        raise IntegrityKeyError("unable to verify current-user ownership on this platform")
+    if metadata.st_uid != getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise IntegrityKeyError(
+            "ledger integrity key must be owned by the current user and mode 0600"
+        )

@@ -28,9 +28,7 @@ _BARE_ASSIGNMENT = re.compile(
     r"(?P<value>[^\s,;}\]]+)",
     re.IGNORECASE,
 )
-_AUTHORIZATION = re.compile(
-    r"(?im)^(?P<prefix>\s*(?:proxy-)?authorization\s*:\s*).+$"
-)
+_AUTHORIZATION = re.compile(r"(?im)^(?P<prefix>\s*(?:proxy-)?authorization\s*:\s*).+$")
 _COOKIE = re.compile(r"(?im)^(?P<prefix>\s*(?:set-cookie|cookie)\s*:\s*).+$")
 _URI_CREDENTIALS = re.compile(
     r"\b(?P<prefix>[a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@",
@@ -93,7 +91,9 @@ def redact_secrets(text: str) -> tuple[str, bool]:
     result = _COOKIE.sub(lambda match: f"{match.group('prefix')}[REDACTED]", result)
     result = _URI_CREDENTIALS.sub(lambda match: f"{match.group('prefix')}[REDACTED]@", result)
     result = _QUOTED_ASSIGNMENT.sub(
-        lambda match: f"{match.group('prefix')}{match.group('quote')}[REDACTED]{match.group('quote')}",
+        lambda match: (
+            f"{match.group('prefix')}{match.group('quote')}[REDACTED]{match.group('quote')}"
+        ),
         result,
     )
     result = _BARE_ASSIGNMENT.sub(lambda match: f"{match.group('prefix')}[REDACTED]", result)
@@ -127,22 +127,22 @@ def _redact_json_value(value: Any, *, sensitive: bool = False) -> tuple[Any, boo
     if sensitive:
         return "[REDACTED]", True
     if isinstance(value, dict):
-        result: dict[str, Any] = {}
+        object_result: dict[str, Any] = {}
         changed = False
         for key, item in value.items():
             item_redacted, item_changed = _redact_json_value(
                 item,
                 sensitive=bool(_SENSITIVE_FIELD.fullmatch(str(key))),
             )
-            result[str(key)] = item_redacted
+            object_result[str(key)] = item_redacted
             changed = changed or item_changed
-        return result, changed
+        return object_result, changed
     if isinstance(value, list):
-        result: list[Any] = []
+        list_result: list[Any] = []
         changed = False
         for item in value:
             item_redacted, item_changed = _redact_json_value(item)
-            result.append(item_redacted)
+            list_result.append(item_redacted)
             changed = changed or item_changed
-        return result, changed
+        return list_result, changed
     return value, False

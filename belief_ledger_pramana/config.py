@@ -433,8 +433,13 @@ def require_private_path(path: Path, label: str, *, directory: bool = False) -> 
     if os.name == "nt":
         _require_private_windows_acl(path, label)
         return
-    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
-        raise ConfigError(f"{label} must be owned by the current user and inaccessible to group/other")
+    getuid = getattr(os, "getuid", None)
+    if not callable(getuid):
+        raise ConfigError("unable to verify current-user ownership on this platform")
+    if metadata.st_uid != getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise ConfigError(
+            f"{label} must be owned by the current user and inaccessible to group/other"
+        )
 
 
 def _resolve_private_extension_paths(config: dict[str, Any], root: Path) -> None:

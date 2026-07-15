@@ -15,6 +15,8 @@ _MUTATION_WORDS = re.compile(
 _READ_WORDS = re.compile(
     r"\b(read|get|list|search|find|query|inspect|view|fetch|stat|show)\b", re.IGNORECASE
 )
+
+
 @dataclass(frozen=True, slots=True)
 class ActionPolicy:
     id: str

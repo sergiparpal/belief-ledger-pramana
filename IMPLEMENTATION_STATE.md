@@ -51,3 +51,22 @@ license selection was authorized or performed.
 
 The configured Linux 3.11–3.13, Windows/macOS smoke, exact-contract, and non-blocking Hermes-main
 canary jobs are in `.github/workflows/ci.yml`; remote CI was not invoked from this workspace.
+
+## CI remediation — 2026-07-15
+
+The two preceding GitHub Actions runs failed only at `ruff format --check`: seven files required
+deterministic formatting, so subsequent lint, type, and test steps never started. The formatter
+changes were applied, and the previously masked strict-mypy issues in the touched code were fixed
+without changing runtime behavior.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `ruff format --check .` / `ruff check .` | 0 / 0 | 94 files formatted; no lint findings. |
+| `mypy belief_ledger_pramana` | 0 | No issues in 59 source files. |
+| `pytest -m "not live_llm" --cov ...` | 0 | 160 passed, 1 expected Windows symlink skip; 91.04% line coverage. Run from a short temporary checkout because the repository's local Windows path exceeded `MAX_PATH` during copy/export tests. |
+| `python scripts/check_hermes_contract.py` | 0 | Installed Hermes 0.18.2 contract surface verified. |
+| `python -m build` / `twine check dist/*` | 0 / 0 | Wheel and sdist built; both metadata checks pass. |
+| `python scripts/inspect_artifacts.py <wheel> <sdist>` / `python scripts/smoke_install.py <wheel>` | 0 / 0 | Artifact contents verified; clean wheel install registered through Hermes 0.18.2. |
+
+Only Python 3.12 is installed locally. GitHub Actions must still execute the configured Python
+3.11 and 3.13 matrix after these changes are committed and pushed.

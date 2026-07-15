@@ -184,7 +184,9 @@ def test_hash_chain_rejects_recomputed_hash_without_integrity_key(tmp_path: Path
         store.verify_hash_chain()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="creating symbolic links requires elevated Windows policy")
+@pytest.mark.skipif(
+    os.name == "nt", reason="creating symbolic links requires elevated Windows policy"
+)
 def test_store_rejects_symbolic_link_integrity_key(tmp_path: Path) -> None:
     target = tmp_path / "key-target"
     target.write_bytes(b"x" * 32)

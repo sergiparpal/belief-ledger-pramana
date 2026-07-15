@@ -231,7 +231,9 @@ class LedgerStore:
                     )
                     event = replace(
                         event,
-                        auth_tag=compute_event_auth(self._integrity_key, event.id, event.event_hash),
+                        auth_tag=compute_event_auth(
+                            self._integrity_key, event.id, event.event_hash
+                        ),
                     )
                     connection.execute(
                         "INSERT INTO events(seq,id,episode_id,ts,kind,schema_version,aggregate_type,aggregate_id,correlation_json,causal_event_id,payload_json,previous_hash,event_hash) "

@@ -14,7 +14,10 @@ from belief_ledger_pramana.ingestion.tool import prepare_evidence, redact_secret
         ("OPENAI_API_KEY=sk-example-secret-value", "sk-example-secret-value"),
         ("Cookie: sessionid=secret-session-value", "secret-session-value"),
         ("Set-Cookie: session=secret-session-value; HttpOnly", "secret-session-value"),
-        ("-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----", "private-material"),
+        (
+            "-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----",
+            "private-material",
+        ),
         ("token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature", "eyJhbGciOiJIUzI1NiJ9"),
         ("Authorization: ApiKey top-secret-value", "top-secret-value"),
         ("postgresql://service:connection-secret@db.internal/ledger", "connection-secret"),
