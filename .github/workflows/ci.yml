@@ -53,7 +53,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13"
-      - run: uv run --with pip-audit pip-audit .
+      - run: uv sync --frozen
+      - run: uv run --with pip-audit pip-audit
 
   path-smoke:
     strategy:

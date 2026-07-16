@@ -57,6 +57,8 @@ def test_invalid_config_is_reloaded_after_it_is_repaired(
     root.mkdir()
     config_path = root / "config.yaml"
     config_path.write_text("mode: unsafe\n", encoding="utf-8")
+    if os.name != "nt":
+        config_path.chmod(0o600)
     runtime = PluginRuntime(fake_ctx, compatibility=compatibility, hermes_home=tmp_path)
     runtime.ensure_initialized()
 
