@@ -58,10 +58,10 @@ domain fact. Every terminal command string is treated as effectful because the p
 prove equivalent read-only semantics across host-selected shells.
 
 Recognised structured observational APIs can satisfy gate prerequisites without trusting free-form
-output: `stat_file`/`file_stat` must return a matching JSON path with `exists: true`,
-`list_directory`/`list_dir` must return that directory and an `entries` array, and environment
-identity APIs must return a non-empty environment identifier. These create target-bound direct
-observations; arbitrary terminal text never does.
+output: `stat_file`/`file_stat`/`stat_path` must return a matching JSON path with `exists: true`,
+`list_directory`/`list_dir`/`list_files` must return that directory and an `entries` array, and
+environment-identity APIs must return a non-empty environment identifier. These create
+target-bound direct observations; arbitrary terminal text never does.
 
 Final responses are linted under the episode stakes:
 
@@ -74,7 +74,10 @@ checks preconditions. Missing support returns a deterministic block with a safe 
 when explicit human confirmation is the only missing precondition, the audited Hermes
 approval gate may be requested.
 Textual confirmation is action-and-target-bound, expires quickly, and a negated statement never
-authorizes an action.
+authorizes an action. A qualifying confirmation is an affirmative, fresh user statement that
+names both the action and its target; generic consent such as "yes" is not sufficient. Unknown
+or ambiguous tools block in enforcing mode, and every terminal invocation is treated as
+effectful regardless of the command text.
 
 ## Tools and commands
 
@@ -114,12 +117,17 @@ On first successful use the packaged enforcing defaults are atomically copied to
 ```text
 $HERMES_HOME/belief-ledger-pramana/config.yaml
 $HERMES_HOME/belief-ledger-pramana/ledger.sqlite3
+$HERMES_HOME/belief-ledger-pramana/locks/ledger.integrity.key
 ```
 
 Set `BELIEF_LEDGER_PRAMANA_CONFIG` for an explicit private configuration file beneath that
 profile-local state directory. Unknown keys warn only in `observe`; they are errors in `enforce`.
 One turn uses one immutable config snapshot. See [config.example.yaml](config.example.yaml) and
 [docs/configuration.md](docs/configuration.md).
+
+The integrity key is a generated, private 256-bit secret used to authenticate the event history.
+It is not included in episode exports and must be retained with an encrypted database backup; a
+database restored without its matching key cannot authenticate its existing events.
 
 The default evidence mode stores a bounded, additionally redacted excerpt and a hash of the
 redacted post-Hermes result. `hash_only` cannot promote claims needing citation spans; `full`
@@ -139,8 +147,10 @@ hermes belief-ledger doctor
 hermes belief-ledger db replay
 ```
 
-Forward schema migration creates a private pre-migration backup when needed. To uninstall, first
-run `hermes plugins disable belief-ledger-pramana`, then use `hermes plugins remove
+Forward schema migration creates a private pre-migration database backup when needed. Include the
+matching `locks/ledger.integrity.key` whenever backing up or restoring the ledger; see
+[docs/operations.md](docs/operations.md). To uninstall, first run `hermes plugins disable
+belief-ledger-pramana`, then use `hermes plugins remove
 belief-ledger-pramana` for a Git/directory install or `python -m pip uninstall
 belief-ledger-pramana` for a wheel. Durable state is intentionally retained. Purging an episode
 or deleting the state directory is a separate destructive retention decision; see

@@ -4,11 +4,15 @@
 
 - Made terminal command strings fail closed; every terminal invocation now requires the
   effectful-action confirmation path.
+- Added target-bound direct observations for recognised structured file and environment APIs.
+  These can satisfy matching gate prerequisites; free-form tool and terminal output cannot.
 - Added recursive structured secret redaction for credentials, headers, cookies, private keys,
   JWTs, common provider tokens, and credential-bearing URIs before evidence or gate data persist.
 - Added schema migration 3 with HMAC-SHA-256 event authentication, a private 256-bit local key,
   and replay-time authentication checks. Restricted ledger state, configuration, and extensions
   to private profile-local paths with POSIX and Windows ACL validation.
+- Added schema migrations 4 and 5 for hot-path projection indexes, including component-verdict
+  lookup, without changing the append-only event model.
 - Hardened terminal classification, action-bound confirmation, request-bound context injection,
   and execution-output provenance.
 - Made freshness, configuration controls, retraction acknowledgement, and linter citation

@@ -15,7 +15,7 @@ a claim of external scientific validity.
 | R5 monitor is content | `models.ComponentVerdict`, `llm/client.py`, `_component_verdict_drafts` | extractor/linter/NLI/auditor component-inference tests |
 | R6 independent testimony | `ingestion/provenance.py`, `verification/scheduler.py` | provenance unit/evaluation fixtures |
 | R7 qualifiers precede contradiction | `engine/qualifiers.py`, `engine/contradiction.py` | `tests/unit/test_qualifiers_contradiction.py` |
-| R8 append-only event sourcing | `events.py`, `store.py`, immutable SQL triggers | store immutability/hash/replay tests |
+| R8 append-only authenticated event sourcing | `events.py`, `store.py`, immutable SQL triggers, separate event-auth table | store immutability/hash/authentication/replay tests |
 
 ## Specification sections
 

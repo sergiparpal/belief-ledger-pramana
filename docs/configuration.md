@@ -30,3 +30,9 @@ regular files below the profile-local plugin state directory. Relative database 
 paths resolve there; escaping that directory, symbolic links, files larger than 1 MB, or paths
 with group/other POSIX access are rejected. On Windows, the plugin also rejects ACLs granting
 access to broad principals such as `Users`, `Authenticated Users`, or `Everyone`.
+
+The state directory also contains `locks/ledger.integrity.key`. This generated 256-bit key is not
+a configurable setting: it authenticates the event log separately from SQLite and must remain a
+private regular file. Retain its matching value in an encrypted backup with the ledger database;
+restoring the database with a new or different key causes event-authentication verification to
+fail. See [operations.md](operations.md) for the backup procedure.
