@@ -39,6 +39,77 @@ class StatePaths:
 
 
 @dataclass(frozen=True, slots=True)
+class StorageSettings:
+    evidence_mode: str
+    max_excerpt_chars: int
+    redact_secrets: bool
+    busy_timeout_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class ContextSettings:
+    max_chars: int
+    max_beliefs: int
+    max_graph_depth: int
+    relevance: str
+
+
+@dataclass(frozen=True, slots=True)
+class IngestionSettings:
+    lazy_claim_extraction: bool
+    max_claims_per_evidence: int
+    max_unpromoted_per_request: int
+    near_duplicate_threshold: float
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationSettings:
+    max_llm_calls_per_turn: int
+    max_llm_calls_per_episode: int
+    max_input_tokens_per_episode: int
+    max_output_tokens_per_episode: int
+    structured_timeout_seconds: int
+    critical_human_confirmation: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LintSettings:
+    low: str
+    med: str
+    high: str
+    critical: str
+    max_rewrite_attempts: int
+    pending_marker: str
+
+
+@dataclass(frozen=True, slots=True)
+class GatingSettings:
+    enabled: bool
+    unknown_tool_policy: str
+    fail_closed_at: Stakes
+    allow_human_approval: bool
+    confirmation_ttl_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSettings:
+    """Typed, immutable configuration consumed at application boundaries.
+
+    The raw snapshot remains available for pure domain policy functions during
+    the migration, but adapters and use cases should consume these sections.
+    """
+
+    mode: str
+    default_stakes: Stakes
+    storage: StorageSettings
+    context: ContextSettings
+    ingestion: IngestionSettings
+    verification: VerificationSettings
+    lint: LintSettings
+    gating: GatingSettings
+
+
+@dataclass(frozen=True, slots=True)
 class ConfigSnapshot:
     data: dict[str, Any]
     source: Path | None
@@ -59,6 +130,72 @@ class ConfigSnapshot:
         if not isinstance(section, dict):
             raise ConfigError(f"configuration section {name!r} is not a mapping")
         return copy.deepcopy(section)
+
+    @property
+    def settings(self) -> RuntimeSettings:
+        """Return the typed application view of this validated snapshot."""
+
+        storage = self.data["storage"]
+        context = self.data["context"]
+        ingestion = self.data["ingestion"]
+        verification = self.data["verification"]
+        lint = self.data["lint"]
+        gating = self.data["gating"]
+        return RuntimeSettings(
+            mode=self.mode,
+            default_stakes=self.default_stakes,
+            storage=StorageSettings(
+                evidence_mode=str(storage["evidence_mode"]),
+                max_excerpt_chars=int(storage["max_excerpt_chars"]),
+                redact_secrets=bool(storage["redact_secrets"]),
+                busy_timeout_ms=int(storage["busy_timeout_ms"]),
+            ),
+            context=ContextSettings(
+                max_chars=int(context["max_chars"]),
+                max_beliefs=int(context["max_beliefs"]),
+                max_graph_depth=int(context["max_graph_depth"]),
+                relevance=str(context["relevance"]),
+            ),
+            ingestion=IngestionSettings(
+                lazy_claim_extraction=bool(ingestion["lazy_claim_extraction"]),
+                max_claims_per_evidence=int(ingestion["max_claims_per_evidence"]),
+                max_unpromoted_per_request=int(ingestion["max_unpromoted_per_request"]),
+                near_duplicate_threshold=float(ingestion["near_duplicate_threshold"]),
+            ),
+            verification=VerificationSettings(
+                max_llm_calls_per_turn=int(verification["max_llm_calls_per_turn"]),
+                max_llm_calls_per_episode=int(verification["max_llm_calls_per_episode"]),
+                max_input_tokens_per_episode=int(verification["max_input_tokens_per_episode"]),
+                max_output_tokens_per_episode=int(verification["max_output_tokens_per_episode"]),
+                structured_timeout_seconds=int(verification["structured_timeout_seconds"]),
+                critical_human_confirmation=bool(verification["critical_human_confirmation"]),
+            ),
+            lint=LintSettings(
+                low=str(lint["low"]),
+                med=str(lint["med"]),
+                high=str(lint["high"]),
+                critical=str(lint["critical"]),
+                max_rewrite_attempts=int(lint["max_rewrite_attempts"]),
+                pending_marker=str(lint["pending_marker"]),
+            ),
+            gating=GatingSettings(
+                enabled=bool(gating["enabled"]),
+                unknown_tool_policy=str(gating["unknown_tool_policy"]),
+                fail_closed_at=Stakes(str(gating["fail_closed_at"])),
+                allow_human_approval=bool(gating["allow_human_approval"]),
+                confirmation_ttl_seconds=int(gating["confirmation_ttl_seconds"]),
+            ),
+        )
+
+
+def settings_from_data(data: dict[str, Any]) -> RuntimeSettings:
+    """Build typed settings for a validated legacy configuration mapping.
+
+    This compatibility bridge lets callers migrate independently while new
+    composition roots pass :class:`ConfigSnapshot` directly.
+    """
+
+    return ConfigSnapshot(data, None, (), "", None).settings
 
 
 def get_hermes_home() -> Path:

@@ -6,11 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from .config import ConfigSnapshot
 from .engine.trust import TrustDecision, determine_admission
-from .events import to_primitive
+from .events import EventDraft, to_primitive
 from .ids import new_id
 from .models import Belief, IngestionSupport, Source, Stakes, Status
-from .store import EventDraft
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +25,7 @@ class AdmissionResult:
 class BeliefAdmissionService:
     """Apply trust admission consistently after a caller has validated a belief."""
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: ConfigSnapshot) -> None:
         self._config = config
 
     def admit(
@@ -43,7 +43,7 @@ class BeliefAdmissionService:
         trust = determine_admission(
             initial,
             source,
-            self._config,
+            self._config.data,
             episode_stakes=episode_stakes,
         )
         admitted_status = status_override or trust.status

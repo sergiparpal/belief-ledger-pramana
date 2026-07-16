@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
+from ..config import ConfigSnapshot, settings_from_data
 from ..engine.trust import determine_admission
-from ..events import canonical_json, content_hash
+from ..events import EventDraft, canonical_json, content_hash
 from ..ingestion.tool import redact_secrets
 from ..models import GateDecision, GateOutcome, Stakes, max_stakes
-from ..store import EventDraft, LedgerStore
+from ..ports import ActionGateReader, EventWriter
 from .classify import ActionPolicyRegistry
 from .preconditions import resolve_preconditions
 
@@ -17,12 +18,20 @@ from .preconditions import resolve_preconditions
 class ActionGate:
     def __init__(
         self,
-        store: LedgerStore,
-        config: dict[str, Any],
+        reader: ActionGateReader,
+        config: ConfigSnapshot | dict[str, Any],
         policies: ActionPolicyRegistry,
+        *,
+        writer: EventWriter | None = None,
     ) -> None:
-        self.store = store
-        self.config = config
+        self._reader = reader
+        # Legacy callers pass one LedgerStore that structurally satisfies both
+        # ports. New composition roots provide a writer explicitly.
+        self._writer = writer if writer is not None else cast(EventWriter, reader)
+        self.config = config.data if isinstance(config, ConfigSnapshot) else config
+        self.settings = (
+            config.settings if isinstance(config, ConfigSnapshot) else settings_from_data(config)
+        )
         self.policies = policies
 
     def evaluate(
@@ -34,7 +43,7 @@ class ActionGate:
         description: str = "",
         action_stakes: Stakes | None = None,
     ) -> GateDecision:
-        episode = self.store.get_episode(episode_id)
+        episode = self._reader.get_episode(episode_id)
         if episode is None:
             return GateDecision(
                 GateOutcome.BLOCK,
@@ -44,18 +53,18 @@ class ActionGate:
                 ("ledger episode",),
                 "Retry after session initialization",
             )
-        enforce = self.config["mode"] == "enforce"
+        enforce = self.settings.mode == "enforce"
         classification = self.policies.classify(
             tool_name,
             args,
             description=description,
             enforce=enforce,
-            unknown_tool_policy=str(self.config["gating"]["unknown_tool_policy"]),
+            unknown_tool_policy=self.settings.gating.unknown_tool_policy,
         )
         stakes = max_stakes(
             episode.default_stakes, classification.policy.base_stakes, action_stakes or Stakes.LOW
         )
-        if not bool(self.config["gating"]["enabled"]):
+        if not self.settings.gating.enabled:
             decision = GateDecision(
                 GateOutcome.ALLOW, "GATE_DISABLED", "Gate disabled by operator", stakes
             )
@@ -80,13 +89,13 @@ class ActionGate:
             self._record(episode_id, tool_name, args, decision, classification.reason)
             return decision
 
-        beliefs = self.store.list_beliefs(episode_id)
-        sources = {source.id: source for source in self.store.list_sources(episode_id)}
-        conflicts = self.store.list_conflicts(episode_id)
+        beliefs = self._reader.list_beliefs(episode_id)
+        sources = {source.id: source for source in self._reader.list_sources(episode_id)}
+        conflicts = self._reader.list_conflicts(episode_id)
         preconditions = classification.policy.preconditions
         if (
             stakes is Stakes.CRITICAL
-            and bool(self.config["verification"].get("critical_human_confirmation", False))
+            and self.settings.verification.critical_human_confirmation
             and "explicit_user_confirmation" not in preconditions
         ):
             preconditions = (*preconditions, "explicit_user_confirmation")
@@ -99,7 +108,7 @@ class ActionGate:
             sources=sources,
             conflicts=conflicts,
             minimum_integrity=classification.policy.minimum_priority,
-            confirmation_ttl_seconds=int(self.config["gating"]["confirmation_ttl_seconds"]),
+            confirmation_ttl_seconds=self.settings.gating.confirmation_ttl_seconds,
         )
         belief_map = {belief.id: belief for belief in beliefs}
         elevated_checks = []
@@ -132,7 +141,7 @@ class ActionGate:
             )
         elif (
             classification.policy.allow_human_approval
-            and bool(self.config["gating"]["allow_human_approval"])
+            and self.settings.gating.allow_human_approval
             and len(missing_preconditions) == 1
             and next(check for check in checks if not check.satisfied).name
             == "explicit_user_confirmation"
@@ -179,7 +188,7 @@ class ActionGate:
                 "classification": classification_reason,
             },
         }
-        self.store.append_events(
+        self._writer.append_events(
             episode_id,
             [EventDraft("GATE_DECIDED", "gate_decision", tool_name, payload)],
         )

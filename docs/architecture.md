@@ -4,14 +4,19 @@ The plugin has a strict host boundary and a deterministic domain core.
 
 ```text
 Hermes hooks/middleware
-  -> PluginRuntime episode resolver + immutable turn config
-  -> EpisodeService
-       -> ingestion adapters -> event store -> projections
-       -> validity/trust -> justification graph -> fixed-point defeat
-       -> verification scheduler / bounded ctx.llm adapter
-       -> selection/rendering -> authenticated provider-shape injector
-       -> output linter / action gate
+  -> PluginRuntime episode registry + immutable turn config
+  -> application use cases
+       -> ingestion adapters / validity-trust / justification graph / fixed-point defeat
+       -> verification scheduler / context compiler / output linter / action gate / ledger queries
+  -> ports (ledger reader, event writer, LLM budget ledger, host LLM)
+  -> infrastructure adapters (SQLite projections, Hermes LLM, provider-shape injector)
 ```
+
+`PluginRuntime` remains a compatibility facade for Hermes callbacks while use cases receive
+small, client-specific ports. `LedgerStore` remains the public SQLite facade, but composition
+uses separate reader, atomic event-writer, LLM-budget, and maintenance adapters. This preserves
+the append-and-project transaction invariant while allowing application services to be tested or
+retargeted without a SQLite dependency.
 
 SQLite events are authoritative; all tables other than `events` and migration metadata are
 rebuildable projections. A batch obtains `BEGIN IMMEDIATE`, appends canonical events, advances

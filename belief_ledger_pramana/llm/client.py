@@ -8,10 +8,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from ..config import ConfigSnapshot
+from ..errors import LlmReservationError
+from ..events import EventDraft, to_primitive
 from ..ids import new_id
 from ..ingestion.tool import redacted_content_hash
 from ..models import ComponentVerdict, LlmUsage
-from ..store import LedgerStore, LlmReservationError
+from ..ports import HostLlmFacade, LlmBudgetLedger
 
 _IN_COMPONENT_CALL: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "belief_ledger_component_call", default=False
@@ -41,13 +44,14 @@ class StructuredCallResult:
 class HostLlmClient:
     def __init__(
         self,
-        facade_getter: Callable[[], Any],
-        store: LedgerStore,
-        config: dict[str, Any],
+        facade_getter: Callable[[], HostLlmFacade],
+        store: LlmBudgetLedger,
+        config: ConfigSnapshot,
     ) -> None:
         self._facade_getter = facade_getter
         self._store = store
         self._config = config
+        self._settings = config.settings
 
     def complete_structured(
         self,
@@ -66,7 +70,7 @@ class HostLlmClient:
         episode = self._store.get_episode(episode_id)
         if episode is None:
             raise LlmComponentError("episode does not exist")
-        limits = self._config["verification"]
+        limits = self._settings.verification
         # Reserve before invoking the host model.  Checking counters alone is
         # racy when multiple hooks run at once or another process shares the
         # ledger database.
@@ -80,10 +84,10 @@ class HostLlmClient:
                 episode.current_turn,
                 input_tokens=estimated_input,
                 output_tokens=max_tokens,
-                max_calls_turn=int(limits["max_llm_calls_per_turn"]),
-                max_calls_episode=int(limits["max_llm_calls_per_episode"]),
-                max_input_tokens_episode=int(limits["max_input_tokens_per_episode"]),
-                max_output_tokens_episode=int(limits["max_output_tokens_per_episode"]),
+                max_calls_turn=limits.max_llm_calls_per_turn,
+                max_calls_episode=limits.max_llm_calls_per_episode,
+                max_input_tokens_episode=limits.max_input_tokens_per_episode,
+                max_output_tokens_episode=limits.max_output_tokens_per_episode,
             )
         except LlmReservationError as exc:
             raise LlmBudgetError(str(exc)) from exc
@@ -108,7 +112,7 @@ class HostLlmClient:
                 schema_name=schema_name,
                 temperature=0.0,
                 max_tokens=max_tokens,
-                timeout=float(limits["structured_timeout_seconds"]),
+                timeout=float(limits.structured_timeout_seconds),
                 purpose=purpose,
             )
             provider = str(getattr(result, "provider", ""))
@@ -178,7 +182,4 @@ class HostLlmClient:
 
 
 def _record_draft(kind: str, aggregate_type: str, aggregate_id: str, record: Any) -> Any:
-    from ..events import to_primitive
-    from ..store import EventDraft
-
     return EventDraft(kind, aggregate_type, aggregate_id, {"record": to_primitive(record)})

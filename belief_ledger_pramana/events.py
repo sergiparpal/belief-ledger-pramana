@@ -6,12 +6,29 @@ import dataclasses
 import hashlib
 import hmac
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
 from .ids import new_id
 from .models import Event
+
+
+@dataclass(frozen=True, slots=True)
+class EventDraft:
+    """A storage-neutral description of an event to append atomically.
+
+    Application services create drafts without knowing how a particular event
+    store sequences, authenticates, or projects them.  The SQLite store
+    remains one adapter that accepts this contract.
+    """
+
+    kind: str
+    aggregate_type: str
+    aggregate_id: str
+    payload: dict[str, Any]
+    causal_event_id: str | None = None
 
 
 def utc_now() -> datetime:

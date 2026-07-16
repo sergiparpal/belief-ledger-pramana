@@ -12,7 +12,6 @@ from ..ingestion.tool import redacted_content_hash
 from ..lint.enforce import linter_failure_response
 from ..models import CompatibilityMode, GateOutcome, Health, Stakes, max_stakes
 from ..runtime import PluginRuntime
-from ..store import EventDraft
 
 logger = logging.getLogger(__name__)
 
@@ -207,25 +206,19 @@ class HermesHooks:
     def on_session_start(self, **kwargs: Any) -> None:
         try:
             service = self.runtime.service(**kwargs)
-            service.store.append_events(
+            service.lifecycle.record(
                 service.episode_id,
-                [
-                    EventDraft(
-                        "SESSION_STARTED",
-                        "episode",
-                        service.episode_id,
-                        {"at": utc_now()},
-                    )
-                ],
+                "SESSION_STARTED",
+                "episode",
+                service.episode_id,
+                {"at": utc_now()},
             )
         except Exception:
             logger.exception("belief ledger session start failed")
 
     def on_session_end(self, **kwargs: Any) -> None:
         try:
-            self.runtime.ensure_initialized()
-            if self.runtime.store:
-                self.runtime.store.checkpoint()
+            self.runtime.checkpoint()
         except Exception:
             logger.exception("belief ledger checkpoint failed")
 
@@ -239,16 +232,12 @@ class HermesHooks:
     def on_session_reset(self, **kwargs: Any) -> None:
         try:
             service = self.runtime.service(**kwargs)
-            service.store.append_events(
+            service.lifecycle.record(
                 service.episode_id,
-                [
-                    EventDraft(
-                        "SESSION_RESET_STARTED",
-                        "episode",
-                        service.episode_id,
-                        {"at": utc_now(), "reason": str(kwargs.get("reason") or "reset")},
-                    )
-                ],
+                "SESSION_RESET_STARTED",
+                "episode",
+                service.episode_id,
+                {"at": utc_now(), "reason": str(kwargs.get("reason") or "reset")},
             )
             self.runtime.finalize(service.episode_id, state="reset", **kwargs)
         except Exception:
@@ -259,21 +248,17 @@ class HermesHooks:
             parent_kwargs = dict(kwargs)
             parent_kwargs["session_id"] = kwargs.get("parent_session_id")
             service = self.runtime.service(**parent_kwargs)
-            service.store.append_events(
+            service.lifecycle.record(
                 service.episode_id,
-                [
-                    EventDraft(
-                        "SUBAGENT_STARTED",
-                        "subagent",
-                        str(kwargs.get("child_session_id") or redacted_content_hash(str(kwargs))),
-                        {
-                            "parent_turn_id": str(kwargs.get("parent_turn_id") or ""),
-                            "child_session_id": str(kwargs.get("child_session_id") or ""),
-                            "child_role": str(kwargs.get("child_role") or ""),
-                            "goal_hash": redacted_content_hash(str(kwargs.get("child_goal") or "")),
-                        },
-                    )
-                ],
+                "SUBAGENT_STARTED",
+                "subagent",
+                str(kwargs.get("child_session_id") or redacted_content_hash(str(kwargs))),
+                {
+                    "parent_turn_id": str(kwargs.get("parent_turn_id") or ""),
+                    "child_session_id": str(kwargs.get("child_session_id") or ""),
+                    "child_role": str(kwargs.get("child_role") or ""),
+                    "goal_hash": redacted_content_hash(str(kwargs.get("child_goal") or "")),
+                },
             )
         except Exception:
             logger.exception("belief ledger subagent_start failed")
@@ -312,29 +297,25 @@ class HermesHooks:
                     pass
             service = self.runtime.service(**kwargs)
             choice = str(kwargs.get("choice") or "")
-            service.store.append_events(
+            service.lifecycle.record(
                 service.episode_id,
-                [
-                    EventDraft(
-                        "APPROVAL_RESPONSE_RECORDED",
-                        "approval",
-                        redacted_content_hash(
-                            canonical_json(
-                                [
-                                    str(kwargs.get("command") or ""),
-                                    str(kwargs.get("pattern_key") or ""),
-                                    choice,
-                                ]
-                            )
-                        ),
-                        {
-                            "choice": choice,
-                            "surface": str(kwargs.get("surface") or ""),
-                            "command_hash": redacted_content_hash(str(kwargs.get("command") or "")),
-                            "confirmed": choice in {"once", "session", "always"},
-                        },
+                "APPROVAL_RESPONSE_RECORDED",
+                "approval",
+                redacted_content_hash(
+                    canonical_json(
+                        [
+                            str(kwargs.get("command") or ""),
+                            str(kwargs.get("pattern_key") or ""),
+                            choice,
+                        ]
                     )
-                ],
+                ),
+                {
+                    "choice": choice,
+                    "surface": str(kwargs.get("surface") or ""),
+                    "command_hash": redacted_content_hash(str(kwargs.get("command") or "")),
+                    "confirmed": choice in {"once", "session", "always"},
+                },
             )
         except Exception:
             logger.exception("belief ledger approval response recording failed")

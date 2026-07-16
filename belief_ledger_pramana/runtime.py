@@ -20,6 +20,11 @@ from typing import Any
 import yaml
 
 from .admission import BeliefAdmissionService
+from .application.actions import ActionEvaluationUseCase
+from .application.context import ContextCompilationUseCase
+from .application.lifecycle import LifecycleEventRecorder
+from .application.queries import LedgerQueryService
+from .application.verification import VerificationScheduler
 from .compatibility import CompatibilityReport, inspect_host
 from .config import (
     ConfigError,
@@ -33,20 +38,24 @@ from .config import (
     state_paths,
 )
 from .context.inject import HermesRequestInjector
-from .context.render import RenderedContext, render_context
-from .context.select import select_beliefs
+from .context.render import RenderedContext
 from .engine.contradiction import candidate_pair, candidate_tokens, classify_deterministically
 from .engine.defeat import RelabelResult
 from .engine.defeat import relabel as engine_relabel
 from .engine.graph import cycle_path
-from .engine.priority import priority_trace
 from .engine.qualifiers import canonicalize_qualifiers
 from .engine.trust import TrustDecision
 from .engine.validity import normalize_content, validate_belief
-from .events import canonical_json, content_hash, to_primitive, utc_now
+from .events import EventDraft, canonical_json, content_hash, to_primitive, utc_now
 from .gate.classify import ActionPolicyRegistry
 from .gate.decision import ActionGate
 from .ids import new_id
+from .infrastructure.sqlite_ledger import (
+    SqliteEventWriter,
+    SqliteLedgerMaintenance,
+    SqliteLedgerReader,
+    SqliteLlmBudgetLedger,
+)
 from .ingestion.absence import assess_negative_search
 from .ingestion.adapters import AdaptedToolResult, SourceDescriptor, ToolAdapterRegistry
 from .ingestion.claims import (
@@ -108,9 +117,8 @@ from .models import (
     VerificationMethod,
     VerificationTask,
 )
-from .store import EventDraft, LedgerStore
+from .store import LedgerStore
 from .verification.chain_audit import local_asiddha, validate_chain_audit
-from .verification.scheduler import VerificationScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +202,11 @@ class PluginRuntime:
         self._config: ConfigSnapshot | None = None
         self.paths: StatePaths | None = None
         self.store: LedgerStore | None = None
+        self.ledger_reader: SqliteLedgerReader | None = None
+        self.event_writer: SqliteEventWriter | None = None
+        self.llm_budget_ledger: SqliteLlmBudgetLedger | None = None
+        self.maintenance: SqliteLedgerMaintenance | None = None
+        self.lifecycle: LifecycleEventRecorder | None = None
         self.health = Health.HEALTHY
         self.health_reasons: list[str] = []
         self.transform_callback: Any | None = None
@@ -230,7 +243,7 @@ class PluginRuntime:
             try:
                 store = LedgerStore(
                     paths.database,
-                    busy_timeout_ms=int(snapshot.data["storage"]["busy_timeout_ms"]),
+                    busy_timeout_ms=snapshot.settings.storage.busy_timeout_ms,
                     integrity_key_path=paths.integrity_key,
                 )
                 store.verify_hash_chain()
@@ -243,6 +256,11 @@ class PluginRuntime:
             self._config = snapshot
             self.paths = paths
             self.store = store
+            self.ledger_reader = SqliteLedgerReader(store)
+            self.event_writer = SqliteEventWriter(store)
+            self.llm_budget_ledger = SqliteLlmBudgetLedger(store)
+            self.maintenance = SqliteLedgerMaintenance(store)
+            self.lifecycle = LifecycleEventRecorder(self.event_writer)
             if self.compatibility.mode is not CompatibilityMode.FULL:
                 self.health = Health.DEGRADED
                 self.health_reasons.extend(self.compatibility.errors or self.compatibility.warnings)
@@ -255,6 +273,13 @@ class PluginRuntime:
 
     def operational(self) -> bool:
         return self.compatibility.mode in {CompatibilityMode.FULL, CompatibilityMode.HOOK_CONTEXT}
+
+    def checkpoint(self) -> None:
+        """Run storage maintenance through the runtime composition boundary."""
+
+        self.ensure_initialized()
+        assert self.maintenance is not None
+        self.maintenance.checkpoint()
 
     @staticmethod
     def in_running_event_loop() -> bool:
@@ -317,6 +342,10 @@ class PluginRuntime:
     def service_for_id(self, episode_id: str) -> EpisodeService:
         self.ensure_initialized()
         assert self.store is not None
+        assert self.lifecycle is not None
+        assert self.ledger_reader is not None
+        assert self.event_writer is not None
+        assert self.llm_budget_ledger is not None
         with self._registry_lock:
             snapshot = self._turn_configs.get(episode_id, self.config)
         self._current_episode.set(episode_id)
@@ -509,24 +538,17 @@ class PluginRuntime:
     def finalize(self, episode_id: str, *, state: str = "finalized", **kwargs: Any) -> None:
         self.ensure_initialized()
         assert self.store is not None
+        assert self.lifecycle is not None
         episode = self.store.get_episode(episode_id)
         if episode is None:
             raise EpisodeResolutionError("cannot finalize an unknown ledger episode")
         archived_key = f"closed:{episode.id}:{episode.key}"
-        self.store.append_events(
+        self.lifecycle.record(
             episode_id,
-            [
-                EventDraft(
-                    "EPISODE_FINALIZED" if state == "finalized" else "EPISODE_RESET",
-                    "episode",
-                    episode_id,
-                    {
-                        "state": state,
-                        "updated_at": utc_now(),
-                        "episode_key": archived_key,
-                    },
-                )
-            ],
+            "EPISODE_FINALIZED" if state == "finalized" else "EPISODE_RESET",
+            "episode",
+            episode_id,
+            {"state": state, "updated_at": utc_now(), "episode_key": archived_key},
             correlation=_correlation(kwargs),
         )
         with self._registry_lock:
@@ -575,16 +597,34 @@ class EpisodeService:
         self.runtime = runtime
         self.episode_id = episode_id
         self.store = store
+        if runtime.ledger_reader is None or runtime.event_writer is None:
+            raise RuntimeUnavailable("ledger ports are unavailable")
+        if runtime.llm_budget_ledger is None:
+            raise RuntimeUnavailable("LLM budget ledger is unavailable")
+        if runtime.lifecycle is None:
+            raise RuntimeUnavailable("lifecycle event recorder is unavailable")
+        self.lifecycle = runtime.lifecycle
         self.snapshot = config
+        self.settings = config.settings
         self.config = config.data
-        self.scheduler = VerificationScheduler(store, self.config)
-        self.gate = ActionGate(
-            store,
-            self.config,
-            ActionPolicyRegistry(_action_policy_data(self.config)),
+        self.scheduler = VerificationScheduler(
+            runtime.ledger_reader, config, writer=runtime.event_writer
         )
-        self.admission = BeliefAdmissionService(self.config)
-        self.llm = HostLlmClient(lambda: runtime.ctx.llm, store, self.config)
+        self.gate = ActionGate(
+            runtime.ledger_reader,
+            config,
+            ActionPolicyRegistry(_action_policy_data(self.config)),
+            writer=runtime.event_writer,
+        )
+        self.actions = ActionEvaluationUseCase(self.gate)
+        self.queries = LedgerQueryService(runtime.ledger_reader, self.config)
+        self.context = ContextCompilationUseCase(
+            runtime.ledger_reader,
+            runtime.event_writer,
+            config,
+        )
+        self.admission = BeliefAdmissionService(config)
+        self.llm = HostLlmClient(lambda: runtime.ctx.llm, runtime.llm_budget_ledger, config)
 
     @property
     def episode(self) -> Episode:
@@ -1617,94 +1657,34 @@ class EpisodeService:
         ascii_only: bool = False,
         defer_component_work: bool = False,
     ) -> RenderedContext:
-        effective_query = "\n".join(
-            item
-            for item in (
-                query or self.runtime.query_for(self.episode_id),
-                pending_tool_intent,
-                self.runtime.recent_tool_result(self.episode_id),
-            )
-            if item
-        )
-        if defer_component_work:
-            self.runtime.schedule_context_maintenance(self.episode_id, effective_query)
-        else:
-            self.promote_relevant(effective_query)
-            self._run_one_relevant_chain_audit(effective_query)
-        self.relabel()
-        beliefs = self.store.list_beliefs(self.episode_id)
-        sources = {source.id: source for source in self.store.list_sources(self.episode_id)}
-        selection = select_beliefs(
-            beliefs,
-            sources,
-            query=effective_query,
-            conflicts=self.store.list_conflicts(self.episode_id),
-            retractions=self.store.list_retractions(self.episode_id),
-            retrieval_ids=self.store.fts_belief_ids(
-                self.episode_id,
-                effective_query,
-                limit=int(self.config["context"]["max_beliefs"]) * 4,
-            )
-            if self.config["context"].get("relevance") == "fts5"
-            else (),
-            config=self.config,
-        )
-        resolved_request_id = request_id or new_id("event")
-        rendered = render_context(
-            selection,
-            sources,
-            config=self.config,
-            health=(
-                Health.DEGRADED
-                if self.runtime.injection_failed(self.episode_id)
-                else self.runtime.health
-            ),
-            request_id=resolved_request_id,
-            ascii_only=ascii_only,
-        )
-        now = utc_now()
-        event = self.store.append_events(
+        return self.context.compile(
             self.episode_id,
-            [
-                EventDraft(
-                    "CONTEXT_COMPILED",
-                    "episode",
-                    self.episode_id,
-                    {
-                        "request_id": resolved_request_id,
-                        "config_digest": self.snapshot.digest,
-                        "query_hash": _safe_text_hash(effective_query),
-                        "truncated": rendered.truncated,
-                        "rendered": [
-                            {
-                                "belief_id": belief_id,
-                                "request_id": resolved_request_id,
-                                "turn_number": self.episode.current_turn,
-                                "rendered_at": now,
-                            }
-                            for belief_id in rendered.belief_ids
-                        ],
-                    },
-                )
-            ],
+            self.episode,
+            query=query or self.runtime.query_for(self.episode_id),
+            pending_tool_intent=pending_tool_intent,
+            recent_tool_result=self.runtime.recent_tool_result(self.episode_id),
+            request_id=request_id,
+            ascii_only=ascii_only,
+            defer_component_work=defer_component_work,
+            health=self.runtime.health,
+            injection_failed=self.runtime.injection_failed(self.episode_id),
+            defer_maintenance=lambda effective_query: self.runtime.schedule_context_maintenance(
+                self.episode_id, effective_query
+            ),
+            promote_relevant=self.promote_relevant,
+            run_chain_audit=self._run_one_relevant_chain_audit,
+            relabel=self.relabel,
         )
-        del event
-        return rendered
 
     def run_deferred_context_maintenance(self, query: str) -> None:
-        """Complete optional model-assisted work outside the host callback loop."""
-
-        # Do not retain the episode lock while an external model call is in
-        # flight: a foreground context render must remain able to take its
-        # short relabel transaction. Mutations below retain their own existing
-        # locks and append-time idempotency guards.
-        self._detect_deterministic_rebuts()
-        self.relabel()
-        if self._complete_passive_tasks():
-            self.relabel()
-        self.promote_relevant(query)
-        self._run_one_relevant_chain_audit(query)
-        self.relabel()
+        self.context.run_deferred_maintenance(
+            query,
+            detect_deterministic_rebuts=self._detect_deterministic_rebuts,
+            relabel=self.relabel,
+            complete_passive_tasks=self._complete_passive_tasks,
+            promote_relevant=self.promote_relevant,
+            run_chain_audit=self._run_one_relevant_chain_audit,
+        )
 
     def lint_and_enforce(self, response: str, **kwargs: Any) -> str | None:
         stakes = self.episode.default_stakes
@@ -2084,7 +2064,7 @@ class EpisodeService:
         # effectful action.  Relabel before every gate decision rather than only
         # when a context happens to be rendered.
         self.relabel()
-        return self.gate.evaluate(self.episode_id, tool_name, args, description=description)
+        return self.actions.execute(self.episode_id, tool_name, args, description=description)
 
     def query(
         self,
@@ -2095,87 +2075,20 @@ class EpisodeService:
         limit: int = 20,
         expand_graph: bool = False,
     ) -> list[dict[str, Any]]:
-        wanted = set(normalize_content(text).split())
-        beliefs = self.store.list_beliefs(
+        return self.queries.query(
             self.episode_id,
-            statuses=statuses or None,
-            pramanas=pramanas or None,
-            limit=5_000,
+            text,
+            statuses=statuses,
+            pramanas=pramanas,
+            limit=limit,
+            expand_graph=expand_graph,
         )
-        scored = []
-        for belief in beliefs:
-            score = len(wanted & set(belief.normalized_content.split()))
-            if not wanted or score:
-                scored.append((score, belief))
-        scored.sort(key=lambda item: (-item[0], item[1].id))
-        return [
-            {
-                "id": belief.id,
-                "content": belief.content,
-                "pramana": belief.pramana.value,
-                "status": belief.status.value,
-                "source_id": belief.source_id,
-                "qualifiers": belief.qualifiers,
-                "premises": [
-                    premise
-                    for justification in belief.justifications
-                    for premise in justification.premises
-                ]
-                if expand_graph
-                else [],
-            }
-            for _, belief in scored[: max(1, min(limit, 100))]
-        ]
 
     def explain(self, belief_id: str, *, depth: int = 4) -> dict[str, Any]:
-        belief = self.store.get_belief(belief_id)
-        if belief is None or belief.episode_id != self.episode_id:
-            raise ValueError("belief does not exist in this episode")
-        source = self.store.get_source(belief.source_id)
-        if source is None:
-            raise RuntimeUnavailable("belief source projection is missing")
-        all_sources = {item.id: item for item in self.store.list_sources(self.episode_id)}
-        trace = priority_trace(belief, source, self.config)
-        defeats = [
-            edge
-            for edge in self.store.list_defeats(self.episode_id)
-            if edge.attacker == belief_id or edge.target == belief_id
-        ]
-        events = [
-            event
-            for event in self.store.events(self.episode_id)
-            if event.aggregate_id == belief_id or event.payload.get("belief_id") == belief_id
-        ]
-        tasks = [
-            task
-            for task in self.store.list_verification_tasks(self.episode_id, state=None)
-            if task.belief_id == belief_id
-        ]
-        premise_by_id = self.store.get_beliefs(
-            premise_id
-            for justification in belief.justifications
-            for premise_id in justification.premises
-        )
-        return {
-            "belief": to_primitive(belief),
-            "source": to_primitive(source),
-            "priority": to_primitive(trace),
-            "defeats": [to_primitive(edge) for edge in defeats],
-            "transitions": [
-                to_primitive(event) for event in events[-max(1, min(depth * 5, 100)) :]
-            ],
-            "verification": [to_primitive(task) for task in tasks],
-            "live_justifications": [
-                justification.id
-                for justification in belief.justifications
-                if all(
-                    (premise := premise_by_id.get(premise_id)) is not None
-                    and premise.status is Status.IN
-                    for premise_id in justification.premises
-                )
-            ],
-            "source_count": len(all_sources),
-        }
+        try:
+            return self.queries.explain(self.episode_id, belief_id, depth=depth)
+        except RuntimeError as exc:
+            raise RuntimeUnavailable(str(exc)) from exc
 
     def set_stakes(self, stakes: Stakes, *, user_initiated: bool) -> tuple[str, ...]:
         current = self.episode.default_stakes

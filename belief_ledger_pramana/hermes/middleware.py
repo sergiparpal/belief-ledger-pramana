@@ -8,7 +8,6 @@ from typing import Any
 from ..context.inject import ContextInjectionError
 from ..events import content_hash
 from ..runtime import PluginRuntime
-from ..store import EventDraft
 
 logger = logging.getLogger(__name__)
 
@@ -44,19 +43,11 @@ class LlmRequestMiddleware:
         except Exception as exc:
             self.runtime.mark_injection_failure(service.episode_id, type(exc).__name__)
             try:
-                service.store.append_events(
+                service.lifecycle.context_injection_failed(
                     service.episode_id,
-                    [
-                        EventDraft(
-                            "CONTEXT_INJECTION_FAILED",
-                            "request",
-                            request_id or content_hash(str(kwargs.get("api_mode") or "")),
-                            {
-                                "api_mode": str(kwargs.get("api_mode") or ""),
-                                "reason": type(exc).__name__,
-                            },
-                        )
-                    ],
+                    request_id or content_hash(str(kwargs.get("api_mode") or "")),
+                    str(kwargs.get("api_mode") or ""),
+                    type(exc).__name__,
                 )
             except Exception:
                 logger.exception("failed to record context injection failure")

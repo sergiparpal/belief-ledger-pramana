@@ -18,7 +18,9 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal, TypeVar
 
+from .errors import HashChainError, LlmReservationError, StoreError
 from .events import (
+    EventDraft,
     build_event,
     canonical_json,
     compute_event_auth,
@@ -62,18 +64,6 @@ ZERO_HASH = "0" * 64
 _T = TypeVar("_T")
 
 
-class StoreError(RuntimeError):
-    pass
-
-
-class HashChainError(StoreError):
-    pass
-
-
-class LlmReservationError(StoreError):
-    pass
-
-
 class _ClosingConnection(sqlite3.Connection):
     """SQLite connection whose context manager also releases the handle."""
 
@@ -87,15 +77,6 @@ class _ClosingConnection(sqlite3.Connection):
             return super().__exit__(exc_type, exc_value, traceback)
         finally:
             self.close()
-
-
-@dataclass(frozen=True, slots=True)
-class EventDraft:
-    kind: str
-    aggregate_type: str
-    aggregate_id: str
-    payload: dict[str, Any]
-    causal_event_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
