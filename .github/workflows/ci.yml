@@ -46,6 +46,15 @@ jobs:
       - run: git -C /tmp/hermes-agent checkout 3b2ef789dfcf92f5b7b18c08c59d25948e50857f
       - run: uv run python scripts/check_hermes_contract.py --checkout /tmp/hermes-agent
 
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv run --with pip-audit pip-audit .
+
   path-smoke:
     strategy:
       fail-fast: false
@@ -58,7 +67,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --frozen --extra dev
-      - run: uv run pytest tests/unit/test_config.py tests/unit/test_store.py tests/contract/test_plugin_contract.py
+      - run: uv run pytest tests/unit/test_config.py tests/unit/test_store.py tests/contract/test_plugin_contract.py tests/contract/test_real_hermes_manager.py
 
   hermes-main-canary:
     continue-on-error: true

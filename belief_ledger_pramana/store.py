@@ -392,8 +392,16 @@ class LedgerStore:
         *,
         statuses: Iterable[Status] | None = None,
         pramanas: Iterable[Pramana] | None = None,
-        limit: int = 5_000,
+        limit: int | None = None,
     ) -> list[Belief]:
+        """Return all matching beliefs unless the caller requests a bound.
+
+        Correctness-sensitive consumers (relabeling, action gating, and
+        verification) must never silently lose recent beliefs because an
+        episode grew beyond an incidental query limit.  Callers that render or
+        display a bounded view pass an explicit limit.
+        """
+
         clauses = ["episode_id=?"]
         params: list[Any] = [episode_id]
         status_values = [item.value for item in statuses or ()]
@@ -404,10 +412,10 @@ class LedgerStore:
         if type_values:
             clauses.append(f"pramana IN ({','.join('?' for _ in type_values)})")
             params.extend(type_values)
-        params.append(max(1, min(limit, 20_000)))
-        query = (
-            f"SELECT * FROM beliefs WHERE {' AND '.join(clauses)} ORDER BY observed_at,id LIMIT ?"
-        )
+        query = f"SELECT * FROM beliefs WHERE {' AND '.join(clauses)} ORDER BY observed_at,id"
+        if limit is not None:
+            params.append(max(1, min(limit, 20_000)))
+            query += " LIMIT ?"
         with self.connect() as connection:
             rows = connection.execute(query, params).fetchall()
             return _hydrate_beliefs(connection, rows)
@@ -800,6 +808,16 @@ class LedgerStore:
     def projection_hash(self) -> str:
         with self.connect() as connection:
             return _projection_hash(connection)
+
+    def component_verdict_input_hashes(self, episode_id: str, component: str) -> set[str]:
+        """Return immutable component-input fingerprints for one episode."""
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT input_hash FROM component_verdicts WHERE episode_id=? AND component=?",
+                (episode_id, component),
+            ).fetchall()
+        return {str(row["input_hash"]) for row in rows}
 
     def replay(self) -> ReplayResult:
         self.verify_hash_chain()

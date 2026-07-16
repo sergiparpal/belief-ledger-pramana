@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -94,17 +95,22 @@ def test_real_pinned_entrypoint_manager_enable_and_disable(tmp_path: Path) -> No
 
 
 @pytest.mark.contract
-def test_real_pinned_manager_loads_directory_layout(tmp_path: Path) -> None:
-    root = Path(__file__).parents[2]
-    plugin_dir = tmp_path / "plugins" / "belief-ledger-pramana"
-    plugin_dir.mkdir(parents=True)
-    for name in ("plugin.yaml", "__init__.py", "after-install.md"):
-        shutil.copy2(root / name, plugin_dir / name)
-    shutil.copytree(root / "belief_ledger_pramana", plugin_dir / "belief_ledger_pramana")
-    _write_activation(tmp_path, enabled=True)
-    report = _run_manager(tmp_path, without_entrypoints=True)
-    assert report["version"] == "0.18.2"
-    assert report["enabled"] is True
-    assert report["source"] == "user"
-    assert set(report["tools"]) == EXPECTED_TOOLS
-    assert set(report["hooks"]) == EXPECTED_HOOKS
+def test_real_pinned_manager_loads_directory_layout() -> None:
+    # A deeply nested checkout plus pytest's per-test directory can exceed
+    # MAX_PATH before Hermes sees the layout. Use the system's short temp root
+    # for this copy-based host contract test.
+    with tempfile.TemporaryDirectory(prefix="blp-") as temporary:
+        home = Path(temporary)
+        root = Path(__file__).parents[2]
+        plugin_dir = home / "plugins" / "belief-ledger-pramana"
+        plugin_dir.mkdir(parents=True)
+        for name in ("plugin.yaml", "__init__.py", "after-install.md"):
+            shutil.copy2(root / name, plugin_dir / name)
+        shutil.copytree(root / "belief_ledger_pramana", plugin_dir / "belief_ledger_pramana")
+        _write_activation(home, enabled=True)
+        report = _run_manager(home, without_entrypoints=True)
+        assert report["version"] == "0.18.2"
+        assert report["enabled"] is True
+        assert report["source"] == "user"
+        assert set(report["tools"]) == EXPECTED_TOOLS
+        assert set(report["hooks"]) == EXPECTED_HOOKS

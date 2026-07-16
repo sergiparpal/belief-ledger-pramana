@@ -243,6 +243,25 @@ def state_paths(
     )
 
 
+def configured_config_path(
+    hermes_home: Path | None = None, *, explicit_path: Path | None = None
+) -> Path:
+    """Return the configured path even when its YAML is currently invalid.
+
+    The runtime uses this for a degraded fallback snapshot so a repaired file
+    can be noticed and loaded at the next turn boundary.
+    """
+
+    paths = state_paths(hermes_home)
+    requested = explicit_path
+    if requested is None and os.environ.get(CONFIG_ENV):
+        requested = Path(os.environ[CONFIG_ENV]).expanduser()
+    source = (requested or paths.config).expanduser().resolve()
+    if not _is_within(source, paths.root):
+        raise ConfigError("configuration file must be inside the plugin state directory")
+    return source
+
+
 def ensure_state_directories(paths: StatePaths) -> None:
     """Create private mutable-state directories."""
 
@@ -359,6 +378,8 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     _bounded_int(context, "max_chars", 512, 8_000)
     _bounded_int(context, "max_beliefs", 1, 1_000)
     _bounded_int(context, "max_graph_depth", 0, 32)
+    if context.get("relevance") not in {"fts5", "none"}:
+        raise ConfigError("context.relevance must be fts5 or none")
 
     ingestion = _mapping(config, "ingestion")
     _bounded_int(ingestion, "max_claims_per_evidence", 0, 200)
@@ -405,6 +426,17 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         if lint.get(stake) not in allowed_lint:
             raise ConfigError(f"lint.{stake} is invalid")
     _bounded_int(lint, "max_rewrite_attempts", 0, 1)
+    marker = lint.get("pending_marker")
+    if (
+        not isinstance(marker, str)
+        or not marker.strip()
+        or len(marker) > 128
+        or "\n" in marker
+        or "\r" in marker
+    ):
+        raise ConfigError(
+            "lint.pending_marker must be a non-empty single-line string of at most 128 characters"
+        )
 
     gating = _mapping(config, "gating")
     if gating.get("unknown_tool_policy") not in {"conservative", "allow_read_only"}:
@@ -470,12 +502,13 @@ def validate_config(config: dict[str, Any]) -> list[str]:
 
 
 def config_needs_reload(snapshot: ConfigSnapshot) -> bool:
-    if snapshot.source is None or snapshot.mtime_ns is None:
+    if snapshot.source is None:
         return False
     try:
-        return snapshot.source.stat().st_mtime_ns != snapshot.mtime_ns
+        current_mtime = snapshot.source.stat().st_mtime_ns
     except OSError:
-        return True
+        return snapshot.mtime_ns is not None
+    return snapshot.mtime_ns is None or current_mtime != snapshot.mtime_ns
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

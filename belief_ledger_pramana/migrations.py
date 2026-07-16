@@ -341,6 +341,12 @@ CREATE INDEX IF NOT EXISTS unpromoted_episode_state_idx
 """
 
 
+SCHEMA_V5 = r"""
+CREATE INDEX IF NOT EXISTS component_verdicts_episode_component_input_idx
+  ON component_verdicts(episode_id, component, input_hash);
+"""
+
+
 PROJECTION_TABLES: tuple[str, ...] = (
     "assistant_responses",
     "gate_decisions",
@@ -391,9 +397,9 @@ def migrate(database: Path, integrity_key: bytes, busy_timeout_ms: int = 5_000) 
             "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
         ).fetchone()
         from_version = int(row[0]) if row else 0
-        if from_version > 4:
-            raise RuntimeError(f"database schema {from_version} is newer than supported schema 4")
-        if existed and from_version < 4:
+        if from_version > 5:
+            raise RuntimeError(f"database schema {from_version} is newer than supported schema 5")
+        if existed and from_version < 5:
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             backup = database.with_name(f"{database.name}.pre-v{from_version + 1}.{stamp}.bak")
             _online_backup(connection, backup)
@@ -430,6 +436,12 @@ def migrate(database: Path, integrity_key: bytes, busy_timeout_ms: int = 5_000) 
             connection.execute(
                 "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (4, now)
             )
+        if from_version < 5:
+            connection.executescript(SCHEMA_V5)
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (5, now)
+            )
         fts5 = _ensure_fts(connection)
     finally:
         connection.close()
@@ -440,7 +452,7 @@ def migrate(database: Path, integrity_key: bytes, busy_timeout_ms: int = 5_000) 
     except OSError:
         pass
     return MigrationResult(
-        from_version=from_version, to_version=4, backup=backup, fts5_available=fts5
+        from_version=from_version, to_version=5, backup=backup, fts5_available=fts5
     )
 
 

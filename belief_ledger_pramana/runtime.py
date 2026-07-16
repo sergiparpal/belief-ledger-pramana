@@ -31,6 +31,7 @@ from .config import (
     ConfigSnapshot,
     StatePaths,
     config_needs_reload,
+    configured_config_path,
     ensure_state_directories,
     load_config,
     packaged_yaml,
@@ -226,19 +227,27 @@ class PluginRuntime:
             try:
                 snapshot, paths = load_config(hermes_home=self.hermes_home)
             except ConfigError as exc:
-                self.health = Health.DEGRADED
-                self.health_reasons.append(f"invalid configuration: {exc}")
+                self._mark_configuration_degraded(f"invalid configuration: {exc}")
                 # Safety fallback remains enforcing and is always reported; it is
                 # used only so doctor/export can access diagnostics.
                 defaults = packaged_yaml("defaults.yaml")
+                paths = state_paths(self.hermes_home)
+                try:
+                    source = configured_config_path(self.hermes_home)
+                except ConfigError:
+                    # An out-of-scope configuration is never watched or loaded.
+                    source = paths.config
+                try:
+                    mtime_ns = source.stat().st_mtime_ns
+                except OSError:
+                    mtime_ns = None
                 snapshot = ConfigSnapshot(
                     defaults,
-                    None,
+                    source,
                     (str(exc),),
                     content_hash(canonical_json(defaults)),
-                    None,
+                    mtime_ns,
                 )
-                paths = state_paths(self.hermes_home)
                 ensure_state_directories(paths)
             try:
                 store = LedgerStore(
@@ -246,7 +255,9 @@ class PluginRuntime:
                     busy_timeout_ms=snapshot.settings.storage.busy_timeout_ms,
                     integrity_key_path=paths.integrity_key,
                 )
-                store.verify_hash_chain()
+                # The authenticated event chain alone cannot attest to mutable
+                # projections. Replay fails closed if any projection diverges.
+                store.replay()
                 require_private_path(store.database, "ledger database")
                 require_private_path(paths.integrity_key, "ledger integrity key")
             except Exception as exc:
@@ -532,6 +543,29 @@ class PluginRuntime:
             self.health = Health.DEGRADED
         self.health_reasons.append(f"{component} failed: {reason}")
 
+    def _mark_configuration_degraded(self, reason: str) -> None:
+        if self.health is not Health.UNAVAILABLE:
+            self.health = Health.DEGRADED
+        self.health_reasons = [
+            item
+            for item in self.health_reasons
+            if not item.startswith(("invalid configuration:", "configuration reload rejected:"))
+        ]
+        self.health_reasons.append(reason)
+
+    def _clear_configuration_degradation(self) -> None:
+        self.health_reasons = [
+            item
+            for item in self.health_reasons
+            if not item.startswith(("invalid configuration:", "configuration reload rejected:"))
+        ]
+        if self.health is Health.UNAVAILABLE:
+            return
+        if self.compatibility.mode is not CompatibilityMode.FULL:
+            self.health = Health.DEGRADED
+        elif not self.health_reasons:
+            self.health = Health.HEALTHY
+
     def injection_failed(self, episode_id: str) -> bool:
         return episode_id in self._injection_failures
 
@@ -576,14 +610,14 @@ class PluginRuntime:
         try:
             snapshot, paths = load_config(hermes_home=self.hermes_home)
         except ConfigError as exc:
-            self.health = Health.DEGRADED
-            self.health_reasons.append(f"configuration reload rejected: {exc}")
+            self._mark_configuration_degraded(f"configuration reload rejected: {exc}")
             return
         if self.paths is not None and paths.database != self.paths.database:
             self.health = Health.DEGRADED
             self.health_reasons.append("database path changed; restart is required")
             return
         self._config = snapshot
+        self._clear_configuration_degradation()
 
 
 class EpisodeService:
@@ -880,6 +914,9 @@ class EpisodeService:
         ]
         drafts.extend(self._verification_drafts(wrapper, admission.trust))
         drafts.extend(
+            self._typed_observation_drafts(adapted.observations, evidence, wrapper_source)
+        )
+        drafts.extend(
             self._absence_drafts(
                 tool_name=tool_name,
                 args=args,
@@ -889,6 +926,61 @@ class EpisodeService:
                 search_succeeded=adapted.successful,
             )
         )
+        return drafts
+
+    def _typed_observation_drafts(
+        self,
+        observations: Sequence[str],
+        evidence: Evidence,
+        source: Source,
+    ) -> list[EventDraft]:
+        """Persist only adapter-validated, target-bound tool observations."""
+
+        drafts: list[EventDraft] = []
+        storage = self.config["storage"]
+        for content in observations:
+            initial = Belief(
+                id=new_id("belief"),
+                episode_id=self.episode_id,
+                content=content,
+                normalized_content=normalize_content(content),
+                pramana=Pramana.PRATYAKSHA,
+                source_id=source.id,
+                evidence=(EvidenceRef(evidence.id),),
+                justifications=(),
+                qualifiers={"scope": "typed tool observation"},
+                perishability=Perishability.LIVE,
+                observed_at=evidence.observed_at,
+                stakes=self.episode.default_stakes,
+                status=Status.PENDING,
+                admission_status=Status.PENDING,
+                domain="runtime_state",
+                validity={
+                    "tool_ok": True,
+                    "parsed": True,
+                    "measured_only": True,
+                    "environment_integrity": True,
+                    "target_bound": True,
+                },
+            )
+            validation = validate_belief(
+                initial,
+                evidence_payloads={evidence.id: evidence.payload},
+                evidence_mode=str(storage["evidence_mode"]),
+                max_words=int(self.config["ingestion"]["max_atomic_claim_words"]),
+                max_chars=int(self.config["ingestion"]["max_atomic_claim_chars"]),
+            )
+            status_override = Status.OUT if not validation.valid else None
+            admission = self.admission.admit(
+                initial,
+                source,
+                episode_stakes=self.episode.default_stakes,
+                support_evidence_id=evidence.id,
+                support_validity={**initial.validity, "checks": validation.checks},
+                status_override=status_override,
+            )
+            drafts.extend(admission.drafts)
+            drafts.extend(self._verification_drafts(admission.belief, admission.trust))
         return drafts
 
     def _promote_tool_evidence_when_ready(
@@ -2487,7 +2579,7 @@ class EpisodeService:
                     if candidate.id != task_belief.id
                     and candidate.pramana is Pramana.PRATYAKSHA
                     and candidate.status is Status.IN
-                    and candidate.normalized_content == belief.normalized_content
+                    and candidate.normalized_content == task_belief.normalized_content
                 ]
                 if observed:
                     event_ids.extend(
@@ -2528,6 +2620,9 @@ class EpisodeService:
         drafts: list[EventDraft] = []
         considered: set[tuple[str, str]] = set()
         semantic_candidate: tuple[Belief, Belief] | None = None
+        resolved_semantic_inputs = self.store.component_verdict_input_hashes(
+            self.episode_id, "contradiction_classifier"
+        )
         for belief in sorted(beliefs, key=lambda item: item.id):
             tokens = tokens_by_belief[belief.id]
             candidates: dict[str, Belief] = {}
@@ -2552,6 +2647,8 @@ class EpisodeService:
                     and semantic_candidate is None
                     and belief.domain not in {"runtime_state", "monitoring"}
                     and other.domain not in {"runtime_state", "monitoring"}
+                    and _safe_text_hash(_contradiction_payload(belief, other))
+                    not in resolved_semantic_inputs
                 ):
                     semantic_candidate = (belief, other)
                 if decision.outcome != "rebut":
@@ -2584,20 +2681,7 @@ class EpisodeService:
         right: Belief,
         existing: set[tuple[str, str]],
     ) -> list[EventDraft]:
-        payload = canonical_json(
-            {
-                "left": {
-                    "id": left.id,
-                    "content": left.content,
-                    "qualifiers": left.qualifiers,
-                },
-                "right": {
-                    "id": right.id,
-                    "content": right.content,
-                    "qualifiers": right.qualifiers,
-                },
-            }
-        )
+        payload = _contradiction_payload(left, right)
         try:
             result = self.llm.complete_structured(
                 episode_id=self.episode_id,
@@ -2610,7 +2694,13 @@ class EpisodeService:
                 validator=_validate_contradiction,
             )
         except LlmComponentError:
-            return []
+            return self._component_verdict_drafts(
+                "contradiction_classifier",
+                _safe_text_hash(payload),
+                "unavailable",
+                {"left": left.id, "right": right.id, "reason": "component call failed"},
+                premise_ids=(left.id, right.id),
+            )
         outcome = result.parsed
         drafts = self._component_verdict_drafts(
             "contradiction_classifier",
@@ -2685,6 +2775,17 @@ def _args_hash(args: dict[str, Any], *, redact: bool = True) -> str:
 
 def _safe_text_hash(value: str) -> str:
     return redacted_content_hash(value)
+
+
+def _contradiction_payload(left: Belief, right: Belief) -> str:
+    """Canonical identity for a semantic-pair classification attempt."""
+
+    return canonical_json(
+        {
+            "left": {"id": left.id, "content": left.content, "qualifiers": left.qualifiers},
+            "right": {"id": right.id, "content": right.content, "qualifiers": right.qualifiers},
+        }
+    )
 
 
 def _validate_claim_result(value: Any, *, max_claims: int = 24) -> tuple[ClaimCandidate, ...]:

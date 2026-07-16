@@ -99,21 +99,55 @@ def _parse_rule(value: Any) -> ActionPolicy:
         raise ValueError("action policy rule must be a mapping")
     pattern = value.get("pattern")
     if pattern is not None:
-        pattern = str(pattern)
+        if not isinstance(pattern, str):
+            raise ValueError(f"action policy {value.get('id')} regex must be a string")
         if not pattern.startswith("^") or not pattern.endswith("$"):
             raise ValueError(f"action policy {value.get('id')} regex must be anchored")
         re.compile(pattern)
+    required = {
+        "id",
+        "base_stakes",
+        "effectful",
+        "minimum_priority",
+        "allow_human_approval",
+        "target_fields",
+        "preconditions",
+    }
+    missing = sorted(required - set(value))
+    if missing:
+        raise ValueError(f"action policy rule is missing required fields: {', '.join(missing)}")
+    identifier = value["id"]
+    if not isinstance(identifier, str) or not identifier.strip():
+        raise ValueError("action policy id must be a non-empty string")
+    if not isinstance(value["effectful"], bool):
+        raise ValueError(f"action policy {identifier} effectful must be a boolean")
+    if not isinstance(value["allow_human_approval"], bool):
+        raise ValueError(f"action policy {identifier} allow_human_approval must be a boolean")
+    minimum_priority = value["minimum_priority"]
+    if minimum_priority not in {"untrusted", "semi", "trusted"}:
+        raise ValueError(f"action policy {identifier} minimum_priority is invalid")
+    target_fields = _string_list(value["target_fields"], "target_fields", identifier)
+    preconditions = _string_list(value["preconditions"], "preconditions", identifier)
+    exact = _string_list(value.get("exact", []), "exact", identifier)
     return ActionPolicy(
-        id=str(value["id"]),
+        id=identifier,
         base_stakes=Stakes(str(value["base_stakes"])),
-        effectful=bool(value["effectful"]),
-        minimum_priority=str(value["minimum_priority"]),
-        allow_human_approval=bool(value["allow_human_approval"]),
-        target_fields=tuple(str(item) for item in value.get("target_fields", [])),
-        preconditions=tuple(str(item) for item in value.get("preconditions", [])),
-        exact=tuple(str(item).casefold() for item in value.get("exact", [])),
+        effectful=value["effectful"],
+        minimum_priority=minimum_priority,
+        allow_human_approval=value["allow_human_approval"],
+        target_fields=target_fields,
+        preconditions=preconditions,
+        exact=tuple(item.casefold() for item in exact),
         pattern=pattern,
     )
+
+
+def _string_list(value: Any, field: str, identifier: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        raise ValueError(f"action policy {identifier} {field} must be a list of non-empty strings")
+    return tuple(value)
 
 
 def _unknown_policy(stakes: Stakes, effectful: bool) -> ActionPolicy:

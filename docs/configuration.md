@@ -8,7 +8,8 @@ path requires a process restart.
 `mode` is `observe`, `warn`, or `enforce`; enforcing is the default. The sections are:
 
 - `storage`: database path, `hash_only|excerpt|full`, redaction, timeout.
-- `context`: 8,000-character hard cap, belief/depth limits, retraction TTL, relevance mode.
+- `context`: 8,000-character hard cap, belief/depth limits, retraction TTL, and an explicit
+  relevance mode (`fts5` or `none`).
 - `ingestion`: lazy work, atomicity/dedup bounds, and the explicit relative-workspace trust opt-in.
 - `verification`: per-turn/episode call and token budgets plus timeout; model calls reserve budget
   atomically before dispatch.

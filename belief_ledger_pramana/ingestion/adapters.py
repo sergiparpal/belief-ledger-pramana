@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import PurePath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -32,6 +33,7 @@ class AdaptedToolResult:
     content_source: SourceDescriptor | None
     content_assertive: bool
     metadata: dict[str, Any]
+    observations: tuple[str, ...] = ()
 
 
 class ToolAdapterRegistry:
@@ -148,6 +150,7 @@ class ToolAdapterRegistry:
             content_assertive=family
             in {"web", "file", "memory", "retrieval", "delegation", "plugin"},
             metadata=metadata,
+            observations=_typed_observations(lowered, args, result, successful),
         )
 
 
@@ -158,7 +161,18 @@ def _family(name: str) -> str:
         return "web"
     if any(
         token in name
-        for token in ("read_file", "file_read", "list_file", "glob", "ripgrep", "grep")
+        for token in (
+            "read_file",
+            "file_read",
+            "list_file",
+            "list_directory",
+            "list_dir",
+            "stat_file",
+            "file_stat",
+            "glob",
+            "ripgrep",
+            "grep",
+        )
     ):
         return "file"
     if "memory" in name:
@@ -196,3 +210,56 @@ def _looks_structured(result: str) -> bool:
 def _extract_url(result: str) -> str | None:
     match = re.search(r"https?://[^\s\]\[<>{}\"']+", result)
     return match.group(0) if match else None
+
+
+def _typed_observations(
+    tool_name: str, args: dict[str, Any], result: str, successful: bool
+) -> tuple[str, ...]:
+    """Derive only target-bound facts from recognised structured tool APIs.
+
+    Shell output and free-form text remain untrusted descriptions.  These
+    propositions are emitted only when a known observational API returns a
+    JSON object that binds its result back to the requested path or host.
+    """
+
+    if not successful:
+        return ()
+    try:
+        payload = json.loads(result)
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(payload, dict):
+        return ()
+
+    path = _requested_path(args)
+    returned_path = str(payload.get("path") or payload.get("directory") or "")
+    safe_path = redact_secrets(path)[0]
+    if tool_name in {"stat_file", "file_stat", "stat_path"}:
+        if path and payload.get("exists") is True and _same_path(path, returned_path):
+            return (f"Target {safe_path} exists",)
+        return ()
+    if tool_name in {"list_directory", "list_dir", "list_files"}:
+        entries = payload.get("entries")
+        if path and isinstance(entries, list) and _same_path(path, returned_path):
+            observed_directory = redact_secrets(str(PurePath(path)))[0]
+            return (f"Parent {observed_directory} exists",)
+        return ()
+    if tool_name in {"environment_identity", "get_environment", "system_info", "get_system_info"}:
+        identity = (
+            payload.get("environment_id") or payload.get("environment") or payload.get("hostname")
+        )
+        if isinstance(identity, str) and identity.strip():
+            return ("The current execution environment is identified",)
+    return ()
+
+
+def _requested_path(args: dict[str, Any]) -> str:
+    return str(args.get("path") or args.get("file_path") or args.get("directory") or "").strip()
+
+
+def _same_path(requested: str, returned: str) -> bool:
+    def normalize(value: str) -> str:
+        normalized = value.strip().replace("\\", "/")
+        return normalized.rstrip("/").casefold()
+
+    return bool(returned.strip()) and normalize(requested) == normalize(returned)

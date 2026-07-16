@@ -57,6 +57,12 @@ Generic command stdout is only evidence that the command returned; it is never p
 domain fact. Every terminal command string is treated as effectful because the plugin cannot
 prove equivalent read-only semantics across host-selected shells.
 
+Recognised structured observational APIs can satisfy gate prerequisites without trusting free-form
+output: `stat_file`/`file_stat` must return a matching JSON path with `exists: true`,
+`list_directory`/`list_dir` must return that directory and an `entries` array, and environment
+identity APIs must return a non-empty environment identifier. These create target-bound direct
+observations; arbitrary terminal text never does.
+
 Final responses are linted under the episode stakes:
 
 - LOW: deliver and optionally annotate grounding failures.

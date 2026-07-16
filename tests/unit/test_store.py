@@ -119,7 +119,7 @@ def test_llm_budget_reservations_are_atomic(tmp_path: Path) -> None:
     store.release_llm_reservation(accepted[0])
 
 
-def test_v2_database_migrates_to_v4_with_online_backup_and_performance_indexes(
+def test_v2_database_migrates_to_v5_with_online_backup_and_performance_indexes(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "ledger.sqlite3"
@@ -129,9 +129,10 @@ def test_v2_database_migrates_to_v4_with_online_backup_and_performance_indexes(
         connection.execute("DROP TABLE event_auth")
         connection.execute("DELETE FROM schema_migrations WHERE version=3")
         connection.execute("DELETE FROM schema_migrations WHERE version=4")
+        connection.execute("DELETE FROM schema_migrations WHERE version=5")
     migrated = LedgerStore(database)
     assert migrated.migration.from_version == 2
-    assert migrated.migration.to_version == 4
+    assert migrated.migration.to_version == 5
     assert migrated.migration.backup is not None and migrated.migration.backup.exists()
     with migrated.connect() as connection:
         assert connection.execute(

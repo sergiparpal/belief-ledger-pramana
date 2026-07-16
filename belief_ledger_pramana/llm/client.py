@@ -74,10 +74,10 @@ class HostLlmClient:
         # Reserve before invoking the host model.  Checking counters alone is
         # racy when multiple hooks run at once or another process shares the
         # ledger database.
-        # A character is a conservative upper bound for token accounting across
-        # the supported providers. Reserving that upper bound prevents parallel
-        # calls from overspending an episode before actual usage is reported.
-        estimated_input = max(1, len(instructions) + len(text) + len(str(schema)))
+        # Reserve a deliberately conservative byte-level estimate before the
+        # call. This remains safe for Unicode payloads without assuming a
+        # provider-specific tokenizer.
+        estimated_input = max(1, len((instructions + text + str(schema)).encode("utf-8")))
         try:
             reservation_id = self._store.reserve_llm_budget(
                 episode_id,
@@ -96,8 +96,10 @@ class HostLlmClient:
         started = time.monotonic()
         provider = ""
         model = ""
-        input_tokens = 0
-        output_tokens = 0
+        # Failed calls have no reliable usage object, so retain the reservation
+        # in their auditable usage record as well.
+        input_tokens = estimated_input
+        output_tokens = max_tokens
         cost: float | None = None
         outcome = "error"
         parsed: Any = None
@@ -118,8 +120,8 @@ class HostLlmClient:
             provider = str(getattr(result, "provider", ""))
             model = str(getattr(result, "model", ""))
             usage = getattr(result, "usage", None)
-            input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-            output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+            input_tokens = _input_tokens_or_reservation(usage, estimated_input)
+            output_tokens = _output_tokens_or_reservation(usage, max_tokens)
             reported_cost = getattr(usage, "cost_usd", None)
             cost = float(reported_cost) if reported_cost is not None else None
             parsed = validator(getattr(result, "parsed", None))
@@ -179,6 +181,24 @@ class HostLlmClient:
             output_tokens,
             tuple(event.id for event in events),
         )
+
+
+def _input_tokens_or_reservation(usage: Any, reservation: int) -> int:
+    """Keep the reservation when a provider omits or corrupts input usage."""
+
+    value = getattr(usage, "input_tokens", None) if usage is not None else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        return reservation
+    return int(value)
+
+
+def _output_tokens_or_reservation(usage: Any, reservation: int) -> int:
+    """Keep the reservation when output usage is unavailable or invalid."""
+
+    value = getattr(usage, "output_tokens", None) if usage is not None else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return reservation
+    return int(value)
 
 
 def _record_draft(kind: str, aggregate_type: str, aggregate_id: str, record: Any) -> Any:
