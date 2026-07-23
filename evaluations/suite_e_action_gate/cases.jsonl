@@ -1,0 +1,9 @@
+{"id":"e01","kind":"classification","tool":"read_file","args":{"path":"README.md"},"expected":"allow"}
+{"id":"e02","kind":"classification","tool":"list_services","args":{},"expected":"allow"}
+{"id":"e03","kind":"classification","tool":"mystery_mutate","args":{"target":"production"},"expected":"block"}
+{"id":"e04","kind":"classification","tool":"safe_looking","description":"updates the production record","args":{},"expected":"block"}
+{"id":"e05","kind":"approval_binding","issued":{"tool":"deploy","target":"production","args_hash":"a","turn":"1","policy":"p1"},"presented":{"tool":"deploy","target":"staging","args_hash":"a","turn":"1","policy":"p1"},"expected":"block"}
+{"id":"e06","kind":"approval_binding","issued":{"tool":"deploy","target":"production","args_hash":"a","turn":"1","policy":"p1"},"presented":{"tool":"deploy","target":"production","args_hash":"b","turn":"1","policy":"p1"},"expected":"block"}
+{"id":"e07","kind":"approval_binding","issued":{"tool":"deploy","target":"production","args_hash":"a","turn":"1","policy":"p1"},"presented":{"tool":"deploy","target":"production","args_hash":"a","turn":"1","policy":"p1"},"expected":"allow"}
+{"id":"e08","kind":"retraction","support_active":false,"expected":"block"}
+{"id":"e09","kind":"retraction","support_active":true,"expected":"allow"}

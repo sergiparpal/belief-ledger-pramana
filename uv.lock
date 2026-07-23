@@ -3,6 +3,11 @@ revision = 3
 requires-python = ">=3.11, <3.14"
 
 [manifest]
+members = [
+    "belief-ledger-core",
+    "belief-ledger-pramana",
+    "belief-ledger-reference",
+]
 overrides = [
     { name = "cryptography", specifier = ">=48.0.1" },
     { name = "pillow", specifier = ">=12.3.0" },
@@ -74,10 +79,22 @@ wheels = [
 ]
 
 [[package]]
+name = "belief-ledger-core"
+version = "1.0.0rc2"
+source = { editable = "packages/core" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pyyaml", specifier = ">=6.0,<7" }]
+
+[[package]]
 name = "belief-ledger-pramana"
-version = "1.0.0rc1"
+version = "1.0.0rc2"
 source = { editable = "." }
 dependencies = [
+    { name = "belief-ledger-core" },
     { name = "hermes-agent" },
     { name = "pyyaml" },
 ]
@@ -94,8 +111,21 @@ dev = [
     { name = "types-pyyaml" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "build" },
+    { name = "hypothesis" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "twine" },
+    { name = "types-pyyaml" },
+]
+
 [package.metadata]
 requires-dist = [
+    { name = "belief-ledger-core", editable = "packages/core" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2" },
     { name = "hermes-agent", specifier = "==0.18.2" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
@@ -108,6 +138,29 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
 ]
 provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "build", specifier = ">=1.2" },
+    { name = "hypothesis", specifier = ">=6.100" },
+    { name = "mypy", specifier = ">=1.10" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+    { name = "ruff", specifier = ">=0.6" },
+    { name = "twine", specifier = ">=5.0" },
+    { name = "types-pyyaml", specifier = ">=6.0" },
+]
+
+[[package]]
+name = "belief-ledger-reference"
+version = "1.0.0rc2"
+source = { editable = "packages/reference" }
+dependencies = [
+    { name = "belief-ledger-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "belief-ledger-core", editable = "packages/core" }]
 
 [[package]]
 name = "build"
@@ -1060,7 +1113,7 @@ name = "portalocker"
 version = "3.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pywin32" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5e/77/65b857a69ed876e1951e88aaba60f5ce6120c33703f7cb61a3c894b8c1b6/portalocker-3.2.0.tar.gz", hash = "sha256:1f3002956a54a8c3730586c5c77bf18fae4149e07eaf1c29fc3faf4d5a3f89ac", size = 95644, upload-time = "2025-06-14T13:20:40.03Z" }
 wheels = [

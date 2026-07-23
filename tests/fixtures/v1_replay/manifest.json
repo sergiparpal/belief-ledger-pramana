@@ -1,0 +1,12 @@
+{
+  "algorithm": "sha256-canonical-json",
+  "algorithm_version": 1,
+  "fixtures": {
+    "approval_bound_gate.jsonl": "18c716e68bfcc903270b5933b90c2bd8656705ff475c5c8140d14140b98613e5",
+    "contradiction_retraction.jsonl": "ba8dfb10f05d726f661a9e3136534aa64aac3024887eed659dcdd2ec14bddc64",
+    "final_output_lint.jsonl": "afaaf1991af7701f22b70a05683dce059e125ccfab35d46c3fe74913739f4cd1",
+    "hash_chain.jsonl": "408086cc02209ba1e3789b3bf778a360530bcff23fd5409f0a5274ef6cb5af2e",
+    "ordinary_evidence.jsonl": "7abe2e5c5c34630c05c3aa0ac1d51b8f12f6bffe57bf3bbe02a25c86ffc52870",
+    "unknown_tool_block.jsonl": "dbdcc54126c2972bbf68f8b064a7048ef2f9761f143e35141b2e6982b49df73a"
+  }
+}

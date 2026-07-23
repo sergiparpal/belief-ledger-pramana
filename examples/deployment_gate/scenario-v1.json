@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "episode": {
+    "platform": "local-fixture",
+    "session_id": "deployment-demo",
+    "stakes": "critical",
+    "task_id": "deploy-production",
+    "turn_id": "turn-001"
+  },
+  "policy": {
+    "approval_scope": "single_use",
+    "effectful": true,
+    "id": "deploy-production",
+    "minimum_source_integrity": "trusted",
+    "preconditions": [
+      "production_health_green",
+      "exact_human_approval"
+    ],
+    "revision": "sha256:fixture-policy-v1",
+    "target_fields": [
+      "environment"
+    ],
+    "tool": "deploy"
+  },
+  "request": {
+    "arguments": {
+      "artifact": "app:2026.07.22",
+      "environment": "production"
+    },
+    "tool": "deploy"
+  },
+  "steps": [
+    {"kind": "request"},
+    {"kind": "evidence", "source": "health_probe", "value": "green"},
+    {"kind": "approval", "decision": "approve", "scope": "exact_action"},
+    {"kind": "request"},
+    {"kind": "evidence", "source": "health_probe", "value": "red"},
+    {"kind": "request"}
+  ]
+}

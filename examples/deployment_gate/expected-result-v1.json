@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "scenario": "deployment_gate",
+  "decisions": [
+    {
+      "missing": ["production health is green", "exact human approval"],
+      "outcome": "block",
+      "reason_code": "MISSING_PRECONDITION",
+      "suggested_observation": "Observe current production health with health_probe",
+      "step": 1
+    },
+    {
+      "evidence": "health:production=green",
+      "outcome": "observed",
+      "step": 2
+    },
+    {
+      "missing": ["exact human approval"],
+      "outcome": "block",
+      "reason_code": "APPROVAL_REQUIRED",
+      "step": 3
+    },
+    {
+      "approval_binding": "deploy|production|artifact=app:2026.07.22|turn-001|sha256:fixture-policy-v1",
+      "outcome": "approved",
+      "step": 4
+    },
+    {
+      "outcome": "allow",
+      "reason_code": "PRECONDITIONS_SATISFIED",
+      "step": 5
+    },
+    {
+      "defeated": "health:production=green",
+      "evidence": "health:production=red",
+      "outcome": "retracted",
+      "step": 6
+    },
+    {
+      "missing": ["production health is green"],
+      "outcome": "block",
+      "reason_code": "SUPPORT_RETRACTED",
+      "step": 7
+    }
+  ]
+}

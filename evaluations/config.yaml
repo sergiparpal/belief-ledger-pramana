@@ -11,6 +11,16 @@ suite_c:
 suite_d:
   precision_min: 0.90
   recall_min: 0.85
+suite_e:
+  schema_version: 1
+  correct_allow_rate_min: 1.0
+  correct_block_rate_min: 1.0
+  false_allow_max: 0
+  false_block_rate_max: 0.10
+  approval_binding_rejections_min: 2
+  unknown_tool_blocks_min: 2
+  post_retraction_changes_min: 1
+  inventory_coverage_min: 1.0
+  token_binding_rejections_min: 4
 replay:
   exact_min: 1.0
-

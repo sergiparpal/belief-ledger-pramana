@@ -1,6 +1,6 @@
 # Hermes compatibility
 
-Full conformance is pinned to Hermes Agent `0.18.2`, audited at commit
+The audited adapter contract is pinned to Hermes Agent `0.18.2`, audited at commit
 `3b2ef789dfcf92f5b7b18c08c59d25948e50857f` on 2026-07-11, with Python
 `>=3.11,<3.14` and manifest version 1.
 
@@ -12,7 +12,7 @@ may be operated in a labeled hook-context compatibility mode only when configure
 The plugin does not monkey-patch Hermes. Its callbacks run in-process and installation is
 a code-trust decision. Final transforms govern the accepted response, but a streaming UI
 may already have displayed provisional tokens. If another output transformer precedes this
-one, strict final-output enforcement is not claimed.
+one, even accepted-final enforcement is unavailable. Hermes does not claim the `strict` profile.
 
 Audited upstream sources:
 
@@ -20,10 +20,15 @@ Audited upstream sources:
 - <https://github.com/NousResearch/hermes-agent/blob/3b2ef789dfcf92f5b7b18c08c59d25948e50857f/hermes_cli/plugins.py>
 - <https://github.com/NousResearch/hermes-agent/blob/3b2ef789dfcf92f5b7b18c08c59d25948e50857f/hermes_cli/middleware.py>
 
-| Host contract | Runtime mode | Action/output claim |
+| Host contract | Runtime mode | Maximum profile and claim |
 |---|---|---|
-| Hermes 0.18.2 + audited hooks + `llm_request` | full | strict plugin-level enforcement, subject to documented transform precedence |
-| Required hooks present, request middleware absent | hook-context | visibly degraded per-turn context; no per-request freshness claim |
-| Unsupported version, missing safety hooks, or unsafe Python | diagnostics-only | diagnostics only; effectful actions are not authorized by this plugin |
+| Hermes 0.18.2 + audited hooks + `llm_request` | full | `accepted_final`: pre-tool denial and accepted-final replacement, subject to transform precedence; no exclusive stream control |
+| Required hooks present, request middleware absent | hook-context | `action_enforce`: visibly degraded per-turn context; no per-request freshness claim |
+| Unsupported version, missing safety hooks, or unsafe Python | diagnostics-only | `observe`: diagnostics only; effectful actions are not authorized by this plugin |
+
+Hermes reports `false` for atomic action-token consume, exclusive final-output gate, buffered
+stream delivery, exact bound approval, and complete audited tool inventory. `doctor` prints this
+capability snapshot, requested/effective profile, missing capabilities, downgrade reasons, and
+transform precedence.
 
 The non-blocking CI canary reports drift on Hermes `main`; it never widens the supported range.

@@ -1,0 +1,82 @@
+schema_version: 1
+rules:
+  - id: filesystem_write
+    exact: [write_file, patch, apply_patch, edit_file, create_file]
+    base_stakes: high
+    effectful: true
+    minimum_priority: trusted
+    allow_human_approval: false
+    target_fields: [path, file_path]
+    preconditions: [parent_exists, environment_known, no_open_conflict]
+  - id: filesystem_delete
+    pattern: "^(delete|remove|rm)_(file|directory|path)$"
+    base_stakes: critical
+    effectful: true
+    minimum_priority: trusted
+    allow_human_approval: true
+    target_fields: [path, file_path]
+    preconditions: [target_exists, explicit_user_confirmation, environment_known]
+  - id: terminal
+    exact: [terminal, shell, shell_exec, execute_command, exec_command, run_command]
+    base_stakes: high
+    effectful: true
+    minimum_priority: trusted
+    allow_human_approval: true
+    target_fields: [command, cmd]
+    preconditions: [environment_known]
+  - id: messaging
+    pattern: "^(send|post|publish|reply|message)_.*$"
+    base_stakes: high
+    effectful: true
+    minimum_priority: semi
+    allow_human_approval: true
+    target_fields: [recipient, channel, target]
+    preconditions: [resource_identity, explicit_user_confirmation, no_open_conflict]
+  - id: browser_mutation
+    pattern: "^(browser_)?(click|submit|upload|purchase|checkout|navigate_and_submit)$"
+    base_stakes: high
+    effectful: true
+    minimum_priority: semi
+    allow_human_approval: true
+    target_fields: [url, selector]
+    preconditions: [resource_identity, no_open_conflict]
+  - id: scheduler_mutation
+    pattern: "^(cron|kanban|schedule)_?(create|update|delete|move|set).*$"
+    base_stakes: high
+    effectful: true
+    minimum_priority: semi
+    allow_human_approval: true
+    target_fields: [id, name, target]
+    preconditions: [resource_identity, explicit_user_confirmation]
+  - id: memory_mutation
+    pattern: "^(memory|remember|forget|store_memory|delete_memory).*$"
+    base_stakes: high
+    effectful: true
+    minimum_priority: semi
+    allow_human_approval: true
+    target_fields: [id, key]
+    preconditions: [resource_identity]
+  - id: delegation
+    exact: [delegate_task, spawn_agent]
+    base_stakes: med
+    effectful: true
+    minimum_priority: semi
+    allow_human_approval: false
+    target_fields: [goal, task]
+    preconditions: [no_open_conflict]
+  - id: plugin_management
+    pattern: "^(plugin|plugins)_?(install|remove|enable|disable|update).*$"
+    base_stakes: critical
+    effectful: true
+    minimum_priority: trusted
+    allow_human_approval: true
+    target_fields: [name, source]
+    preconditions: [explicit_user_confirmation, resource_identity]
+  - id: read_only
+    pattern: "^(read|get|list|search|find|query|inspect|view|open|fetch|stat|head|tail)_.*$"
+    base_stakes: med
+    effectful: false
+    minimum_priority: untrusted
+    allow_human_approval: false
+    target_fields: [path, url, query]
+    preconditions: []

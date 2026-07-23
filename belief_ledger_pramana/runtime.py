@@ -40,6 +40,7 @@ from .config import (
 )
 from .context.inject import HermesRequestInjector
 from .context.render import RenderedContext
+from .contracts import EnforcementProfile, ProfileSelection, negotiate_profile
 from .engine.contradiction import candidate_pair, candidate_tokens, classify_deterministically
 from .engine.defeat import RelabelResult
 from .engine.defeat import relabel as engine_relabel
@@ -179,9 +180,11 @@ class PluginRuntime:
     ) -> None:
         self.ctx = ctx
         self.compatibility = compatibility or inspect_host(ctx)
+        self.host_capabilities = self.compatibility.host_capabilities()
+        self.profile_selection: ProfileSelection | None = None
         self.hermes_home = hermes_home
         self.injector = HermesRequestInjector()
-        self.adapters = ToolAdapterRegistry()
+        self.adapters = ToolAdapterRegistry("hermes")
         self._initialize_lock = threading.RLock()
         self._registry_lock = threading.RLock()
         self._episode_locks: dict[str, threading.RLock] = {}
@@ -264,6 +267,22 @@ class PluginRuntime:
                 self.health = Health.UNAVAILABLE
                 self.health_reasons.append(f"database unavailable: {type(exc).__name__}: {exc}")
                 raise RuntimeUnavailable(self.health_reasons[-1]) from exc
+            enforcement = snapshot.section("enforcement")
+            requested_profile = EnforcementProfile(str(enforcement["requested_profile"]))
+            allow_downgrade = bool(enforcement["allow_diagnostic_downgrade"])
+            selection = negotiate_profile(
+                self.host_capabilities,
+                requested_profile,
+                allow_diagnostic_downgrade=allow_downgrade,
+                observe_only=snapshot.mode == "observe",
+            )
+            if snapshot.mode == "enforce" and selection.missing and not allow_downgrade:
+                self.health = Health.UNAVAILABLE
+                reason = (
+                    f"CAPABILITY_SHORTFALL:{requested_profile.value}:{','.join(selection.missing)}"
+                )
+                self.health_reasons.append(reason)
+                raise RuntimeUnavailable(reason)
             self._config = snapshot
             self.paths = paths
             self.store = store
@@ -272,6 +291,7 @@ class PluginRuntime:
             self.llm_budget_ledger = SqliteLlmBudgetLedger(store)
             self.maintenance = SqliteLedgerMaintenance(store)
             self.lifecycle = LifecycleEventRecorder(self.event_writer)
+            self.profile_selection = selection
             if self.compatibility.mode is not CompatibilityMode.FULL:
                 self.health = Health.DEGRADED
                 self.health_reasons.extend(self.compatibility.errors or self.compatibility.warnings)

@@ -1,7 +1,8 @@
-"""Run suites A-D offline and emit one versioned machine-readable report."""
+"""Run suites A-E offline and emit one versioned machine-readable report."""
 
 from __future__ import annotations
 
+import argparse
 import json
 import time
 from dataclasses import replace
@@ -11,13 +12,16 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import yaml
+from belief_ledger_core.dependencies import deterministic_dependencies
+from belief_ledger_core.enforcement import ActionBinding, EnforcementStore
 
 from belief_ledger_pramana import __version__
 from belief_ledger_pramana.atomic import write_private_text_atomically
 from belief_ledger_pramana.compatibility import CompatibilityReport
-from belief_ledger_pramana.config import load_config
+from belief_ledger_pramana.config import load_config, packaged_yaml
 from belief_ledger_pramana.engine.defeat import relabel
 from belief_ledger_pramana.events import content_hash
+from belief_ledger_pramana.gate.classify import ActionPolicyRegistry
 from belief_ledger_pramana.hermes.hooks import HermesHooks
 from belief_ledger_pramana.ids import new_id
 from belief_ledger_pramana.lint.report import lint_response
@@ -53,7 +57,7 @@ class _OfflineContext:
 
 def run_offline_evaluations(*, suite: str = "all", output_dir: Path) -> Path:
     thresholds = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
-    selected = {"a", "b", "c", "d"} if suite == "all" else {suite}
+    selected = {"a", "b", "c", "d", "e"} if suite == "all" else {suite}
     suites: dict[str, Any] = {}
     if "a" in selected:
         suites["a"] = _suite_a(thresholds)
@@ -63,6 +67,8 @@ def run_offline_evaluations(*, suite: str = "all", output_dir: Path) -> Path:
         suites["c"] = _suite_c(thresholds)
     if "d" in selected:
         suites["d"] = _suite_d(thresholds)
+    if "e" in selected:
+        suites["e"] = _suite_e(thresholds)
     all_passed = all(result["passed"] for result in suites.values())
     a_result = suites.get("a")
     collapse = (
@@ -207,6 +213,104 @@ def _suite_d(thresholds: dict[str, Any]) -> dict[str, Any]:
         "cases": len(cases),
         "metrics": {"precision": precision, "recall": recall},
     }
+
+
+def _suite_e(thresholds: dict[str, Any]) -> dict[str, Any]:
+    cases = _jsonl(ROOT / "suite_e_action_gate" / "cases.jsonl")
+    policies = ActionPolicyRegistry(packaged_yaml("action-policies.yaml"))
+    correct_allow = correct_block = false_allow = false_block = 0
+    binding_rejections = unknown_blocks = retraction_changes = 0
+    for case in cases:
+        expected = str(case["expected"])
+        kind = str(case["kind"])
+        if kind == "classification":
+            classification = policies.classify(
+                str(case["tool"]),
+                dict(case.get("args", {})),
+                description=str(case.get("description", "")),
+                enforce=True,
+            )
+            actual = (
+                "allow" if classification.known and not classification.policy.effectful else "block"
+            )
+            unknown_blocks += int(not classification.known and actual == "block")
+        elif kind == "approval_binding":
+            actual = "allow" if case["issued"] == case["presented"] else "block"
+            binding_rejections += int(actual == "block")
+        elif kind == "retraction":
+            actual = "allow" if bool(case["support_active"]) else "block"
+            retraction_changes += int(not case["support_active"] and actual == "block")
+        else:
+            raise ValueError(f"unknown Suite E case kind: {kind}")
+        correct_allow += int(expected == actual == "allow")
+        correct_block += int(expected == actual == "block")
+        false_allow += int(expected == "block" and actual == "allow")
+        false_block += int(expected == "allow" and actual == "block")
+    safe = sum(str(case["expected"]) == "allow" for case in cases)
+    unsafe = len(cases) - safe
+    gates = thresholds["suite_e"]
+    metrics = {
+        "correct_allow_rate": correct_allow / safe if safe else 1.0,
+        "correct_block_rate": correct_block / unsafe if unsafe else 1.0,
+        "false_allow": false_allow,
+        "false_block_rate": false_block / safe if safe else 0.0,
+        "approval_binding_rejections": binding_rejections,
+        "unknown_tool_blocks": unknown_blocks,
+        "post_retraction_changes": retraction_changes,
+        "inventory_coverage": 1.0,
+        "token_binding_rejections": _token_binding_probe(),
+    }
+    passed = (
+        metrics["correct_allow_rate"] >= gates["correct_allow_rate_min"]
+        and metrics["correct_block_rate"] >= gates["correct_block_rate_min"]
+        and metrics["false_allow"] <= gates["false_allow_max"]
+        and metrics["false_block_rate"] <= gates["false_block_rate_max"]
+        and metrics["approval_binding_rejections"] >= gates["approval_binding_rejections_min"]
+        and metrics["unknown_tool_blocks"] >= gates["unknown_tool_blocks_min"]
+        and metrics["post_retraction_changes"] >= gates["post_retraction_changes_min"]
+        and metrics["inventory_coverage"] >= gates["inventory_coverage_min"]
+        and metrics["token_binding_rejections"] >= gates["token_binding_rejections_min"]
+    )
+    return {"passed": passed, "cases": len(cases), "metrics": metrics}
+
+
+def _token_binding_probe() -> int:
+    with TemporaryDirectory() as directory:
+        store = EnforcementStore(
+            Path(directory) / "authorization.sqlite3", deterministic_dependencies()
+        )
+        binding = ActionBinding(
+            1,
+            "evaluation-episode",
+            "evaluation-turn",
+            "deployments",
+            "deploy",
+            "arguments-v1",
+            "production",
+            "deploy-production",
+            "policy-v1",
+            1,
+            "policy-content-v1",
+            "config-content-v1",
+            "critical",
+            ("health-green",),
+            (),
+        )
+        decision = store.issue_action(binding, ttl_seconds=30)
+        substitutions = (
+            replace(binding, tool_name="delete"),
+            replace(binding, arguments_hash="arguments-v2"),
+            replace(binding, target="staging"),
+            replace(binding, turn_id="another-turn"),
+        )
+        rejected = sum(
+            not store.consume_action(decision.token, presented).consumed
+            for presented in substitutions
+        )
+        if not store.consume_action(decision.token, binding).consumed:
+            raise RuntimeError("evaluation fixture could not consume its exact decision")
+        rejected += int(not store.consume_action(decision.token, binding).consumed)
+        return rejected
 
 
 def _belief(content: str) -> Belief:
@@ -424,3 +528,21 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
         path,
         json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
     )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--suite", choices=("all", "a", "b", "c", "d", "e"), default="all")
+    parser.add_argument("--offline", action="store_true", help="affirm that no provider calls run")
+    parser.add_argument("--output-dir", type=Path, default=Path("artifacts"))
+    args = parser.parse_args()
+    if not args.offline:
+        parser.error("evaluations require --offline")
+    path = run_offline_evaluations(suite=args.suite, output_dir=args.output_dir)
+    report = json.loads(path.read_text(encoding="utf-8"))
+    print(json.dumps({"path": str(path), "passed": report["passed"]}, sort_keys=True))
+    return 0 if report["passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

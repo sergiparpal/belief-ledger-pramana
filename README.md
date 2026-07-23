@@ -1,20 +1,49 @@
-# Belief Ledger Pramāṇa for Hermes Agent
+# Belief Ledger Pramāṇa
 
-`belief-ledger-pramana` is an episode-scoped Hermes Agent plugin that types factual
-support by pramāṇa, keeps a justification/defeat graph, injects a fresh bounded ledger
-before every provider request, lints the accepted final answer, and gates effectful tool
-calls on ledger-backed preconditions.
+Evidence-backed policy enforcement for AI agents.
 
-The durable source of truth is an append-only, hash-chained SQLite event log. Beliefs are
-discrete (`IN`, `OUT`, `PENDING`, `QUARANTINED`); scalar confidence never decides defeat.
+This project is for teams whose agents can deploy software, send messages, make purchases, or
+otherwise change real systems. It checks whether the exact action is supported by current evidence
+and any required approval, blocks when that proof is missing, and records why the decision changed.
+
+Three outcomes define the product:
+
+- **Action gating:** effectful tools require reviewed policy, live preconditions, and exact approval.
+- **Grounded output:** high-stakes responses are checked against admitted evidence before acceptance.
+- **Auditable retraction:** contradictory evidence defeats stale support and changes later decisions.
+
+For example, a production deployment request with no current health observation returns
+`BLOCKED [MISSING_PRECONDITION]: production health is green` and recommends the next safe step:
+`Observe current production health with health_probe`. After green health evidence and an approval
+bound to the exact deployment, the action is allowed. A later red health observation retracts that
+support, so a retry is blocked again. The deterministic fixture in
+[`examples/deployment_gate`](examples/deployment_gate) is the source of this example.
+
+## How it works
+
+The host-neutral core keeps an append-only, hash-chained event ledger, types evidence by pramāṇa,
+maintains a justification/defeat graph, selects bounded context, and returns action/output
+decisions. Beliefs are discrete (`IN`, `OUT`, `PENDING`, `QUARANTINED`); scalar confidence never
+decides defeat. Host adapters enforce those decisions at the boundaries they actually control.
+
+Hermes Agent is the first audited integration and remains available through the backward-compatible
+`belief-ledger-pramana` package. A strict standalone reference runner demonstrates exclusive action
+dispatch and buffered high-stakes delivery without making Hermes the product boundary.
 
 ## Compatibility
 
-Full conformance targets Hermes Agent `0.18.2` at audited commit
+The audited Hermes adapter targets Hermes Agent `0.18.2` at commit
 `3b2ef789dfcf92f5b7b18c08c59d25948e50857f`, manifest version 1, and Python
 `>=3.11,<3.14`. The per-request guarantee requires Hermes' audited
-`llm_request` middleware. Unsupported hosts are visibly diagnostics-only and never claim
-strict enforcement. See [HERMES_COMPATIBILITY.md](HERMES_COMPATIBILITY.md).
+`llm_request` middleware. Its maximum profile is `accepted_final`: it has a pre-action gate and
+accepted-response transform, but not atomic action-token consumption, complete tool inventory,
+exact bound approvals, or exclusive buffered delivery. Unsupported hosts are visibly
+diagnostics-only. See [HERMES_COMPATIBILITY.md](HERMES_COMPATIBILITY.md).
+
+| Adapter | Maximum profile | Dispatch/output boundary |
+|---|---|---|
+| Hermes 0.18.2 audited adapter | `accepted_final` | pre-tool denial and accepted-final transform; provisional streaming may remain visible |
+| Standalone reference adapter | `strict` | atomic single-use consume before dispatch and exclusive buffered delivery |
 
 ## Install and enable
 
@@ -104,7 +133,7 @@ Operator commands:
 ```text
 hermes belief-ledger doctor
 hermes belief-ledger config show|path|validate|init
-hermes belief-ledger db status|migrate|verify-chain|replay
+hermes belief-ledger db status|migrate [--dry-run]|verify-chain|replay
 hermes belief-ledger episode list|show|export
 hermes belief-ledger purge --episode EP_ID --confirm EP_ID
 hermes belief-ledger evaluate --suite all --offline
@@ -155,6 +184,8 @@ belief-ledger-pramana` for a Git/directory install or `python -m pip uninstall
 belief-ledger-pramana` for a wheel. Durable state is intentionally retained. Purging an episode
 or deleting the state directory is a separate destructive retention decision; see
 [docs/operations.md](docs/operations.md).
+Detailed schema-6 backup and code/database rollback steps are in
+[docs/upgrade-and-rollback.md](docs/upgrade-and-rollback.md).
 
 ## Honest limitations
 
@@ -167,7 +198,7 @@ or deleting the state directory is a separate destructive retention decision; se
 - Final transforms cannot restart arbitrary turns or force tools. Unresolved high-stakes output
   is replaced with a block report.
 - Competing final transformers all see the original output and first non-empty replacement wins.
-  Strict enforcement is claimed only when this plugin has precedence; `doctor` checks it.
+  Accepted-final enforcement is effective only when this plugin has precedence; `doctor` checks it.
 - Streaming surfaces may display provisional tokens before transformed-response reconciliation.
   The hard guarantee applies to the accepted final response.
 - Tool schemas have no universal stakes metadata. Unknown or ambiguous mutation tools block in
@@ -180,6 +211,6 @@ uv sync --extra dev
 uv run python scripts/verify_stage.py all --hermes-checkout /path/to/pinned/hermes
 ```
 
-Live model tests are opt-in and never part of the default gate. Offline suites A-D and the
+Live model tests are opt-in and never part of the default gate. Offline suites A-E and the
 collapse decision write a versioned JSON report. No remote publication, signing, or public
 release is performed by the repository scripts.

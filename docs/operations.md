@@ -1,14 +1,16 @@
 # Operations
 
-Start with `hermes belief-ledger doctor`. A healthy full-conformance report requires audited
+Start with `hermes belief-ledger doctor`. A healthy audited-adapter report requires
 Hermes/Python capabilities, enablement, `llm_request`, transform precedence, valid config,
-schema/hash integrity, event authentication, private permissions, and registered tools. Doctor is
+schema/hash integrity, private permissions, and registered tools. It separately reports maximum,
+requested, and effective profiles; healthy Hermes is `accepted_final`, not strict. Doctor is
 offline and performs only a temporary state-directory write probe.
 
 Routine commands:
 
 ```bash
 hermes belief-ledger db verify-chain
+hermes belief-ledger db migrate --dry-run
 hermes belief-ledger db replay
 hermes belief-ledger episode list
 hermes belief-ledger episode export EPISODE --format jsonl
@@ -16,24 +18,19 @@ hermes belief-ledger evaluate --suite all --offline
 ```
 
 WAL checkpoints occur after turns; finalization releases process-local handles without deleting
-history. While the database is active, back up `ledger.sqlite3`, `ledger.sqlite3-wal`, and
-`ledger.sqlite3-shm` together. Also retain the matching private
-`locks/ledger.integrity.key` in the same encrypted backup set: it authenticates every event and is
-required to verify or replay an existing ledger. Alternatively, checkpoint first and then copy the
-main database and its matching key. Do not regenerate, rotate, or substitute that key for an
-existing database.
+history. Back up the SQLite database, `-wal`, and `-shm` together while active, or checkpoint and
+then copy the main file. Retain the matching private `locks/ledger.integrity.key` in the same
+encrypted backup set: it authenticates every event and is required to verify or replay the ledger.
+Do not regenerate or substitute the key for an existing database. Forward migrations create a
+pre-migration backup. Schema v6 adds append-only authorization events and rebuildable
+receipt/decision projections. Follow
+[upgrade-and-rollback.md](upgrade-and-rollback.md) before activating rc2 enforcement.
 
-`db verify-chain` validates every per-episode SHA-256 chain, its stored head, and the separate
-HMAC authentication tag for every event. Startup replays and verifies the ledger after a forward
-migration; the migration itself creates a private pre-migration database backup. The original
-integrity key remains in place, and a pre-migration backup likewise requires that same key to be
-useful.
-
-If verification fails, stop effectful work, preserve both the database files and integrity key,
-and restore the matching set from a verified backup or export unaffected episodes. Do not edit
-event rows or attempt to repair a failed verification by regenerating the key. If FTS5 is absent,
-deterministic lexical selection remains available. Busy errors retry with bounded jitter;
-persistent contention makes health degraded and HIGH/CRITICAL gates fail closed.
+If chain or event-authentication verification fails, stop effectful work, preserve the database and
+integrity key, and restore the matching set from a verified backup or export unaffected episodes.
+Do not edit event rows or regenerate the key. If FTS5 is absent, deterministic
+lexical selection remains available. Busy errors retry with bounded jitter; persistent contention
+makes health degraded and HIGH/CRITICAL gates fail closed.
 
 `purge` is deliberately not a projection-only delete: append-only event payloads would remain.
 Stop every Hermes process using the profile, make any separately authorized retention backup,

@@ -107,6 +107,10 @@ def test_real_pinned_manager_loads_directory_layout() -> None:
         for name in ("plugin.yaml", "__init__.py", "after-install.md"):
             shutil.copy2(root / name, plugin_dir / name)
         shutil.copytree(root / "belief_ledger_pramana", plugin_dir / "belief_ledger_pramana")
+        shutil.copytree(
+            root / "packages" / "core" / "src",
+            plugin_dir / "packages" / "core" / "src",
+        )
         _write_activation(home, enabled=True)
         report = _run_manager(home, without_entrypoints=True)
         assert report["version"] == "0.18.2"

@@ -366,6 +366,17 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     except ValueError as exc:
         raise ConfigError("default_stakes is invalid") from exc
 
+    enforcement = _mapping(config, "enforcement")
+    if enforcement.get("requested_profile") not in {
+        "observe",
+        "action_enforce",
+        "accepted_final",
+        "strict",
+    }:
+        raise ConfigError("enforcement.requested_profile is invalid")
+    if not isinstance(enforcement.get("allow_diagnostic_downgrade"), bool):
+        raise ConfigError("enforcement.allow_diagnostic_downgrade must be a boolean")
+
     storage = _mapping(config, "storage")
     if storage.get("evidence_mode") not in {"hash_only", "excerpt", "full"}:
         raise ConfigError("storage.evidence_mode must be hash_only, excerpt, or full")

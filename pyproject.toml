@@ -4,11 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "belief-ledger-pramana"
-version = "1.0.0rc1"
-description = "Episode-scoped typed belief ledger for Hermes Agent"
+version = "1.0.0rc2"
+description = "Evidence-backed policy enforcement for AI agents"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
+  "belief-ledger-core==1.0.0rc2",
   "hermes-agent==0.18.2",
   "PyYAML>=6.0,<7",
 ]
@@ -32,8 +33,30 @@ dev = [
   "types-PyYAML>=6.0",
 ]
 
+[dependency-groups]
+dev = [
+  "build>=1.2",
+  "hypothesis>=6.100",
+  "mypy>=1.10",
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.6",
+  "twine>=5.0",
+  "types-PyYAML>=6.0",
+]
+
+[tool.uv.workspace]
+members = ["packages/core", "packages/reference"]
+
+[tool.uv.sources]
+belief-ledger-core = { workspace = true }
+belief-ledger-reference = { workspace = true }
+
 [project.entry-points."hermes_agent.plugins"]
 belief-ledger-pramana = "belief_ledger_pramana.plugin"
+
+[project.scripts]
+belief-ledger = "belief_ledger_pramana.policy_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["belief_ledger_pramana"]
@@ -68,7 +91,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["belief_ledger_pramana"]
+source = ["belief_ledger_pramana", "belief_ledger_core", "belief_ledger_reference"]
 
 [tool.coverage.report]
 fail_under = 88
@@ -93,4 +116,5 @@ python_version = "3.11"
 strict = true
 warn_unused_ignores = true
 explicit_package_bases = true
+mypy_path = ["packages/core/src", "packages/reference/src"]
 exclude = ["tests", "evaluations"]

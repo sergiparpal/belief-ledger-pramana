@@ -1,6 +1,3 @@
-"""Deterministic admission, priority, and JTMS-style defeat engine."""
+"""Compatibility re-exports for the host-neutral reasoning engine."""
 
-from .defeat import RelabelResult, relabel
-from .validity import ValidityResult, validate_belief
-
-__all__ = ["RelabelResult", "ValidityResult", "relabel", "validate_belief"]
+from belief_ledger_core.engine import *  # noqa: F403

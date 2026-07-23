@@ -5,15 +5,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import tempfile
 from pathlib import Path
 from typing import Any
 
 import yaml
+from belief_ledger_core.manifest import ToolDescriptor, ToolPolicyManifest
 
 from ..atomic import write_private_text_atomically
 from ..compatibility import competing_transformers, transformer_has_precedence
-from ..config import ConfigError, load_config, require_private_path, validate_config
+from ..config import (
+    ConfigError,
+    load_config,
+    packaged_yaml,
+    require_private_path,
+    validate_config,
+)
 from ..events import canonical_json, to_primitive, utc_now
 from ..runtime import PluginRuntime
 
@@ -32,7 +40,8 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     db = sub.add_parser("db", help="Inspect the event database")
     db_sub = db.add_subparsers(dest="db_command", required=True)
     db_sub.add_parser("status")
-    db_sub.add_parser("migrate")
+    migrate = db_sub.add_parser("migrate")
+    migrate.add_argument("--dry-run", action="store_true")
     db_sub.add_parser("verify-chain")
     db_sub.add_parser("replay")
 
@@ -51,8 +60,18 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     purge.add_argument("--confirm", required=True)
 
     evaluate = sub.add_parser("evaluate", help="Run deterministic evaluation suites")
-    evaluate.add_argument("--suite", choices=("a", "b", "c", "d", "all"), default="all")
+    evaluate.add_argument("--suite", choices=("a", "b", "c", "d", "e", "all"), default="all")
     evaluate.add_argument("--offline", action="store_true", required=True)
+
+    policy = sub.add_parser("policy", help="Inventory and validate tool policy coverage")
+    policy_sub = policy.add_subparsers(dest="policy_command", required=True)
+    for name in ("inventory", "validate"):
+        command = policy_sub.add_parser(name)
+        command.add_argument("--format", choices=("human", "json"), default="human")
+    for name in ("scaffold", "explain"):
+        command = policy_sub.add_parser(name)
+        command.add_argument("tool_name")
+        command.add_argument("--format", choices=("human", "json"), default="human")
 
 
 def build_cli_handler(runtime: PluginRuntime) -> Any:
@@ -83,6 +102,33 @@ def run_cli(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]
                     {"ok": True, "digest": snapshot.digest, "warnings": snapshot.warnings}
                 )
             return 0, _json({"ok": True, "path": str(paths.config), "created_or_present": True})
+        if command == "policy":
+            return _policy_command(runtime, args)
+        if command == "db" and args.db_command == "migrate" and args.dry_run:
+            snapshot, paths = load_config(hermes_home=runtime.hermes_home, initialize=False)
+            database = paths.database
+            current = 0
+            if database.is_file():
+                connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+                try:
+                    row = connection.execute(
+                        "SELECT COALESCE(MAX(version),0) FROM schema_migrations"
+                    ).fetchone()
+                    current = int(row[0]) if row else 0
+                finally:
+                    connection.close()
+            return 0, _json(
+                {
+                    "dry_run": True,
+                    "database": str(database),
+                    "config_digest": snapshot.digest,
+                    "current_schema": current,
+                    "target_schema": 6,
+                    "migration_required": current < 6,
+                    "backup_required": database.is_file() and current < 6,
+                    "writes_performed": False,
+                }
+            )
         runtime.ensure_initialized()
         assert runtime.store is not None
         if command == "db":
@@ -157,6 +203,100 @@ def run_cli(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]
         return 1, _json({"ok": False, "error": type(exc).__name__, "message": str(exc)[:1_000]})
 
 
+def _policy_command(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]:
+    manifest = ToolPolicyManifest.load(packaged_yaml("action-policies.yaml"), mode="enforce")
+    descriptors = _tool_descriptors(runtime)
+    if args.policy_command == "validate":
+        payload: Any = {
+            "schema_version": 1,
+            "valid": True,
+            "source_schema_version": manifest.source_schema_version,
+            "normalized_schema_version": manifest.schema_version,
+            "rules": len(manifest.rules),
+        }
+    elif args.policy_command == "inventory":
+        items = manifest.classify_inventory(descriptors, complete=False)
+        payload = {
+            "schema_version": 1,
+            "complete": False,
+            "capability": "tool_inventory",
+            "reason_code": "HERMES_COMPLETE_INVENTORY_UNPROVEN",
+            "items": [
+                {
+                    "name": item.descriptor.name,
+                    "namespace": item.descriptor.namespace,
+                    "schema_digest": item.descriptor.schema_digest,
+                    "status": item.status.value,
+                    "policy_id": item.policy_id,
+                    "reason_code": item.reason_code,
+                }
+                for item in items
+            ],
+        }
+    else:
+        descriptor = next(
+            (item for item in descriptors if item.name == args.tool_name),
+            ToolDescriptor.create(args.tool_name, {}),
+        )
+        if args.policy_command == "scaffold":
+            payload = {
+                "schema_version": 1,
+                "active": False,
+                "review_required": True,
+                "rule": manifest.scaffold(descriptor),
+            }
+        else:
+            rule = manifest.match(descriptor.name, descriptor.namespace)
+            payload = {
+                "schema_version": 1,
+                "tool": descriptor.name,
+                "namespace": descriptor.namespace,
+                "schema_digest": descriptor.schema_digest,
+                "matched": rule is not None,
+                "policy": (
+                    {
+                        "id": rule.id,
+                        "revision": rule.revision,
+                        "effectful": rule.effectful,
+                        "base_stakes": rule.base_stakes,
+                        "target_fields": list(rule.target_fields),
+                        "preconditions": list(rule.preconditions),
+                    }
+                    if rule
+                    else None
+                ),
+                "reason_code": "POLICY_MATCHED" if rule else "NO_POLICY",
+            }
+    rendered = _json(payload)
+    if args.format == "json":
+        return 0, rendered
+    if args.policy_command == "validate":
+        return (
+            0,
+            f"valid v{payload['normalized_schema_version']} manifest: {payload['rules']} rules",
+        )
+    return 0, rendered
+
+
+def _tool_descriptors(runtime: PluginRuntime) -> tuple[ToolDescriptor, ...]:
+    registered = getattr(runtime.ctx, "tools", {})
+    if not isinstance(registered, dict):
+        return ()
+    descriptors = []
+    for name, detail in registered.items():
+        value = detail if isinstance(detail, dict) else {}
+        schema = value.get("schema", {})
+        descriptors.append(
+            ToolDescriptor.create(
+                str(name),
+                schema if isinstance(schema, dict) else {},
+                namespace=str(value.get("toolset", "")),
+                description=str(value.get("description", "")),
+            )
+        )
+    return tuple(descriptors)
+
+
 def doctor(runtime: PluginRuntime) -> dict[str, Any]:
     checks: dict[str, Any] = {}
     errors: list[str] = list(runtime.compatibility.errors)
@@ -165,6 +305,10 @@ def doctor(runtime: PluginRuntime) -> dict[str, Any]:
     checks["hermes_version"] = runtime.compatibility.hermes_version
     checks["compatibility_mode"] = runtime.compatibility.mode.value
     checks["capabilities"] = runtime.compatibility.capabilities
+    checks["host_capabilities"] = {
+        name: getattr(runtime.host_capabilities, name)
+        for name in runtime.host_capabilities.__dataclass_fields__
+    }
     checks["safe_mode"] = os.environ.get("HERMES_SAFE_MODE") == "1"
     if checks["safe_mode"]:
         errors.append("HERMES_SAFE_MODE=1 skips plugin discovery")
@@ -175,6 +319,14 @@ def doctor(runtime: PluginRuntime) -> dict[str, Any]:
             "source": str(runtime.config.source) if runtime.config.source else "packaged",
             "digest": runtime.config.digest,
             "warnings": runtime.config.warnings,
+        }
+        assert runtime.profile_selection is not None
+        checks["enforcement_profile"] = {
+            "requested": runtime.profile_selection.requested.value,
+            "effective": runtime.profile_selection.effective.value,
+            "missing": list(runtime.profile_selection.missing),
+            "reason_codes": list(runtime.profile_selection.reason_codes),
+            "downgraded": runtime.profile_selection.downgraded,
         }
         ok, heads = runtime.store.verify_hash_chain()
         checks["database"] = {
@@ -260,6 +412,11 @@ def doctor(runtime: PluginRuntime) -> dict[str, Any]:
     return {
         "status": status,
         "full_conformance": status == "healthy" and runtime.compatibility.full_conformance,
+        "strict_enforcement": bool(
+            runtime.profile_selection
+            and runtime.profile_selection.effective.value == "strict"
+            and status == "healthy"
+        ),
         "checks": checks,
         "warnings": sorted(set(warnings)),
         "errors": sorted(set(errors)),

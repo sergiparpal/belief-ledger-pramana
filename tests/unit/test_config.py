@@ -99,6 +99,8 @@ def test_extension_outside_private_state_directory_is_rejected(tmp_path: Path) -
         (("schema_version",), 2, "schema_version"),
         (("mode",), "permissive", "mode"),
         (("default_stakes",), "extreme", "default_stakes"),
+        (("enforcement", "requested_profile"), "absolute", "requested_profile"),
+        (("enforcement", "allow_diagnostic_downgrade"), "yes", "must be a boolean"),
         (("storage",), [], "storage"),
         (("storage", "evidence_mode"), "raw", "evidence_mode"),
         (("storage", "max_excerpt_chars"), True, "max_excerpt_chars"),

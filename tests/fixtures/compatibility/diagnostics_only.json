@@ -1,0 +1,20 @@
+{
+  "capabilities": {
+    "llm_facade": false,
+    "register_cli_command": false,
+    "register_command": false,
+    "register_hook": false,
+    "register_middleware": false,
+    "register_tool": false
+  },
+  "errors": [
+    "missing Hermes capabilities: llm_facade, register_cli_command, register_command, register_hook, register_middleware, register_tool"
+  ],
+  "full_conformance": false,
+  "hermes_version": "0.18.2",
+  "mode": "diagnostics_only",
+  "schema_version": 1,
+  "warnings": [
+    "strict enforcement is not claimed in this compatibility mode"
+  ]
+}

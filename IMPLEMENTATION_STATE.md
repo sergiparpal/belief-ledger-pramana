@@ -1,4 +1,8 @@
-# Implementation state
+# 1.0.0rc1 baseline implementation state
+
+This file is the completed, frozen `1.0.0rc1` baseline. Post-baseline rearchitecture progress is
+tracked separately in `IMPLEMENTATION_PLAN.md`; unchecked tasks there are not implied complete by
+the phase table below.
 
 Local implementation completed on 2026-07-11. No publication, signing, remote release, or
 license selection was authorized or performed.

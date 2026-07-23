@@ -1,8 +1,8 @@
 manifest_version: 1
 name: belief-ledger-pramana
-version: 1.0.0rc1
+version: 1.0.0rc2
 kind: standalone
-description: Episode-scoped typed belief ledger, defeat engine, context compiler, output linter, and action gate
+description: Evidence-backed policy enforcement for AI agents
 provides_tools:
   - pramana_record_inference
   - pramana_query

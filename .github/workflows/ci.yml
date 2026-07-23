@@ -6,7 +6,24 @@ on:
   workflow_dispatch:
 
 jobs:
-  linux:
+  core-no-hermes:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv venv .core-venv
+      - run: uv pip install --python .core-venv/bin/python ./packages/core pytest
+      - run: .core-venv/bin/python -m pytest --confcutdir=tests/core tests/core tests/conformance/test_enforcement_profiles.py
+      - run: .core-venv/bin/python -c "import belief_ledger_core; assert belief_ledger_core.__version__ == '1.0.0rc2'"
+      - run: uvx ruff check packages/core/src tests/core
+
+  hermes-adapter:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -18,33 +35,82 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
-      - run: uv sync --frozen --extra dev
+      - run: uv sync --frozen --all-packages --group dev
       - run: uv run ruff format --check .
       - run: uv run ruff check .
-      - run: uv run mypy belief_ledger_pramana
-      - run: uv run pytest -m "not live_llm" --cov=belief_ledger_pramana --cov-branch --cov-report=xml
-      - run: uv run python scripts/check_hermes_contract.py
-      - if: matrix.python == '3.13'
-        run: uv run python -m build && uv run twine check dist/* && uv run python scripts/inspect_artifacts.py dist/* && uv run python scripts/smoke_install.py dist/*.whl
+      - run: uv run mypy packages/core/src packages/reference/src belief_ledger_pramana
+      - run: uv run python -m pytest -m "not live_llm" --cov=belief_ledger_core --cov=belief_ledger_pramana --cov=belief_ledger_reference --cov-branch --cov-report=xml
       - if: matrix.python == '3.13'
         uses: actions/upload-artifact@v7
         with:
-          name: reports-and-packages
-          path: |
-            coverage.xml
-            dist/*
+          name: coverage-and-test-evidence
+          path: coverage.xml
 
-  exact-contract:
+  hermes-supported:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        hermes: ["0.18.2"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen --all-packages --group dev
+      - run: uv run python -c "import importlib.metadata; assert importlib.metadata.version('hermes-agent') == '${{ matrix.hermes }}'"
+      - run: uv run python -m pytest tests/adapters/hermes tests/integration tests/contract/test_plugin_contract.py
+
+  exact-hermes-contract:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
-      - run: uv sync --frozen --extra dev
+      - run: uv sync --frozen --all-packages --group dev
       - run: git clone https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent
       - run: git -C /tmp/hermes-agent checkout 3b2ef789dfcf92f5b7b18c08c59d25948e50857f
       - run: uv run python scripts/check_hermes_contract.py --checkout /tmp/hermes-agent
+
+  reference-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen --all-packages --group dev
+      - run: uv run python -m pytest tests/conformance tests/adapters/reference tests/adapters/hermes
+      - run: uv run python examples/deployment_gate/run.py --adapter reference --profile strict --format json
+
+  replay-claims-evaluations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen --all-packages --group dev
+      - run: uv run python -m pytest tests/contract/test_v1_replay.py tests/unit/test_product_claims.py tests/unit/test_dependency_boundaries.py
+      - run: uv run python scripts/check_product_claims.py
+      - run: uv run python scripts/check_dependency_boundaries.py
+      - run: uv run python -m evaluations.report --suite all --offline
+
+  all-wheel-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen --all-packages --group dev
+      - run: uv run python scripts/build_workspace.py --packages core hermes reference --output-manifest build/artifacts.json
+      - run: uv run python scripts/inspect_artifacts.py --manifest build/artifacts.json
+      - run: uv run python scripts/smoke_install.py --matrix core,core+reference,hermes --manifest build/artifacts.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rc2-wheels
+          path: build/workspace-*/*.whl
 
   dependency-audit:
     runs-on: ubuntu-latest
@@ -53,10 +119,10 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
-      - run: uv sync --frozen
+      - run: uv sync --frozen --all-packages --group dev
       - run: uv run --with pip-audit pip-audit
 
-  path-smoke:
+  path-config-smoke:
     strategy:
       fail-fast: false
       matrix:
@@ -67,8 +133,8 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
-      - run: uv sync --frozen --extra dev
-      - run: uv run pytest tests/unit/test_config.py tests/unit/test_store.py tests/contract/test_plugin_contract.py tests/contract/test_real_hermes_manager.py
+      - run: uv sync --frozen --all-packages --group dev
+      - run: uv run python -m pytest tests/unit/test_config.py tests/unit/test_store.py tests/contract/test_plugin_contract.py tests/contract/test_real_hermes_manager.py
 
   hermes-main-canary:
     continue-on-error: true
@@ -78,6 +144,6 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
-      - run: uv sync --frozen --extra dev
+      - run: uv sync --frozen --all-packages --group dev
       - run: git clone --depth 1 https://github.com/NousResearch/hermes-agent.git /tmp/hermes-main
       - run: uv run python scripts/check_hermes_contract.py --checkout /tmp/hermes-main --allow-version-drift

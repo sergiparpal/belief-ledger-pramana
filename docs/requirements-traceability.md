@@ -17,6 +17,24 @@ a claim of external scientific validity.
 | R7 qualifiers precede contradiction | `engine/qualifiers.py`, `engine/contradiction.py` | `tests/unit/test_qualifiers_contradiction.py` |
 | R8 append-only authenticated event sourcing | `events.py`, `store.py`, immutable SQL triggers, separate event-auth table | store immutability/hash/authentication/replay tests |
 
+## rc2 architecture and enforcement requirements
+
+| Requirement | Implementation | Automated evidence |
+|---|---|---|
+| Outcome-first positioning and bounded public claims | `README.md`, package metadata, `scripts/check_product_claims.py` | `tests/unit/test_product_claims.py` |
+| Host-neutral core with no Hermes dependency | `packages/core`, exact workspace dependencies, boundary checker | `tests/unit/test_dependency_boundaries.py`, `tests/contract/test_workspace_packages.py` |
+| Frozen v1 replay and projection compatibility | explicit manifests in `migrations.py`, canonical v1 fixtures | `tests/contract/test_v1_replay.py` |
+| Deterministic capability/profile negotiation | `belief_ledger_core.contracts.negotiate_profile`, persisted episode events | `tests/conformance/test_enforcement_profiles.py` |
+| Versioned exact/pattern tool manifest and canonical schema drift | `belief_ledger_core.manifest`, policy CLI | `tests/core/gate/test_manifest.py`, `tests/integration/test_policy_commands.py` |
+| Exact approval receipts | `belief_ledger_core.enforcement.ApprovalBinding` and receipt projection | `tests/core/gate/test_enforcement.py` |
+| Opaque digest-persisted bound single-use action decisions | `belief_ledger_core.enforcement.ActionBinding`, `EnforcementStore` | token substitution/reuse/concurrency tests in `tests/core/gate/test_enforcement.py` |
+| Forward v6 migration and rebuildable v2 decision projections | `migrations.SCHEMA_V6`, enforcement replay, dual projection checks | migration/replay tests in `tests/unit/test_store.py` and `tests/core/gate/test_enforcement.py` |
+| Mandatory strict dispatch consume | private registry and public `ReferenceRunner.dispatch` | `tests/adapters/reference/test_runner.py` |
+| Zero-provisional-byte buffered delivery | `belief_ledger_core.buffering.ResponseGate`, reference-owned sink | `tests/core/gate/test_buffering.py`, reference adapter tests |
+| Honest Hermes accepted-final capability claim | `compatibility.host_capabilities`, doctor, compatibility matrix | `tests/adapters/hermes/test_capabilities.py`, doctor test |
+| Standalone strict adapter and versioned JSONL protocol | `packages/reference`, deployment runner | reference tests, `tests/conformance/test_adapters.py` |
+| Split CI and reproducible all-package local gate | `.github/workflows/ci.yml`, `scripts/verify_stage.py`, manifest builds | `tests/contract/test_workspace_packages.py`, final gate |
+
 ## Specification sections
 
 | Spec area | Implementation | Automated evidence |
@@ -28,7 +46,7 @@ a claim of external scientific validity.
 | §2.1 `Justification`, `Belief`, `DefeatEdge`, `VerificationTask` | `models.py`, projections | engine, query/explain tests |
 | §2.2 atomic/self-contained/qualified/bounded content | `engine/validity.py`, claim validator | validity and malformed claim tests |
 | §2.2 exact/near dedup and corroboration roots | `ingestion/provenance.py`, `_candidate_drafts` | idempotency/provenance scenarios |
-| §2.3 SQLite baseline tables | `migrations.py` plus operational tables | fresh DB/migration/replay tests |
+| §2.3 SQLite baseline tables | `migrations.py` schemas 1–3 plus operational tables | fresh DB/migration/replay tests |
 | §3 PRATYAKṢA validity/defeaters | validity registry, ingestion support/UNDERCUT | validity and engine tests |
 | §3 ŚABDA validity/defeaters | span validation, āpta source, REBUT/UNDERCUT | hash-only and wrapper/content tests |
 | §3 ANUMĀNA validity/defeaters | model tool, graph cycle check, live premises/warrant | inference and propagation tests |
@@ -60,8 +78,9 @@ a claim of external scientific validity.
 | §10 suite B bādha | `evaluations/suite_b_badha` | wrong-winner/propagation gates |
 | §10 suite C failures/actions | `evaluations/suite_c_agent_failures` | unsafe/false-block gates |
 | §10 suite D monitor | `evaluations/suite_d_linter` | precision/recall gates |
+| §10 suite E action/inventory/token binding | `evaluations/suite_e_action_gate` | allow/block, false-block, unknown, binding, retraction gates |
 | §10 ablations/overhead/collapse | `evaluations/ablations.py`, frozen config/report | evaluation e2e test/report |
-| §11 roadmap | staged `IMPLEMENTATION_STATE.md` and verification script | complete local gate |
+| §11 roadmap | `IMPLEMENTATION_PLAN.md` execution log and unified verification script | complete local gate |
 | §12 risks | README, threat model, evaluation metrics | suites/fuzz/property checks |
 | Appendix A trairūpya/hetvābhāsa | `verification/chain_audit.py`, schema/prompt | chain-audit validation tests |
 | Appendix B concept mapping | matching domain models/modules | this matrix plus architecture docs |

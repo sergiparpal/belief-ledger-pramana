@@ -32,8 +32,10 @@ is rejected unless the attacker can also read and replace the key. This remains 
 protection, not a remote signature, witness, or availability guarantee. The key is secret backup
 material, not export data, and must be restored with its matching database.
 
-Stable event families cover episode lifecycle, evidence/redaction, source registration/stat
+Stable event families cover episode lifecycle and persisted capability/profile selection,
+evidence/redaction, source registration/stat
 updates, belief admission/status, justification/support, defeat activity, verification,
 conflict, retraction, context rendering, component verdict/model usage, lint, gate, approval,
-and accepted response accounting.
-
+and accepted response accounting. A separate enforcement chain records versioned approval and
+action-decision issue/deny/reject/consume/expire/revoke events. It contains token digests and exact
+non-secret bindings, never raw tokens.

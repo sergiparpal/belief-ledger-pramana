@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "canonicalization_version": 1,
+  "rules": [
+    {
+      "id": "core-read-only",
+      "revision": "core-read-only-v1",
+      "effectful": false,
+      "base_stakes": "med",
+      "target_fields": ["path", "url", "query"],
+      "preconditions": [],
+      "approval_policy": "none",
+      "minimum_source_integrity": "untrusted",
+      "canonicalization_version": 1,
+      "pattern": "^(read|get|list|search|find|query|inspect|view|open|fetch|stat|head|tail)_.*$"
+    }
+  ]
+}

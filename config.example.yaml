@@ -2,6 +2,9 @@ schema_version: 1
 enabled: true
 mode: enforce
 default_stakes: med
+enforcement:
+  requested_profile: accepted_final
+  allow_diagnostic_downgrade: false
 storage:
   database: null
   evidence_mode: excerpt

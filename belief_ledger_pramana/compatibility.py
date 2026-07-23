@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
+from .contracts import HostCapabilities
 from .models import CompatibilityMode
 
 AUDITED_HERMES_VERSION = "0.18.2"
@@ -42,6 +43,37 @@ class CompatibilityReport:
     @property
     def full_conformance(self) -> bool:
         return self.mode is CompatibilityMode.FULL and not self.errors
+
+    def normalized_snapshot(self) -> dict[str, Any]:
+        """Return stable adapter behavior without object identities or timestamps."""
+
+        return {
+            "schema_version": 1,
+            "mode": self.mode.value,
+            "hermes_version": self.hermes_version,
+            "capabilities": {key: bool(value) for key, value in sorted(self.capabilities.items())},
+            "errors": list(self.errors),
+            "warnings": list(self.warnings),
+            "full_conformance": self.full_conformance,
+        }
+
+    def host_capabilities(self) -> HostCapabilities:
+        """Translate audited Hermes behavior into normalized capability facts."""
+
+        operational = self.mode in {CompatibilityMode.FULL, CompatibilityMode.HOOK_CONTEXT}
+        return HostCapabilities(
+            schema_version=1,
+            per_request_context=self.mode is CompatibilityMode.FULL,
+            pre_action_gate=operational and bool(self.capabilities.get("register_hook", True)),
+            atomic_action_token_consume=False,
+            accepted_final_transform=operational,
+            exclusive_final_output_gate=False,
+            buffered_stream_delivery=False,
+            bound_approval=False,
+            # Hermes 0.18.2 exposes plugin-registered names but no audited complete
+            # inventory of every built-in and dynamically added tool.
+            tool_inventory=False,
+        )
 
 
 def inspect_host(ctx: Any) -> CompatibilityReport:

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "belief-ledger-reference"
+version = "1.0.0rc2"
+description = "Strict standalone reference adapter for Belief Ledger"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = ["belief-ledger-core==1.0.0rc2"]
+
+[project.scripts]
+belief-ledger-reference = "belief_ledger_reference.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/belief_ledger_reference"]

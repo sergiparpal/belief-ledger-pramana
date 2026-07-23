@@ -1,0 +1,19 @@
+{
+  "capabilities": {
+    "llm_facade": true,
+    "register_cli_command": true,
+    "register_command": true,
+    "register_hook": true,
+    "register_middleware": false,
+    "register_tool": true
+  },
+  "errors": [],
+  "full_conformance": false,
+  "hermes_version": "0.18.2",
+  "mode": "hook_context",
+  "schema_version": 1,
+  "warnings": [
+    "per-request context injection is unavailable; compatibility context is per turn",
+    "strict enforcement is not claimed in this compatibility mode"
+  ]
+}

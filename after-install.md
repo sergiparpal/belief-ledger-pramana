@@ -1,5 +1,8 @@
 # After installation
 
+Belief Ledger provides evidence-backed policy enforcement for AI agents through this audited
+Hermes adapter.
+
 Enable the opt-in plugin, then restart the current Hermes or gateway process:
 
 ```bash

@@ -7,6 +7,9 @@ path requires a process restart.
 
 `mode` is `observe`, `warn`, or `enforce`; enforcing is the default. The sections are:
 
+- `enforcement`: requested capability profile and explicit diagnostic-downgrade switch. Hermes
+  defaults to `accepted_final`; missing capabilities fail closed in `enforce` unless downgrade is
+  explicitly enabled. Requested/effective profiles and reason codes are persisted.
 - `storage`: database path, `hash_only|excerpt|full`, redaction, timeout.
 - `context`: 8,000-character hard cap, belief/depth limits, retraction TTL, and an explicit
   relevance mode (`fts5` or `none`).
@@ -22,8 +25,10 @@ path requires a process restart.
   context rendering, inference, or action-gate evaluation.
 
 Invalid safety-critical settings make component health visibly degraded. No permissive fallback
-is silent. Action/source registries are packaged, versioned YAML; operator extensions must use
-exact names or anchored regular expressions.
+is silent. Tool manifests normalize v1 YAML into schema v2. Exact rules precede anchored patterns;
+ambiguous/conflicting effect classifications fail validation. Canonical schema drift ignores only
+specified informational fields and never claims semantic equivalence. Generated scaffolds remain
+inactive until explicit review.
 
 Configuration, the ledger database, and operator policy/source-profile extensions must all be
 regular files below the profile-local plugin state directory. Relative database and extension

@@ -1,0 +1,14 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "belief-ledger-core"
+version = "1.0.0rc2"
+description = "Evidence-backed policy enforcement for AI agents"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = ["PyYAML>=6.0,<7"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/belief_ledger_core"]

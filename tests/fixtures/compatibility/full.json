@@ -1,0 +1,16 @@
+{
+  "capabilities": {
+    "llm_facade": true,
+    "register_cli_command": true,
+    "register_command": true,
+    "register_hook": true,
+    "register_middleware": true,
+    "register_tool": true
+  },
+  "errors": [],
+  "full_conformance": true,
+  "hermes_version": "0.18.2",
+  "mode": "full",
+  "schema_version": 1,
+  "warnings": []
+}

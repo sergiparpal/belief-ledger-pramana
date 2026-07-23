@@ -55,6 +55,19 @@ def test_operator_cli_and_slash_command_cover_normal_workflow(runtime) -> None:
         assert code == 0, output
         assert output
 
+    code, preflight = run_cli(runtime, _arguments("db", "migrate", "--dry-run"))
+    assert code == 0
+    assert json.loads(preflight) == {
+        "backup_required": False,
+        "config_digest": runtime.config.digest,
+        "current_schema": 6,
+        "database": str(runtime.store.database),
+        "dry_run": True,
+        "migration_required": False,
+        "target_schema": 6,
+        "writes_performed": False,
+    }
+
     code, missing = run_cli(runtime, _arguments("episode", "show", "ep_missing"))
     assert code == 2
     assert json.loads(missing)["error"] == "episode_not_found"
@@ -100,7 +113,10 @@ def test_doctor_reports_activation_and_transform_competition(runtime) -> None:
     report = doctor(runtime)
     assert report["status"] == "healthy"
     assert report["full_conformance"] is True
+    assert report["strict_enforcement"] is False
     assert report["checks"]["activation"]["explicitly_enabled"] is True
+    assert report["checks"]["enforcement_profile"]["effective"] == "accepted_final"
+    assert report["checks"]["host_capabilities"]["atomic_action_token_consume"] is False
 
     def competitor(**kwargs):
         return kwargs.get("response_text")
