@@ -1,4 +1,4 @@
-# Belief Ledger Pramāṇa
+# Belief Ledger Pramana
 
 Evidence-backed policy enforcement for AI agents.
 
