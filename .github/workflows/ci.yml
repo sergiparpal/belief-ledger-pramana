@@ -36,10 +36,13 @@ jobs:
           python-version: ${{ matrix.python }}
           enable-cache: true
       - run: uv sync --frozen --all-packages --group dev
-      - run: uv run ruff format --check .
-      - run: uv run ruff check .
-      - run: uv run mypy packages/core/src packages/reference/src belief_ledger_pramana
-      - run: uv run python -m pytest -m "not live_llm" --cov=belief_ledger_core --cov=belief_ledger_pramana --cov=belief_ledger_reference --cov-branch --cov-report=xml
+      # Hermes is the host, not a project dependency. Install the audited host
+      # only for contract jobs and avoid a subsequent project re-sync.
+      - run: uv pip install --python .venv "hermes-agent==0.19.0"
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync mypy packages/core/src packages/reference/src belief_ledger_pramana
+      - run: uv run --no-sync python -m pytest -m "not live_llm" --cov=belief_ledger_core --cov=belief_ledger_pramana --cov=belief_ledger_reference --cov-branch --cov-report=xml
       - if: matrix.python == '3.13'
         uses: actions/upload-artifact@v7
         with:
@@ -50,15 +53,16 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        hermes: ["0.18.2"]
+        hermes: ["0.19.0"]
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
       - run: uv sync --frozen --all-packages --group dev
-      - run: uv run python -c "import importlib.metadata; assert importlib.metadata.version('hermes-agent') == '${{ matrix.hermes }}'"
-      - run: uv run python -m pytest tests/adapters/hermes tests/integration tests/contract/test_plugin_contract.py
+      - run: uv pip install --python .venv "hermes-agent==${{ matrix.hermes }}"
+      - run: uv run --no-sync python -c "import importlib.metadata; assert importlib.metadata.version('hermes-agent') == '${{ matrix.hermes }}'"
+      - run: uv run --no-sync python -m pytest tests/adapters/hermes tests/integration tests/contract/test_plugin_contract.py
 
   exact-hermes-contract:
     runs-on: ubuntu-latest
@@ -69,7 +73,7 @@ jobs:
           python-version: "3.13"
       - run: uv sync --frozen --all-packages --group dev
       - run: git clone https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent
-      - run: git -C /tmp/hermes-agent checkout 3b2ef789dfcf92f5b7b18c08c59d25948e50857f
+      - run: git -C /tmp/hermes-agent checkout 3ef6bbd201263d354fd83ec55b3c306ded2eb72a
       - run: uv run python scripts/check_hermes_contract.py --checkout /tmp/hermes-agent
 
   reference-conformance:
@@ -134,7 +138,8 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --frozen --all-packages --group dev
-      - run: uv run python -m pytest tests/unit/test_config.py tests/unit/test_store.py tests/contract/test_plugin_contract.py tests/contract/test_real_hermes_manager.py
+      - run: uv pip install --python .venv "hermes-agent==0.19.0"
+      - run: uv run --no-sync python -m pytest tests/unit/test_config.py tests/unit/test_store.py tests/contract/test_plugin_contract.py tests/contract/test_real_hermes_manager.py
 
   hermes-main-canary:
     continue-on-error: true
