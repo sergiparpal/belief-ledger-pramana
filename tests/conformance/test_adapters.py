@@ -13,7 +13,7 @@ from belief_ledger_pramana.models import CompatibilityMode
 def test_adapters_report_explicit_profile_difference(tmp_path: Path) -> None:
     hermes = CompatibilityReport(
         CompatibilityMode.FULL,
-        "0.18.2",
+        "0.19.0",
         "3.13",
         {"register_hook": True},
         (),

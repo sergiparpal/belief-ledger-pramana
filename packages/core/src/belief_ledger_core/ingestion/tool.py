@@ -62,9 +62,10 @@ def prepare_evidence(
     """Redact before deriving any persistent representation of an observation."""
 
     redacted_text, redacted = redact_secrets(result) if redact else (result, False)
-    # A plain SHA-256 hash of the original can reveal a known short secret by
-    # comparison. Persist only a hash of the redacted representation.
-    full_hash = redacted_content_hash(result)
+    # When privacy redaction is enabled, do not persist a digest that can
+    # confirm a detected short secret.  When the operator explicitly disables
+    # redaction, the digest must still commit to the payload that is persisted.
+    full_hash = redacted_content_hash(result) if redact else content_hash(result)
     if mode == "hash_only":
         return PreparedEvidence(None, full_hash, redacted, None, None, len(result))
     if mode == "full":

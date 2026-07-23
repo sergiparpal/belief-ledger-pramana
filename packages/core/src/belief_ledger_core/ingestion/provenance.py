@@ -46,9 +46,12 @@ def provenance_root(
         publisher_part = re.sub(r"\s+", "-", publisher.casefold().strip()) or "unknown"
         return f"web:{domain}:{publisher_part}"
     if kind is SourceKind.DOCUMENT:
-        payload = content if content is not None else safe_identity
-        digest = redacted_content_hash(payload if isinstance(payload, bytes) else str(payload))
-        return f"document:{digest}:{safe_origin or safe_identity}"
+        # A provenance root identifies the underlying document, not one
+        # returned chunk/version.  Observation content is fingerprinted
+        # separately so chunks from one file cannot corroborate one another as
+        # independent sources.
+        del content
+        return f"document:{safe_origin or safe_identity or 'unknown'}"
     if kind is SourceKind.USER:
         return f"user:{safe_identity}"
     if kind is SourceKind.TOOL:

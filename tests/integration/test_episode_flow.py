@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import copy
+
+import yaml
+
 from belief_ledger_pramana.models import Pramana, Status
 
 
@@ -60,13 +64,25 @@ def test_stale_claim_retracts_descendant_and_reinstates_context(runtime) -> None
     )
     service.compile_context(query="pin Foo", request_id="request-derived")
 
-    service.config["ingestion"]["trusted_workspace_files"] = True
+    updated_config = copy.deepcopy(runtime.config.data)
+    updated_config["ingestion"]["trusted_workspace_files"] = True
+    if runtime.config.source is None:
+        raise RuntimeError("test runtime configuration source is unavailable")
+    runtime.config.source.write_text(
+        yaml.safe_dump(updated_config, sort_keys=False),
+        encoding="utf-8",
+    )
+    service = runtime.begin_turn(
+        session_id="session",
+        turn_id="turn-2",
+        user_message="Read the current version file.",
+    )
     service.ingest_tool_result(
         "read_file",
         {"path": "versions.txt"},
         "Foo version is 2.4.1.",
         session_id="session",
-        turn_id="turn-1",
+        turn_id="turn-2",
         tool_call_id="call-new",
         status="success",
     )

@@ -32,8 +32,8 @@ dispatch and buffered high-stakes delivery without making Hermes the product bou
 
 ## Compatibility
 
-The audited Hermes adapter targets Hermes Agent `0.18.2` at commit
-`3b2ef789dfcf92f5b7b18c08c59d25948e50857f`, manifest version 1, and Python
+The audited Hermes adapter targets Hermes Agent `0.19.0` at commit
+`3ef6bbd201263d354fd83ec55b3c306ded2eb72a`, manifest version 1, and Python
 `>=3.11,<3.14`. The per-request guarantee requires Hermes' audited
 `llm_request` middleware. Its maximum profile is `accepted_final`: it has a pre-action gate and
 accepted-response transform, but not atomic action-token consumption, complete tool inventory,
@@ -42,7 +42,7 @@ diagnostics-only. See [HERMES_COMPATIBILITY.md](HERMES_COMPATIBILITY.md).
 
 | Adapter | Maximum profile | Dispatch/output boundary |
 |---|---|---|
-| Hermes 0.18.2 audited adapter | `accepted_final` | pre-tool denial and accepted-final transform; provisional streaming may remain visible |
+| Hermes 0.19.0 audited adapter | `accepted_final` | pre-tool denial and accepted-final transform; provisional streaming may remain visible |
 | Standalone reference adapter | `strict` | atomic single-use consume before dispatch and exclusive buffered delivery |
 
 ## Install and enable
@@ -53,6 +53,10 @@ From Git/directory form:
 hermes plugins install OWNER/REPO --enable
 hermes belief-ledger doctor
 ```
+
+`belief-ledger-pramana` treats Hermes as its host (a peer), not as a Python runtime
+dependency. This avoids silently installing or downgrading the host and its large,
+independently managed dependency graph.
 
 For a project-local checkout:
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextvars
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -65,6 +66,8 @@ class HostLlmClient:
         max_tokens: int,
         validator: Callable[[Any], Any],
     ) -> StructuredCallResult:
+        if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens <= 0:
+            raise LlmComponentError("max_tokens must be a positive integer")
         if _IN_COMPONENT_CALL.get():
             raise LlmComponentError("recursive component model call blocked")
         episode = self._store.get_episode(episode_id)
@@ -117,13 +120,12 @@ class HostLlmClient:
                 timeout=float(limits.structured_timeout_seconds),
                 purpose=purpose,
             )
-            provider = str(getattr(result, "provider", ""))
-            model = str(getattr(result, "model", ""))
+            provider = _bounded_label(getattr(result, "provider", ""), "provider")
+            model = _bounded_label(getattr(result, "model", ""), "model")
             usage = getattr(result, "usage", None)
             input_tokens = _input_tokens_or_reservation(usage, estimated_input)
             output_tokens = _output_tokens_or_reservation(usage, max_tokens)
-            reported_cost = getattr(usage, "cost_usd", None)
-            cost = float(reported_cost) if reported_cost is not None else None
+            cost = _valid_cost(getattr(usage, "cost_usd", None))
             parsed = validator(getattr(result, "parsed", None))
             outcome = "success"
         except Exception as exc:  # attribution is persisted before the stable wrapper is raised
@@ -187,7 +189,7 @@ def _input_tokens_or_reservation(usage: Any, reservation: int) -> int:
     """Keep the reservation when a provider omits or corrupts input usage."""
 
     value = getattr(usage, "input_tokens", None) if usage is not None else None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         return reservation
     return int(value)
 
@@ -196,9 +198,30 @@ def _output_tokens_or_reservation(usage: Any, reservation: int) -> int:
     """Keep the reservation when output usage is unavailable or invalid."""
 
     value = getattr(usage, "output_tokens", None) if usage is not None else None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return reservation
-    return int(value)
+    return value
+
+
+def _bounded_label(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) > 256
+        or any(character in value for character in ("\x00", "\n", "\r"))
+    ):
+        raise ValueError(f"provider {label} is invalid")
+    return value
+
+
+def _valid_cost(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("provider cost is invalid")
+    cost = float(value)
+    if not math.isfinite(cost) or cost < 0:
+        raise ValueError("provider cost is invalid")
+    return cost
 
 
 def _record_draft(kind: str, aggregate_type: str, aggregate_id: str, record: Any) -> Any:

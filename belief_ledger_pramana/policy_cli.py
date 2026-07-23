@@ -8,7 +8,7 @@ from typing import Any
 
 from belief_ledger_core.manifest import ToolDescriptor, ToolPolicyManifest
 
-from .config import packaged_yaml
+from .config import load_config
 
 
 def main() -> int:
@@ -24,7 +24,13 @@ def main() -> int:
         item.add_argument("tool_name")
         item.add_argument("--format", choices=("human", "json"), default="human")
     args = parser.parse_args()
-    manifest = ToolPolicyManifest.load(packaged_yaml("action-policies.yaml"))
+    snapshot, _ = load_config(initialize=False)
+    from .runtime import _action_policy_data
+
+    manifest = ToolPolicyManifest.load(
+        _action_policy_data(snapshot.data),
+        mode=snapshot.mode,
+    )
     if args.policy_command == "validate":
         result: dict[str, Any] = {
             "schema_version": 1,

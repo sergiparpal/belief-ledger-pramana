@@ -41,12 +41,12 @@ def test_character_budget_is_hard_bounded(parts: list[str], maximum: int) -> Non
     assert budget.used == len(budget.render())
 
 
-def test_mandatory_budget_truncation_uses_every_remaining_character() -> None:
+def test_mandatory_budget_entries_are_never_partially_rendered() -> None:
     budget = CharacterBudget(7)
     assert budget.add("abc")
     assert not budget.add("123456", mandatory=True)
-    assert budget.render() == "abc\n123"
-    assert budget.used == 7
+    assert budget.render() == "abc"
+    assert budget.used == 3
     assert budget.truncated
 
 

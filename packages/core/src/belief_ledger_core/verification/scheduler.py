@@ -9,7 +9,7 @@ from typing import Any
 from ..events import EventDraft
 from ..ids import new_id
 from ..ingestion.provenance import independent
-from ..models import Belief, Source, VerificationMethod, VerificationTask
+from ..models import Belief, Source, Status, VerificationMethod, VerificationTask
 from ..store import LedgerStore
 
 
@@ -72,6 +72,7 @@ class VerificationScheduler:
         for candidate in beliefs:
             if (
                 candidate.id == belief.id
+                or candidate.status in {Status.OUT, Status.QUARANTINED}
                 or candidate.normalized_content != belief.normalized_content
             ):
                 continue

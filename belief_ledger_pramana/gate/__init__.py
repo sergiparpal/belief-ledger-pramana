@@ -1,1 +1,3 @@
-from belief_ledger_core.gate import *  # noqa: F403
+from belief_ledger_core.gate import ActionGate
+
+__all__ = ["ActionGate"]

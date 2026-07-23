@@ -1,1 +1,3 @@
-from belief_ledger_core.context.budget import *  # noqa: F403
+from belief_ledger_core.context.budget import CharacterBudget
+
+__all__ = ["CharacterBudget"]

@@ -11,7 +11,7 @@
     "missing Hermes capabilities: llm_facade, register_cli_command, register_command, register_hook, register_middleware, register_tool"
   ],
   "full_conformance": false,
-  "hermes_version": "0.18.2",
+  "hermes_version": "0.19.0",
   "mode": "diagnostics_only",
   "schema_version": 1,
   "warnings": [

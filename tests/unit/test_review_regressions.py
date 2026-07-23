@@ -17,7 +17,7 @@ from belief_ledger_pramana.config import (
     validate_config,
 )
 from belief_ledger_pramana.gate.classify import ActionPolicyRegistry
-from belief_ledger_pramana.models import GateOutcome, Health, VerificationMethod
+from belief_ledger_pramana.models import GateOutcome, Health, Stakes, VerificationMethod
 from belief_ledger_pramana.runtime import (
     PluginRuntime,
     RuntimeUnavailable,
@@ -214,3 +214,58 @@ def test_action_policy_rejects_string_booleans() -> None:
     policy["rules"][0]["effectful"] = "false"
     with pytest.raises(ValueError, match="effectful must be a boolean"):
         ActionPolicyRegistry(policy)
+
+
+def test_duplicate_observation_refreshes_evidence_without_duplicating_belief(runtime) -> None:
+    service = runtime.begin_turn(session_id="duplicates", turn_id="one", user_message="Observe")
+    service.ingest_user_message("Atlas is healthy.", sender_id="same-source")
+    first = service.store.list_beliefs(service.episode_id)
+    assert len(first) == 1
+
+    service.ingest_user_message("Atlas is healthy.", sender_id="same-source")
+
+    beliefs = service.store.list_beliefs(service.episode_id)
+    evidence = [
+        item
+        for item in service.store.events(service.episode_id)
+        if item.kind == "EVIDENCE_INGESTED"
+    ]
+    event_kinds = [item.kind for item in service.store.events(service.episode_id)]
+    assert len(beliefs) == 1
+    assert len(beliefs[0].evidence) == 2
+    assert len(evidence) == 2
+    assert "DUPLICATE_CONTENT_OBSERVED" in event_kinds
+    assert "BELIEF_OBSERVATION_REFRESHED" in event_kinds
+
+
+def test_callbacks_without_stable_ids_are_not_accidentally_deduplicated(runtime) -> None:
+    service = runtime.begin_turn(session_id="anonymous-callback", turn_id="one", user_message="Run")
+    for _ in range(2):
+        service.ingest_tool_result("opaque_probe", {}, "same output", status="success")
+
+    ingested = [
+        item
+        for item in service.store.events(service.episode_id)
+        if item.kind == "EVIDENCE_INGESTED"
+    ]
+    assert len(ingested) == 2
+
+
+def test_raising_stakes_supersedes_understrength_verification_tasks(runtime) -> None:
+    service = runtime.begin_turn(session_id="stakes", turn_id="one", user_message="Assess")
+    service.ingest_user_message(
+        "Atlas is healthy.",
+        sender_id="operator",
+        session_id="stakes",
+        turn_id="one",
+    )
+    service.set_stakes(Stakes.HIGH, user_initiated=True)
+    original = service.store.list_verification_tasks(service.episode_id, state="open")
+    assert len(original) == 1 and original[0].k_required == 1
+
+    service.set_stakes(Stakes.CRITICAL, user_initiated=True)
+
+    completed = service.store.get_verification_task(original[0].id)
+    replacement = service.store.list_verification_tasks(service.episode_id, state="open")
+    assert completed is not None and completed.result == "superseded"
+    assert len(replacement) == 1 and replacement[0].k_required == 2

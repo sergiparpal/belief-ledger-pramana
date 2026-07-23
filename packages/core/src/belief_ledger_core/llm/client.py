@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextvars
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -63,6 +64,8 @@ class HostLlmClient:
         max_tokens: int,
         validator: Callable[[Any], Any],
     ) -> StructuredCallResult:
+        if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens <= 0:
+            raise LlmComponentError("max_tokens must be a positive integer")
         if _IN_COMPONENT_CALL.get():
             raise LlmComponentError("recursive component model call blocked")
         episode = self._store.get_episode(episode_id)
@@ -94,8 +97,8 @@ class HostLlmClient:
         started = self._dependencies.monotonic.now()
         provider = ""
         model = ""
-        input_tokens = 0
-        output_tokens = 0
+        input_tokens = estimated_input
+        output_tokens = max_tokens
         cost: float | None = None
         outcome = "error"
         parsed: Any = None
@@ -112,11 +115,13 @@ class HostLlmClient:
                     float(limits["structured_timeout_seconds"]),
                 )
             )
-            provider = result.provider
-            model = result.model
-            input_tokens = result.input_tokens
-            output_tokens = result.output_tokens
-            cost = result.cost_usd
+            if result.schema_version != 1:
+                raise ValueError("structured model result schema_version is invalid")
+            provider = _bounded_label(result.provider, "provider")
+            model = _bounded_label(result.model, "model")
+            input_tokens = _valid_input_tokens(result.input_tokens, estimated_input)
+            output_tokens = _valid_output_tokens(result.output_tokens, max_tokens)
+            cost = _valid_cost(result.cost_usd)
             parsed = validator(result.parsed)
             outcome = "success"
         except Exception as exc:  # attribution is persisted before the stable wrapper is raised
@@ -125,7 +130,7 @@ class HostLlmClient:
         finally:
             _IN_COMPONENT_CALL.reset(token)
 
-        latency_ms = int((self._dependencies.monotonic.now() - started) * 1_000)
+        latency_ms = max(0, int((self._dependencies.monotonic.now() - started) * 1_000))
         usage_record = LlmUsage(
             id=self._dependencies.identity.new("usage"),
             episode_id=episode_id,
@@ -180,3 +185,36 @@ def _record_draft(kind: str, aggregate_type: str, aggregate_id: str, record: Any
     from ..events import to_primitive
 
     return EventDraft(kind, aggregate_type, aggregate_id, {"record": to_primitive(record)})
+
+
+def _valid_input_tokens(value: Any, reservation: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return reservation
+    return value
+
+
+def _valid_output_tokens(value: Any, reservation: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return reservation
+    return value
+
+
+def _bounded_label(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) > 256
+        or any(character in value for character in ("\x00", "\n", "\r"))
+    ):
+        raise ValueError(f"provider {label} is invalid")
+    return value
+
+
+def _valid_cost(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("provider cost is invalid")
+    cost = float(value)
+    if not math.isfinite(cost) or cost < 0:
+        raise ValueError("provider cost is invalid")
+    return cost

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 
 from ..models import Belief
 from .qualifiers import ScopeReconciliation, reconcile_qualifiers
@@ -44,10 +45,7 @@ def candidate_pair(
         right_tokens if right_tokens is not None else candidate_tokens(right.content)
     )
     shared = resolved_left_tokens & resolved_right_tokens
-    return len(shared) >= 2 or (
-        bool(shared)
-        and (left.pramana.value == "anupalabdhi" or right.pramana.value == "anupalabdhi")
-    )
+    return bool(shared)
 
 
 def classify_deterministically(left: Belief, right: Belief) -> ContradictionDecision:
@@ -74,10 +72,17 @@ def classify_deterministically(left: Belief, right: Belief) -> ContradictionDeci
         and right_numeric
         and left_numeric.group(1).strip() == right_numeric.group(1).strip()
         and left_numeric.group(3).strip() == right_numeric.group(3).strip()
-        and left_numeric.group(2) != right_numeric.group(2)
+        and not _numeric_equal(left_numeric.group(2), right_numeric.group(2))
     ):
         return ContradictionDecision("rebut", "same predicate has unequal numeric values", scope)
     return ContradictionDecision("uncertain", "deterministic rules are insufficient", scope)
+
+
+def _numeric_equal(left: str, right: str) -> bool:
+    try:
+        return Decimal(left) == Decimal(right)
+    except InvalidOperation:
+        return left == right
 
 
 def candidate_tokens(content: str) -> set[str]:

@@ -84,12 +84,14 @@ def deterministic_entailment(claim: str, belief: str) -> bool:
         return False
     if left == right:
         return True
-    left_tokens = set(_WORD.findall(left))
-    right_tokens = set(_WORD.findall(right))
+    left_tokens = _WORD.findall(left)
+    right_tokens = _WORD.findall(right)
     if not left_tokens:
         return False
-    coverage = len(left_tokens & right_tokens) / len(left_tokens)
-    return coverage >= 0.85 and _negation_parity(left) == _negation_parity(right)
+    # A deterministic shortcut must preserve predicate/argument order.  Any
+    # paraphrase or reordered proposition is left to the bounded semantic
+    # component instead of being accepted by an unordered bag of words.
+    return left_tokens == right_tokens and _negation_parity(left) == _negation_parity(right)
 
 
 def _negation_parity(text: str) -> bool:

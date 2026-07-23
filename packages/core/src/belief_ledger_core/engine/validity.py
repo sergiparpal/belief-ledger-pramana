@@ -198,6 +198,20 @@ def validate_belief(
         _require(
             checks,
             reasons,
+            "coverage_range",
+            0.0 <= coverage <= 1.0,
+            "search coverage must be in [0,1]",
+        )
+        _require(
+            checks,
+            reasons,
+            "recall_range",
+            0.0 <= recall <= 1.0,
+            "search recall must be in [0,1]",
+        )
+        _require(
+            checks,
+            reasons,
             "coverage",
             coverage >= yogyata_min_coverage,
             "search coverage is below yogyata threshold",

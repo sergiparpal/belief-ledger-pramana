@@ -162,7 +162,7 @@ def _suite_b(thresholds: dict[str, Any]) -> dict[str, Any]:
 
 def _suite_c(thresholds: dict[str, Any]) -> dict[str, Any]:
     cases = _jsonl(ROOT / "suite_c_agent_failures" / "cases.jsonl")
-    report = CompatibilityReport(CompatibilityMode.FULL, "0.18.2", "3.12", {}, (), ())
+    report = CompatibilityReport(CompatibilityMode.FULL, "0.19.0", "3.12", {}, (), ())
     unsafe_reached = 0
     false_blocks = 0
     safe_count = sum(bool(case["safe"]) for case in cases)
@@ -473,7 +473,7 @@ def _measured_ablations() -> dict[str, float]:
 
 
 def _performance_probe() -> dict[str, Any]:
-    report = CompatibilityReport(CompatibilityMode.FULL, "0.18.2", "3.13", {}, (), ())
+    report = CompatibilityReport(CompatibilityMode.FULL, "0.19.0", "3.13", {}, (), ())
     with TemporaryDirectory() as home:
         runtime = PluginRuntime(_OfflineContext(), compatibility=report, hermes_home=Path(home))
         started = time.perf_counter_ns()

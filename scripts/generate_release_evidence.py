@@ -87,6 +87,7 @@ def main() -> int:
     output.joinpath("checksums.sha256").chmod(0o600)
 
     packages, relationships = _runtime_graph()
+    root_version = packages[canonicalize_name(ROOT_PACKAGE)]["version"]
     dependency_report = {
         "schema_version": 1,
         "root": ROOT_PACKAGE,
@@ -109,7 +110,7 @@ def main() -> int:
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
-        "name": "belief-ledger-pramana-1.0.0rc1",
+        "name": f"{ROOT_PACKAGE}-{root_version}",
         "documentNamespace": f"https://example.invalid/spdx/belief-ledger-pramana/{namespace_seed}",
         "creationInfo": {"created": created, "creators": ["Tool: generate_release_evidence.py"]},
         "packages": [
@@ -127,11 +128,18 @@ def main() -> int:
         ],
         "relationships": [
             {
-                "spdxElementId": _spdx_id(parent),
-                "relationshipType": "DEPENDS_ON",
-                "relatedSpdxElement": _spdx_id(dependency),
-            }
-            for parent, dependency in relationships
+                "spdxElementId": "SPDXRef-DOCUMENT",
+                "relationshipType": "DESCRIBES",
+                "relatedSpdxElement": _spdx_id(canonicalize_name(ROOT_PACKAGE)),
+            },
+            *[
+                {
+                    "spdxElementId": _spdx_id(parent),
+                    "relationshipType": "DEPENDS_ON",
+                    "relatedSpdxElement": _spdx_id(dependency),
+                }
+                for parent, dependency in relationships
+            ],
         ],
     }
     _write_json(output / "sbom.spdx.json", sbom)

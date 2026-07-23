@@ -125,10 +125,19 @@ class EnforcementStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             if not approved:
+                revoked = connection.execute(
+                    "UPDATE approval_receipts SET state='revoked' "
+                    "WHERE binding_digest=? AND state='issued'",
+                    (binding.digest,),
+                ).rowcount
                 self._append_event(
                     connection,
                     "APPROVAL_RECEIPT_DENIED",
-                    {"receipt_digest": digest, "binding_digest": binding.digest},
+                    {
+                        "receipt_digest": digest,
+                        "binding_digest": binding.digest,
+                        "revoked_prior_receipts": revoked,
+                    },
                 )
                 connection.commit()
                 return None
@@ -270,6 +279,29 @@ class EnforcementStore:
         conflicts_are_closed: Callable[[tuple[str, ...]], bool] | None = None,
     ) -> ConsumeResult:
         token_digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        support_ok: bool | None = None
+        conflicts_ok: bool | None = None
+        preflight = self._connect()
+        try:
+            preflight_row = preflight.execute(
+                "SELECT binding_json,state,expires_at FROM action_decisions WHERE token_digest=?",
+                (token_digest,),
+            ).fetchone()
+        finally:
+            preflight.close()
+        if (
+            preflight_row is not None
+            and str(preflight_row["state"]) == "issued"
+            and isoformat_utc(self.dependencies.clock.now()) < str(preflight_row["expires_at"])
+        ):
+            preflight_binding = _action_binding(json.loads(str(preflight_row["binding_json"])))
+            if _binding_mismatch(preflight_binding, presented) is None:
+                if support_is_active is not None:
+                    support_ok = bool(support_is_active(preflight_binding.supporting_belief_ids))
+                if conflicts_are_closed is not None:
+                    conflicts_ok = bool(
+                        conflicts_are_closed(preflight_binding.blocking_conflict_ids)
+                    )
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -296,7 +328,7 @@ class EnforcementStore:
             approval_reason = self._approval_reason(connection, stored, allow_consumed=True)
             if approval_reason:
                 return self._reject(connection, token_digest, approval_reason)
-            if support_is_active and not support_is_active(stored.supporting_belief_ids):
+            if support_ok is False:
                 connection.execute(
                     "UPDATE action_decisions SET state='revoked' WHERE token_digest=? AND state='issued'",
                     (token_digest,),
@@ -307,7 +339,7 @@ class EnforcementStore:
                     "SUPPORT_RETRACTED",
                     event="ACTION_DECISION_REVOKED",
                 )
-            if conflicts_are_closed and not conflicts_are_closed(stored.blocking_conflict_ids):
+            if conflicts_ok is False:
                 connection.execute(
                     "UPDATE action_decisions SET state='revoked' "
                     "WHERE token_digest=? AND state='issued'",
@@ -466,6 +498,13 @@ class EnforcementStore:
                 ),
             )
         elif kind.startswith("APPROVAL_RECEIPT_"):
+            if kind == "APPROVAL_RECEIPT_DENIED":
+                connection.execute(
+                    "UPDATE approval_receipts SET state='revoked' "
+                    "WHERE binding_digest=? AND state='issued'",
+                    (payload["binding_digest"],),
+                )
+                return
             state = {
                 "APPROVAL_RECEIPT_CONSUMED": "consumed",
                 "APPROVAL_RECEIPT_EXPIRED": "expired",
@@ -665,6 +704,13 @@ def rebuild_enforcement_projection(connection: sqlite3.Connection) -> None:
                     payload["issued_at"],
                     payload["expires_at"],
                 ),
+            )
+            continue
+        if kind == "APPROVAL_RECEIPT_DENIED":
+            connection.execute(
+                "UPDATE approval_receipts SET state='revoked' "
+                "WHERE binding_digest=? AND state='issued'",
+                (payload["binding_digest"],),
             )
             continue
         approval_state = {

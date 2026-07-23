@@ -51,6 +51,7 @@ class HermesRequestInjector:
         target = _target_user_message(copied, api_mode)
         if self._message_has_valid_marker(target, binding=binding):
             return InjectionResult(copied, False)
+        target["content"] = self._remove_markers(target.get("content"))
         block = self.wrap(context, binding=binding)
         if api_mode == "chat_completions":
             self._inject_chat(copied, block)
@@ -122,6 +123,23 @@ class HermesRequestInjector:
                 ):
                     return True
         return False
+
+    def _remove_markers(self, value: Any) -> Any:
+        if isinstance(value, str):
+            return self._marker.sub("", value)
+        if isinstance(value, list):
+            cleaned: list[Any] = []
+            for item in value:
+                updated = self._remove_markers(item)
+                if isinstance(updated, dict):
+                    text_value = updated.get("text")
+                    if text_value == "" and set(updated) <= {"type", "text"}:
+                        continue
+                cleaned.append(updated)
+            return cleaned
+        if isinstance(value, dict):
+            return {key: self._remove_markers(item) for key, item in value.items()}
+        return value
 
 
 def _last_user(value: Any) -> dict[str, Any]:

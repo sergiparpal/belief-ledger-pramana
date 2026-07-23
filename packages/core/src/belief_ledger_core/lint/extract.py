@@ -31,7 +31,9 @@ class ExtractedClaim:
 def extract_claims(
     response: str, *, pending_marker: str, require_coverage: bool = False
 ) -> tuple[ExtractedClaim, ...]:
-    masked = _mask(_CODE_FENCE, response)
+    # High-stakes coverage includes fenced output: factual comments, command
+    # output, and serialized data are still assertions delivered to the user.
+    masked = response if require_coverage else _mask(_CODE_FENCE, response)
     masked = _mask(_INLINE_CODE, masked)
     claims: list[ExtractedClaim] = []
     for match in _SENTENCE.finditer(masked):

@@ -23,12 +23,9 @@ class CharacterBudget:
             return True
         self.truncated = True
         if mandatory:
-            remaining = self.maximum - self.used - len(separator)
-            if remaining > 0:
-                if separator:
-                    self.parts.append(separator)
-                self.parts.append(text[:remaining])
-                self.used = self.maximum
+            # Safety-sensitive entries are atomic. A partial conflict or
+            # retraction line is more misleading than an explicit truncation
+            # sentinel supplied by the renderer.
             return False
         return False
 

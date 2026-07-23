@@ -9,7 +9,7 @@
   },
   "errors": [],
   "full_conformance": true,
-  "hermes_version": "0.18.2",
+  "hermes_version": "0.19.0",
   "mode": "full",
   "schema_version": 1,
   "warnings": []

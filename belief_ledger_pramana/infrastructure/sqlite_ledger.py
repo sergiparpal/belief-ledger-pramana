@@ -116,6 +116,9 @@ class SqliteLedgerReader:
     def fts_belief_ids(self, episode_id: str, query: str, *, limit: int = 200) -> tuple[str, ...]:
         return self.store.fts_belief_ids(episode_id, query, limit=limit)
 
+    def fts_available(self) -> bool:
+        return self.store.fts_available()
+
 
 @dataclass(frozen=True, slots=True)
 class SqliteLlmBudgetLedger:

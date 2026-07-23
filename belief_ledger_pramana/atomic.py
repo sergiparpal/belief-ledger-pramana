@@ -26,6 +26,8 @@ def write_private_text_atomically(path: Path, text: str, *, mode: int = 0o600) -
         _chmod_if_supported(temporary, mode)
         os.replace(_filesystem_path(temporary), _filesystem_path(path))
         _chmod_if_supported(path, mode)
+        _fsync_path(path)
+        _fsync_directory(parent)
     finally:
         with suppress(FileNotFoundError):
             os.unlink(_filesystem_path(temporary))
@@ -45,3 +47,24 @@ def _filesystem_path(path: Path) -> str:
 def _chmod_if_supported(path: Path, mode: int) -> None:
     with suppress(OSError):
         os.chmod(_filesystem_path(path), mode)
+
+
+def _fsync_path(path: Path) -> None:
+    with suppress(OSError):
+        descriptor = os.open(_filesystem_path(path), os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    with suppress(OSError):
+        descriptor = os.open(_filesystem_path(path), flags)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)

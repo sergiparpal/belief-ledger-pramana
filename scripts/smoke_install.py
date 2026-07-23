@@ -40,7 +40,7 @@ def main() -> int:
         command_environment["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
         if not args.skip_hermes:
             subprocess.run(
-                [str(python), "-m", "pip", "install", "hermes-agent==0.18.2"],
+                [str(python), "-m", "pip", "install", "hermes-agent==0.19.0"],
                 check=True,
                 env=command_environment,
             )
@@ -87,7 +87,7 @@ def main() -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     expected = report["register"] and report["version"] == "1.0.0rc2"
     if not args.skip_hermes:
-        expected = expected and report["hermes"] == "0.18.2"
+        expected = expected and report["hermes"] == "0.19.0"
         expected = expected and report["middleware"] == ["llm_request"]
         expected = expected and len(report["tools"]) == 4
     return 0 if expected else 1
@@ -118,7 +118,7 @@ def _run_matrix(matrix: str, manifest_path: Path) -> int:
             command_environment["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
             if mode == "hermes":
                 subprocess.run(
-                    [str(python), "-m", "pip", "install", "hermes-agent==0.18.2"],
+                    [str(python), "-m", "pip", "install", "hermes-agent==0.19.0"],
                     check=True,
                     env=command_environment,
                     capture_output=True,
@@ -146,7 +146,7 @@ def _run_matrix(matrix: str, manifest_path: Path) -> int:
                     "eps=importlib.metadata.entry_points().select(group='hermes_agent.plugins');"
                     "ep=next(x for x in eps if x.name=='belief-ledger-pramana');"
                     "assert callable(ep.load().register);"
-                    "assert importlib.metadata.version('hermes-agent')=='0.18.2';print('1.0.0rc2')"
+                    "assert importlib.metadata.version('hermes-agent')=='0.19.0';print('1.0.0rc2')"
                 )
             result = subprocess.run(
                 [str(python), "-c", code],

@@ -7,7 +7,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from belief_ledger_core.enforcement import ApprovalBinding, EnforcementStore
 
+from belief_ledger_pramana.dependencies import deterministic_dependencies
 from belief_ledger_pramana.events import canonical_json, compute_event_hash
 from belief_ledger_pramana.ids import new_id
 from belief_ledger_pramana.models import CompatibilityMode, Episode, Stakes
@@ -90,6 +92,16 @@ def test_idempotency_replays_the_entire_batch_and_is_episode_scoped(tmp_path: Pa
     )
     assert len(other) == 1
     assert store.replay().deterministic
+
+
+def test_event_lookup_chunks_large_idempotent_batches(tmp_path: Path) -> None:
+    store = LedgerStore(tmp_path / "ledger.sqlite3")
+    episode = _episode()
+    store.create_episode(episode)
+    drafts = [EventDraft("NOTE", "episode", episode.id, {"value": index}) for index in range(1_005)]
+    appended = store.append_events(episode.id, drafts, idempotency_key="large-batch")
+    repeated = store.append_events(episode.id, drafts, idempotency_key="large-batch")
+    assert [event.id for event in repeated] == [event.id for event in appended]
 
 
 def test_llm_budget_reservations_are_atomic(tmp_path: Path) -> None:
@@ -205,13 +217,34 @@ def test_store_rejects_symbolic_link_integrity_key(tmp_path: Path) -> None:
 
 
 def test_confirmed_offline_purge_rewrites_only_other_episodes(tmp_path: Path) -> None:
-    store = LedgerStore(tmp_path / "ledger.sqlite3")
+    database = tmp_path / "ledger.sqlite3"
+    store = LedgerStore(database)
     first = _episode()
     second = _episode()
     store.create_episode(first)
     store.create_episode(second)
     store.append_events(first.id, [EventDraft("PRIVATE", "episode", first.id, {"secret": 1})])
     store.append_events(second.id, [EventDraft("KEEP", "episode", second.id, {"value": 2})])
+    enforcement = EnforcementStore(database, deterministic_dependencies())
+    approval = ApprovalBinding(
+        1,
+        first.id,
+        "turn-1",
+        "",
+        "send_email",
+        "arguments-hash",
+        "alice@example.com",
+        "send-email",
+        "policy-revision",
+        "exact_action",
+    )
+    receipt = enforcement.issue_approval(approval, ttl_seconds=60)
+    assert receipt is not None
+    assert enforcement.issue_approval(approval, ttl_seconds=60, approved=False) is None
+    enforcement_snapshot = enforcement.projection_snapshot()
+    enforcement_events = enforcement.events()
+    assert enforcement.rebuild()
+    assert enforcement.projection_snapshot() == enforcement_snapshot
     with pytest.raises(ValueError, match="confirmation"):
         store.purge_episode(first.id, confirmation=second.id)
     result = store.purge_episode(first.id, confirmation=first.id)
@@ -219,4 +252,24 @@ def test_confirmed_offline_purge_rewrites_only_other_episodes(tmp_path: Path) ->
     assert store.get_episode(first.id) is None
     assert store.get_episode(second.id) is not None
     assert all(event.episode_id == second.id for event in store.events())
+    preserved_enforcement = EnforcementStore(database, deterministic_dependencies())
+    assert preserved_enforcement.events() == enforcement_events
+    assert preserved_enforcement.projection_snapshot() == enforcement_snapshot
+    assert preserved_enforcement.rebuild()
     assert store.replay().deterministic
+
+
+def test_authenticated_projection_seal_avoids_clean_restart_replay(tmp_path: Path) -> None:
+    database = tmp_path / "ledger.sqlite3"
+    store = LedgerStore(database)
+    episode = _episode()
+    store.create_episode(episode)
+    store.checkpoint()
+
+    restarted = LedgerStore(database)
+    clean = restarted.verify_or_replay()
+    assert clean.events_replayed == 0
+
+    restarted.projection_seal_path.write_text("{}\n", encoding="utf-8")
+    recovered = LedgerStore(database).verify_or_replay()
+    assert recovered.events_replayed == 1

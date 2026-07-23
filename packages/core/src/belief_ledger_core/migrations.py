@@ -348,6 +348,12 @@ CREATE INDEX IF NOT EXISTS component_verdicts_episode_component_input_idx
 
 
 SCHEMA_V6 = r"""
+CREATE TABLE IF NOT EXISTS enforcement_schema_migrations (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+INSERT OR IGNORE INTO enforcement_schema_migrations(version,applied_at)
+VALUES (1,'2026-07-22T00:00:00.000000Z');
 CREATE TABLE IF NOT EXISTS enforcement_events (
   seq INTEGER PRIMARY KEY,
   id TEXT NOT NULL UNIQUE,
@@ -593,68 +599,66 @@ def migrate(
     existed = database.exists() and database.stat().st_size > 0
     connection = sqlite3.connect(database, isolation_level=None)
     backup: Path | None = None
+    from_version = 0
+    fts5 = False
     try:
         configure_connection(connection, busy_timeout_ms)
         connection.execute(
             "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
         )
-        row = connection.execute(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
-        ).fetchone()
-        from_version = int(row[0]) if row else 0
+        connection.execute("BEGIN IMMEDIATE")
+        versions = [
+            int(row[0])
+            for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")
+        ]
+        from_version = versions[-1] if versions else 0
+        if versions != list(range(1, from_version + 1)):
+            raise RuntimeError(f"database has a non-contiguous migration history: {versions}")
         if from_version > 6:
             raise RuntimeError(f"database schema {from_version} is newer than supported schema 6")
         if existed and from_version < 6:
-            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
             backup = database.with_name(f"{database.name}.pre-v{from_version + 1}.{stamp}.bak")
-            _online_backup(connection, backup)
-        if from_version < 1:
-            connection.executescript(SCHEMA_V1)
-            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            connection.execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (1, now)
-            )
-        if from_version < 2:
-            connection.executescript(SCHEMA_V2)
-            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            connection.execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (2, now)
-            )
-        if from_version < 3:
-            connection.executescript(SCHEMA_V3)
-            if integrity_key is not None:
-                for event_id, event_hash in connection.execute("SELECT id,event_hash FROM events"):
-                    connection.execute(
-                        "INSERT OR REPLACE INTO event_auth(event_id,event_hash,auth_tag) VALUES (?,?,?)",
-                        (
-                            str(event_id),
-                            str(event_hash),
-                            compute_event_auth(integrity_key, str(event_id), str(event_hash)),
-                        ),
+            _online_backup(database, backup, busy_timeout_ms)
+        schemas = {
+            1: SCHEMA_V1,
+            2: SCHEMA_V2,
+            3: SCHEMA_V3,
+            4: SCHEMA_V4,
+            5: SCHEMA_V5,
+            6: SCHEMA_V6,
+        }
+        for version in range(from_version + 1, 7):
+            _execute_script(connection, schemas[version])
+            if version == 3:
+                event_count = int(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0])
+                if event_count and integrity_key is None:
+                    raise RuntimeError(
+                        "an integrity key is required to authenticate existing events"
                     )
+                if integrity_key is not None:
+                    for event_id, event_hash in connection.execute(
+                        "SELECT id,event_hash FROM events"
+                    ):
+                        connection.execute(
+                            "INSERT OR REPLACE INTO event_auth(event_id,event_hash,auth_tag) "
+                            "VALUES (?,?,?)",
+                            (
+                                str(event_id),
+                                str(event_hash),
+                                compute_event_auth(integrity_key, str(event_id), str(event_hash)),
+                            ),
+                        )
             now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             connection.execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (3, now)
-            )
-        if from_version < 4:
-            connection.executescript(SCHEMA_V4)
-            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            connection.execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (4, now)
-            )
-        if from_version < 5:
-            connection.executescript(SCHEMA_V5)
-            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            connection.execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (5, now)
-            )
-        if from_version < 6:
-            connection.executescript(SCHEMA_V6)
-            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            connection.execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)", (6, now)
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (version, now),
             )
         fts5 = _ensure_fts(connection)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
     try:
@@ -674,15 +678,38 @@ def _ensure_fts(connection: sqlite3.Connection) -> bool:
             "CREATE VIRTUAL TABLE IF NOT EXISTS beliefs_fts USING fts5(belief_id UNINDEXED, episode_id UNINDEXED, status UNINDEXED, content)"
         )
         return True
-    except sqlite3.OperationalError:
-        return False
+    except sqlite3.OperationalError as exc:
+        if "no such module: fts5" in str(exc).casefold():
+            return False
+        raise
 
 
-def _online_backup(source: sqlite3.Connection, destination_path: Path) -> None:
+def _execute_script(connection: sqlite3.Connection, script: str) -> None:
+    """Execute a migration script without sqlite3.executescript's implicit commit."""
+
+    statement = ""
+    for line in script.splitlines(keepends=True):
+        statement += line
+        if not sqlite3.complete_statement(statement):
+            continue
+        if statement.strip():
+            connection.execute(statement)
+        statement = ""
+    if statement.strip():
+        raise RuntimeError("migration script ended with an incomplete SQL statement")
+
+
+def _online_backup(
+    source_path: Path,
+    destination_path: Path,
+    busy_timeout_ms: int,
+) -> None:
     """Use SQLite's online backup API so WAL state is included consistently."""
 
+    source = sqlite3.connect(source_path, timeout=busy_timeout_ms / 1_000)
     destination = sqlite3.connect(destination_path)
     try:
         source.backup(destination)
     finally:
         destination.close()
+        source.close()

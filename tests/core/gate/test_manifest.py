@@ -131,3 +131,108 @@ def test_inventory_reports_coverage_drift_unknown_and_incompleteness() -> None:
     scaffold = manifest.scaffold(unknown)
     assert scaffold["active"] is False
     assert scaffold["preconditions"] == ["operator_review_required"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"effectful": "true"}, "effectful"),
+        ({"base_stakes": "urgent"}, "base_stakes"),
+        ({"exact": [], "pattern": 7}, "pattern"),
+        ({"exact": [], "pattern": "^([$"}, "pattern is invalid"),
+        ({"exact": []}, "exact names or a pattern"),
+        ({"approval_policy": 1}, "approval_policy must be a string"),
+        ({"approval_policy": "sometimes"}, "approval_policy must be"),
+        ({"minimum_source_integrity": 1}, "minimum_source_integrity must be a string"),
+        ({"minimum_source_integrity": "root"}, "minimum_source_integrity is invalid"),
+        ({"canonicalization_version": True}, "must be an integer"),
+        ({"canonicalization_version": 2}, "unsupported policy canonicalization"),
+        ({"namespace": 1}, "namespace"),
+        ({"priority": True}, "priority"),
+        ({"active": "yes"}, "active"),
+        ({"input_schema_digest": "bad"}, "SHA-256"),
+        ({"id": ""}, "policy id"),
+        ({"revision": "bad\nrevision"}, "revision"),
+        ({"exact": "deploy"}, "exact must be a list"),
+        ({"exact": ["deploy", "deploy"]}, "contains duplicates"),
+    ],
+)
+def test_manifest_rule_fields_are_strictly_typed(
+    overrides: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ManifestError, match=message):
+        _manifest(_rule(**overrides))
+
+
+def test_manifest_rejects_missing_fields_invalid_versions_and_duplicate_identifiers() -> None:
+    with pytest.raises(ManifestError, match="schema_version"):
+        ToolPolicyManifest.load({"schema_version": True, "rules": []})
+    with pytest.raises(ManifestError, match="canonicalization_version"):
+        ToolPolicyManifest.load({"schema_version": 2, "canonicalization_version": 2, "rules": []})
+    with pytest.raises(ManifestError, match="missing fields"):
+        ToolPolicyManifest.load({"schema_version": 2, "rules": [{"id": "incomplete"}]})
+    with pytest.raises(ManifestError, match="must be a mapping"):
+        ToolPolicyManifest.load({"schema_version": 2, "rules": ["invalid"]})
+    with pytest.raises(ManifestError, match="unknown policy fields"):
+        _manifest(_rule(surprise=True))
+    with pytest.raises(ManifestError, match="duplicate policy id"):
+        _manifest(_rule(), _rule(exact=["other"]))
+    with pytest.raises(ManifestError, match="ambiguous duplicate"):
+        _manifest(
+            _rule(id="first", exact=[], pattern="^deploy.*$"),
+            _rule(id="second", revision="second-v1", exact=[], pattern="^deploy.*$"),
+        )
+
+
+def test_v1_and_schema_canonicalization_reject_malformed_edge_cases() -> None:
+    with pytest.raises(ManifestError, match="requires rules"):
+        ToolPolicyManifest.load({"schema_version": 1})
+    with pytest.raises(ManifestError, match="must be a mapping"):
+        ToolPolicyManifest.load({"schema_version": 1, "rules": ["invalid"]})
+    with pytest.raises(ManifestError, match="must be a boolean"):
+        ToolPolicyManifest.load(
+            {
+                "schema_version": 1,
+                "rules": [{"allow_human_approval": "false"}],
+            }
+        )
+    with pytest.raises(ManifestError, match="canonicalization version"):
+        canonicalize_schema({}, version=2)
+    with pytest.raises(ManifestError, match="unresolved"):
+        canonicalize_schema({"$ref": "#/$defs/missing"})
+
+    draft_2020 = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {"value": {"type": "string"}},
+        "$ref": "#/$defs/value",
+        "minLength": 2,
+    }
+    assert canonicalize_schema(draft_2020) == {
+        "allOf": [
+            {"type": "string"},
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "minLength": 2,
+            },
+        ]
+    }
+    canonical = canonicalize_schema(
+        {
+            "type": ["string", "null"],
+            "enum": ["b", "a"],
+            "minimum": 1.0,
+            "prefixItems": [{"type": "string"}, {"type": "number"}],
+        }
+    )
+    assert canonical["enum"] == ["a", "b"]
+    assert canonical["prefixItems"] == [{"type": "string"}, {"type": "number"}]
+    assert canonical["minimum"] == 1
+
+
+def test_manifest_pattern_inventory_and_serialization_edges() -> None:
+    manifest = _manifest(_rule(exact=[], pattern="^deploy-.*$"))
+    assert manifest.match("deploy-now").id == "deploy"
+    assert manifest.as_dict()["schema_version"] == 2
+    duplicate = ToolDescriptor.create("deploy-now", {})
+    with pytest.raises(ManifestError, match="duplicate tool inventory"):
+        manifest.classify_inventory((duplicate, duplicate), complete=True)

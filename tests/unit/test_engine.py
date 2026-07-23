@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -194,14 +195,15 @@ def test_expired_facts_are_pending_and_cannot_support_derivations(tmp_path: Path
         Status.IN,
         Status.IN,
     )
-    config.data["perishability_ttl"]["live_seconds"] = 1
+    mutable_config = copy.deepcopy(config.data)
+    mutable_config["perishability_ttl"]["live_seconds"] = 1
     result = relabel(
         {root.id: root, derived.id: derived},
         (justification,),
         (_support(root),),
         (),
         {source.id: source},
-        config.data,
+        mutable_config,
         now=datetime.now(UTC),
     )
     assert result.statuses[root.id] is Status.PENDING

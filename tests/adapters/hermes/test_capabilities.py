@@ -7,7 +7,7 @@ from belief_ledger_pramana.models import CompatibilityMode
 def test_hermes_capabilities_do_not_claim_strict_dispatch_or_delivery() -> None:
     report = CompatibilityReport(
         CompatibilityMode.FULL,
-        "0.18.2",
+        "0.19.0",
         "3.13",
         {"register_hook": True},
         (),

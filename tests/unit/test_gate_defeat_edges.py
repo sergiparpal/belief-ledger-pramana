@@ -4,6 +4,8 @@ import copy
 from dataclasses import replace
 from datetime import UTC, datetime
 
+import yaml
+
 from belief_ledger_pramana.config import packaged_yaml
 from belief_ledger_pramana.engine.defeat import _defeat_cycle_nodes, relabel
 from belief_ledger_pramana.gate.classify import ActionPolicyRegistry
@@ -205,15 +207,27 @@ def test_gate_disabled_episode_missing_approval_and_allow_paths(runtime) -> None
 
     # This test exercises approval mechanics; production policy normally
     # requires cross-source verification for world claims at high stakes.
-    service.config["trust"]["matrix"]["user_world"]["high"] = {
+    updated_config = copy.deepcopy(runtime.config.data)
+    updated_config["trust"]["matrix"]["user_world"]["high"] = {
         "mode": "svatah",
         "k": 0,
         "method": None,
     }
+    if runtime.config.source is None:
+        raise RuntimeError("test runtime configuration source is unavailable")
+    runtime.config.source.write_text(
+        yaml.safe_dump(updated_config, sort_keys=False),
+        encoding="utf-8",
+    )
+    service = runtime.begin_turn(
+        session_id="gate-edge",
+        turn_id="gate-edge-configured-turn",
+        user_message="Resource bob is the intended target.",
+    )
     service.ingest_user_message(
         "Resource bob is the intended target.",
         session_id="gate-edge",
-        turn_id="gate-edge-turn",
+        turn_id="gate-edge-configured-turn",
         sender_id="user",
     )
     approval = service.gate_action("send_email", {"recipient": "bob"})
@@ -224,11 +238,11 @@ def test_gate_disabled_episode_missing_approval_and_allow_paths(runtime) -> None
     service.ingest_user_message(
         "I confirm send email to bob.",
         session_id="gate-edge",
-        turn_id="gate-edge-turn",
+        turn_id="gate-edge-configured-turn",
         sender_id="user",
     )
-    allowed = service.gate_action("send_email", {"recipient": "bob"})
-    assert allowed.outcome is GateOutcome.ALLOW
+    still_bound_to_host_approval = service.gate_action("send_email", {"recipient": "bob"})
+    assert still_bound_to_host_approval.outcome is GateOutcome.APPROVE
 
     service.ingest_user_message(
         "Resource alice is the intended target.",

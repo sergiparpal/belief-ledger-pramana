@@ -117,8 +117,8 @@ def relabel(
                 comparison.result == 0
                 and supported[attacker.id]
                 and supported[target.id]
-                and attacker.admission_status is not Status.QUARANTINED
-                and target.admission_status is not Status.QUARANTINED
+                and attacker.admission_status not in {Status.OUT, Status.QUARANTINED}
+                and target.admission_status not in {Status.OUT, Status.QUARANTINED}
             ):
                 pair = (
                     (attacker.id, target.id)
@@ -324,22 +324,49 @@ def _defeat_cycle_nodes(
             graph[edge.attacker].add(edge.target)
         elif edge.target in owners:
             graph[edge.attacker].add(owners[edge.target])
+    nodes = set(graph)
+    for children in graph.values():
+        nodes.update(children)
+    visited: set[str] = set()
+    finish_order: list[str] = []
+    for root in sorted(nodes):
+        if root in visited:
+            continue
+        stack: list[tuple[str, bool]] = [(root, False)]
+        while stack:
+            node, expanded = stack.pop()
+            if expanded:
+                finish_order.append(node)
+                continue
+            if node in visited:
+                continue
+            visited.add(node)
+            stack.append((node, True))
+            stack.extend(
+                (child, False)
+                for child in sorted(graph.get(node, ()), reverse=True)
+                if child not in visited
+            )
+
+    reverse: dict[str, set[str]] = defaultdict(set)
+    for parent, children in graph.items():
+        for child in children:
+            reverse[child].add(parent)
     cycle_nodes: set[str] = set()
-
-    def visit(node: str, path: list[str], on_path: set[str]) -> None:
-        if node in on_path:
-            start = path.index(node)
-            cycle_nodes.update(path[start:])
-            return
-        if len(path) > len(graph) + 1:
-            return
-        on_path.add(node)
-        path.append(node)
-        for child in sorted(graph.get(node, ())):
-            visit(child, path, on_path)
-        path.pop()
-        on_path.remove(node)
-
-    for root in sorted(graph):
-        visit(root, [], set())
+    assigned: set[str] = set()
+    for root in reversed(finish_order):
+        if root in assigned:
+            continue
+        component: set[str] = set()
+        component_stack = [root]
+        assigned.add(root)
+        while component_stack:
+            node = component_stack.pop()
+            component.add(node)
+            for parent in sorted(reverse.get(node, ()), reverse=True):
+                if parent not in assigned:
+                    assigned.add(parent)
+                    component_stack.append(parent)
+        if len(component) > 1 or root in graph.get(root, ()):
+            cycle_nodes.update(component)
     return cycle_nodes

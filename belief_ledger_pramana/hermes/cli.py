@@ -130,7 +130,8 @@ def run_cli(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]
                 }
             )
         runtime.ensure_initialized()
-        assert runtime.store is not None
+        if runtime.store is None:
+            raise RuntimeError("ledger store is unavailable after initialization")
         if command == "db":
             if args.db_command == "status":
                 return 0, _json(
@@ -314,13 +315,15 @@ def doctor(runtime: PluginRuntime) -> dict[str, Any]:
         errors.append("HERMES_SAFE_MODE=1 skips plugin discovery")
     try:
         runtime.ensure_initialized()
-        assert runtime.store is not None and runtime.paths is not None
+        if runtime.store is None or runtime.paths is None:
+            raise RuntimeError("ledger state is unavailable after initialization")
         checks["config"] = {
             "source": str(runtime.config.source) if runtime.config.source else "packaged",
             "digest": runtime.config.digest,
             "warnings": runtime.config.warnings,
         }
-        assert runtime.profile_selection is not None
+        if runtime.profile_selection is None:
+            raise RuntimeError("enforcement profile is unavailable after initialization")
         checks["enforcement_profile"] = {
             "requested": runtime.profile_selection.requested.value,
             "effective": runtime.profile_selection.effective.value,
@@ -425,7 +428,8 @@ def doctor(runtime: PluginRuntime) -> dict[str, Any]:
 
 def export_episode(runtime: PluginRuntime, episode_id: str, export_format: str) -> Path:
     runtime.ensure_initialized()
-    assert runtime.store is not None and runtime.paths is not None
+    if runtime.store is None or runtime.paths is None:
+        raise RuntimeError("ledger state is unavailable after initialization")
     episode = runtime.store.get_episode(episode_id)
     if episode is None:
         raise ValueError("episode does not exist")
@@ -453,7 +457,8 @@ def export_episode(runtime: PluginRuntime, episode_id: str, export_format: str) 
 
 
 def _permission_issues(runtime: PluginRuntime) -> list[str]:
-    assert runtime.paths is not None and runtime.store is not None
+    if runtime.paths is None or runtime.store is None:
+        raise RuntimeError("ledger state is unavailable after initialization")
     issues: list[str] = []
     for directory in (
         runtime.paths.root,

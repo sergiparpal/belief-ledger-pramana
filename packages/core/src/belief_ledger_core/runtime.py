@@ -155,6 +155,7 @@ class LedgerRuntime:
 
     def record_approval(self, approval: ApprovalResult) -> NormalizedDecision:
         if not approval.approved:
+            self._approval = None
             self._record("APPROVAL_RECEIPT_DENIED", {"tool": approval.tool_name})
             return NormalizedDecision(1, "block", "APPROVAL_DENIED")
         self._approval = approval

@@ -172,6 +172,6 @@ def test_normalized_compatibility_snapshots_are_stable(
     warnings: tuple[str, ...],
     name: str,
 ) -> None:
-    report = CompatibilityReport(mode, "0.18.2", "ignored", capabilities, errors, warnings)
+    report = CompatibilityReport(mode, "0.19.0", "ignored", capabilities, errors, warnings)
     expected = json.loads((FIXTURES / "compatibility" / f"{name}.json").read_text())
     assert report.normalized_snapshot() == expected

@@ -113,11 +113,13 @@ def _canonical_date(value: str) -> str:
 
 
 def _has_invalid_temporal(qualifiers: Mapping[str, str]) -> bool:
-    return any(
+    malformed = any(
         _parse_temporal(value) is None
         for key, value in qualifiers.items()
         if key in {"as_of", "valid_from", "valid_to"}
     )
+    interval = _interval(qualifiers)
+    return malformed or bool(interval and interval[0] > interval[1])
 
 
 def _interval(qualifiers: Mapping[str, str]) -> tuple[datetime, datetime] | None:

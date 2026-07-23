@@ -13,9 +13,11 @@ serialized consume/revoke state, and bounded response buffering. Schema 6 adds a
 authorization events and rebuildable v2 projections while preserving frozen v1 replay hashes.
 
 Hermes is labeled `accepted_final`; it does not claim atomic token consumption or exclusive stream
-delivery. The reference adapter owns effectful dispatch and delivery, exposes a versioned JSONL
-protocol, and demonstrates strict deployment gating. The final local gate passed 252 tests at
-88.15% combined branch coverage, Suites A–E, all dependency/product/contract checks, and fresh
+delivery. The audited host contract is Hermes Agent 0.19.0 at commit
+`3ef6bbd201263d354fd83ec55b3c306ded2eb72a`; Hermes is now a peer host rather than
+a packaged runtime dependency. The reference adapter owns effectful dispatch and delivery, exposes a versioned JSONL
+protocol, and demonstrates strict deployment gating. The final local gate passed 287 tests at
+88.28% combined branch coverage, Suites A–E, all dependency/product/contract checks, and fresh
 manifest builds plus Twine/inspection/clean-install checks for all three wheels. GitHub Actions run
 `29991731616` passed all 15 supported platform, Python, dependency, contract, conformance, and
 artifact jobs. Package and release publication remain deliberately unperformed.

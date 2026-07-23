@@ -23,7 +23,7 @@ rules:
     minimum_priority: trusted
     allow_human_approval: true
     target_fields: [command, cmd]
-    preconditions: [environment_known]
+    preconditions: [environment_known, explicit_user_confirmation]
   - id: messaging
     pattern: "^(send|post|publish|reply|message)_.*$"
     base_stakes: high
@@ -73,7 +73,12 @@ rules:
     target_fields: [name, source]
     preconditions: [explicit_user_confirmation, resource_identity]
   - id: read_only
-    pattern: "^(read|get|list|search|find|query|inspect|view|open|fetch|stat|head|tail)_.*$"
+    exact:
+      [read_file, get_file, list_directory, list_dir, list_files, list_services, search_web,
+       search_files, find_files,
+       query_database, inspect_file, view_file, open_file, fetch_url, stat_file, file_stat,
+       stat_path, head_file, tail_file, environment_identity, get_environment, system_info,
+       get_system_info]
     base_stakes: med
     effectful: false
     minimum_priority: untrusted

@@ -48,9 +48,13 @@ def render_context(
 ) -> RenderedContext:
     maximum = min(8_000, int(config["context"]["max_chars"]))
     contract = _generation_contract(config, health)
+    safety_truncation = (
+        "SAFETY_CONTEXT_INCOMPLETE: assume omitted conflicts and retractions remain open."
+    )
     # Reserve the contract first, then spend the remaining budget in mandatory order.
     content_budget = max(0, maximum - len(contract) - 2)
-    writer = CharacterBudget(content_budget)
+    safety_reserve = len(safety_truncation) + 1
+    writer = CharacterBudget(max(0, content_budget - safety_reserve))
     selected_ids: list[str] = []
 
     if selection.retractions:
@@ -81,6 +85,8 @@ def render_context(
             selected_ids.append(belief.id)
 
     body = writer.render()
+    if writer.truncated:
+        body = f"{body}\n{safety_truncation}" if body else safety_truncation
     text = f"{body}\n\n{contract}" if body else contract
     if len(text) > maximum:
         text = text[:maximum]
@@ -128,7 +134,14 @@ def _metadata(belief: Belief, source: Source, config: dict[str, Any], *, ascii_o
                 }
             )
         )
-        audited = any(justification.audit is not None for justification in belief.justifications)
+        audited = any(
+            justification.audit is not None
+            and justification.audit.paksadharmata
+            and justification.audit.sapakse_sattvam
+            and justification.audit.vipakse_asattvam
+            and not justification.audit.fallacies
+            for justification in belief.justifications
+        )
         return (
             f"<- {premises}" + (" audit-ok" if audited else "")
             if ascii_only

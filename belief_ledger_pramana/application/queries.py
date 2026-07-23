@@ -31,12 +31,24 @@ class LedgerQueryService:
         from ..engine.validity import normalize_content
 
         wanted = set(normalize_content(text).split())
-        beliefs = self._store.list_beliefs(
-            episode_id,
-            statuses=statuses or None,
-            pramanas=pramanas or None,
-            limit=5_000,
-        )
+        if wanted and self._store.fts_available():
+            candidate_ids = self._store.fts_belief_ids(episode_id, text, limit=1_000)
+            candidates = self._store.get_beliefs(candidate_ids)
+            status_filter = set(statuses)
+            pramana_filter = set(pramanas)
+            beliefs = [
+                candidates[belief_id]
+                for belief_id in candidate_ids
+                if belief_id in candidates
+                and (not status_filter or candidates[belief_id].status in status_filter)
+                and (not pramana_filter or candidates[belief_id].pramana in pramana_filter)
+            ]
+        else:
+            beliefs = self._store.list_beliefs(
+                episode_id,
+                statuses=statuses or None,
+                pramanas=pramanas or None,
+            )
         scored = []
         for belief in beliefs:
             score = len(wanted & set(belief.normalized_content.split()))

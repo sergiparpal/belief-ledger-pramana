@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import copy
+import math
 import os
+import re
 import stat
 import subprocess
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
+from belief_ledger_core.config import freeze_config
 
 from . import data as data_package
 from .atomic import write_private_text_atomically
 from .events import canonical_json, content_hash
-from .models import Stakes
+from .models import Stakes, VerificationMethod
 
 CONFIG_ENV = "BELIEF_LEDGER_PRAMANA_CONFIG"
 PLUGIN_STATE_DIR = "belief-ledger-pramana"
@@ -116,6 +119,13 @@ class ConfigSnapshot:
     warnings: tuple[str, ...]
     digest: str
     mtime_ns: int | None
+    extension_digests: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        frozen = freeze_config(self.data)
+        object.__setattr__(self, "data", frozen)
+        if re.fullmatch(r"[0-9a-f]{64}", self.digest) is None:
+            object.__setattr__(self, "digest", content_hash(canonical_json(frozen)))
 
     @property
     def mode(self) -> str:
@@ -195,14 +205,14 @@ def settings_from_data(data: dict[str, Any]) -> RuntimeSettings:
     composition roots pass :class:`ConfigSnapshot` directly.
     """
 
-    return ConfigSnapshot(data, None, (), "", None).settings
+    return ConfigSnapshot(data, None, (), content_hash(canonical_json(data)), None).settings
 
 
 def get_hermes_home() -> Path:
     """Resolve the profile-local Hermes home without appending a profile name."""
 
     try:
-        from hermes_constants import (  # type: ignore[import-untyped]
+        from hermes_constants import (  # type: ignore
             get_hermes_home as host_get_hermes_home,
         )
 
@@ -343,13 +353,15 @@ def load_config(
     if initialize:
         ensure_state_directories(paths)
     _resolve_private_extension_paths(merged, paths.root)
+    extension_digests = _extension_digests(merged)
     mtime_ns = source.stat().st_mtime_ns if source and source.exists() else None
     snapshot = ConfigSnapshot(
         data=merged,
         source=source,
         warnings=tuple(warnings),
-        digest=content_hash(canonical_json(merged)),
+        digest=content_hash(canonical_json({"config": merged, "extensions": extension_digests})),
         mtime_ns=mtime_ns,
+        extension_digests=extension_digests,
     )
     return snapshot, paths
 
@@ -357,8 +369,10 @@ def load_config(
 def validate_config(config: dict[str, Any]) -> list[str]:
     """Validate all safety-sensitive values and return non-fatal warnings."""
 
-    if config.get("schema_version") != 1:
+    if type(config.get("schema_version")) is not int or config["schema_version"] != 1:
         raise ConfigError("schema_version must be 1")
+    if not isinstance(config.get("enabled"), bool):
+        raise ConfigError("enabled must be a boolean")
     if config.get("mode") not in {"observe", "warn", "enforce"}:
         raise ConfigError("mode must be observe, warn, or enforce")
     try:
@@ -378,6 +392,11 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         raise ConfigError("enforcement.allow_diagnostic_downgrade must be a boolean")
 
     storage = _mapping(config, "storage")
+    database = storage.get("database")
+    if database is not None and (
+        not isinstance(database, str) or not database.strip() or "\x00" in database
+    ):
+        raise ConfigError("storage.database must be null or a non-empty path string")
     if storage.get("evidence_mode") not in {"hash_only", "excerpt", "full"}:
         raise ConfigError("storage.evidence_mode must be hash_only, excerpt, or full")
     if not isinstance(storage.get("redact_secrets"), bool):
@@ -389,6 +408,9 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     _bounded_int(context, "max_chars", 512, 8_000)
     _bounded_int(context, "max_beliefs", 1, 1_000)
     _bounded_int(context, "max_graph_depth", 0, 32)
+    _bounded_int(context, "retraction_ttl_turns", 1, 10_000)
+    if not isinstance(context.get("pending_only_when_relevant"), bool):
+        raise ConfigError("context.pending_only_when_relevant must be a boolean")
     if context.get("relevance") not in {"fts5", "none"}:
         raise ConfigError("context.relevance must be fts5 or none")
 
@@ -425,9 +447,9 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         "max_llm_calls_per_episode",
         "max_input_tokens_per_episode",
         "max_output_tokens_per_episode",
-        "structured_timeout_seconds",
     ):
         _bounded_int(verification, key, 0, 10_000_000)
+    _bounded_int(verification, "structured_timeout_seconds", 1, 10_000_000)
     if not isinstance(verification.get("critical_human_confirmation"), bool):
         raise ConfigError("verification.critical_human_confirmation must be a boolean")
 
@@ -463,8 +485,51 @@ def validate_config(config: dict[str, Any]) -> list[str]:
 
     priority = _mapping(config, "priority")
     integrity = _mapping(priority, "integrity_rank")
-    if not all(isinstance(integrity.get(key), int) for key in ("trusted", "semi", "untrusted")):
+    trusted_value = integrity.get("trusted")
+    semi_value = integrity.get("semi")
+    untrusted_value = integrity.get("untrusted")
+    integrity_values = (trusted_value, semi_value, untrusted_value)
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) for value in integrity_values
+    ):
         raise ConfigError("priority.integrity_rank must define integer ranks")
+    trusted_rank = cast(int, trusted_value)
+    semi_rank = cast(int, semi_value)
+    untrusted_rank = cast(int, untrusted_value)
+    if not trusted_rank > semi_rank > untrusted_rank:
+        raise ConfigError("priority.integrity_rank must satisfy trusted > semi > untrusted")
+    type_rank = _mapping(priority, "type_rank")
+    default_type_rank = _mapping(type_rank, "default")
+    required_type_ranks = {
+        "pratyaksha",
+        "shabda_apta_hi",
+        "shabda_apta_mid",
+        "shabda_apta_lo",
+        "anumana_audited",
+        "anumana_raw",
+        "anupalabdhi",
+        "arthapatti",
+        "upamana",
+    }
+    missing_type_ranks = sorted(required_type_ranks - set(default_type_rank))
+    if missing_type_ranks:
+        raise ConfigError(
+            f"priority.type_rank.default missing ranks: {', '.join(missing_type_ranks)}"
+        )
+    _integer_mapping(default_type_rank, "priority.type_rank.default")
+    domain_profiles = _mapping(priority, "domain_profiles")
+    for domain, profile in domain_profiles.items():
+        if not isinstance(domain, str) or not domain.strip() or not isinstance(profile, dict):
+            raise ConfigError("priority.domain_profiles must map domain names to rank mappings")
+        _integer_mapping(profile, f"priority.domain_profiles.{domain}")
+    specificity_keys = priority.get("specificity_keys")
+    if (
+        not isinstance(specificity_keys, list)
+        or not specificity_keys
+        or not all(isinstance(item, str) and item.strip() for item in specificity_keys)
+        or len(set(specificity_keys)) != len(specificity_keys)
+    ):
+        raise ConfigError("priority.specificity_keys must be unique non-empty strings")
     bands = _mapping(priority, "reliability_bands")
     high = bands.get("high")
     medium = bands.get("medium")
@@ -499,7 +564,20 @@ def validate_config(config: dict[str, Any]) -> list[str]:
             cell = _mapping(row, stake)
             if cell.get("mode") not in {"svatah", "paratah", "quarantine", "yogyata", "reject"}:
                 raise ConfigError(f"trust.matrix.{profile}.{stake}.mode is invalid")
-            _bounded_int(cell, "k", 0, 20)
+            k_required = _bounded_int(cell, "k", 0, 20)
+            method_raw = cell.get("method")
+            if method_raw is not None:
+                try:
+                    VerificationMethod(str(method_raw))
+                except ValueError as exc:
+                    raise ConfigError(f"trust.matrix.{profile}.{stake}.method is invalid") from exc
+            mode = str(cell["mode"])
+            if mode in {"paratah", "quarantine"} and (k_required < 1 or method_raw is None):
+                raise ConfigError(f"trust.matrix.{profile}.{stake} requires k >= 1 and a method")
+            if mode in {"svatah", "yogyata", "reject"} and (
+                k_required != 0 or method_raw is not None
+            ):
+                raise ConfigError(f"trust.matrix.{profile}.{stake} must use k=0 and method=null")
     yogyata = _mapping(trust, "yogyata")
     for key in ("min_coverage", "min_recall"):
         value = yogyata.get(key)
@@ -509,17 +587,49 @@ def validate_config(config: dict[str, Any]) -> list[str]:
             or not 0.0 <= float(value) <= 1.0
         ):
             raise ConfigError(f"trust.yogyata.{key} must be in [0,1]")
+    apta = _mapping(trust, "apta")
+    _bounded_int(apta, "minimum_samples", 0, 1_000_000)
+    for key in ("alpha_prior", "beta_prior"):
+        value = apta.get(key)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0
+        ):
+            raise ConfigError(f"trust.apta.{key} must be positive")
+    floor = apta.get("floor")
+    ceiling = apta.get("ceiling")
+    if (
+        isinstance(floor, bool)
+        or isinstance(ceiling, bool)
+        or not isinstance(floor, (int, float))
+        or not isinstance(ceiling, (int, float))
+        or not 0 <= float(floor) <= float(ceiling) <= 1
+    ):
+        raise ConfigError("trust.apta must satisfy 0 <= floor <= ceiling <= 1")
+
+    engine = _mapping(config, "engine")
+    _bounded_int(engine, "max_relabel_iterations", 1, 10_000)
     return []
 
 
 def config_needs_reload(snapshot: ConfigSnapshot) -> bool:
-    if snapshot.source is None:
-        return False
-    try:
-        current_mtime = snapshot.source.stat().st_mtime_ns
-    except OSError:
-        return snapshot.mtime_ns is not None
-    return snapshot.mtime_ns is None or current_mtime != snapshot.mtime_ns
+    if snapshot.source is not None:
+        try:
+            current_mtime = snapshot.source.stat().st_mtime_ns
+        except OSError:
+            return snapshot.mtime_ns is not None
+        if snapshot.mtime_ns is None or current_mtime != snapshot.mtime_ns:
+            return True
+    for raw_path, expected_digest in snapshot.extension_digests:
+        try:
+            current_digest = content_hash(Path(raw_path).read_bytes())
+        except OSError:
+            return True
+        if current_digest != expected_digest:
+            return True
+    return False
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -569,6 +679,17 @@ def _string_paths(container: dict[str, Any], key: str) -> tuple[str, ...]:
     ):
         raise ConfigError(f"{key} must be a list of at most 20 non-empty paths")
     return tuple(value)
+
+
+def _integer_mapping(container: dict[str, Any], label: str) -> None:
+    if not container or not all(
+        isinstance(key, str)
+        and key.strip()
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+        for key, value in container.items()
+    ):
+        raise ConfigError(f"{label} must contain non-empty integer ranks")
 
 
 def _atomic_write(path: Path, text: str, mode: int) -> None:
@@ -626,6 +747,20 @@ def _resolve_private_extension_paths(config: dict[str, Any], root: Path) -> None
             require_private_path(path, label)
             resolved.append(str(path))
         _mapping(config, section)[key] = resolved
+
+
+def _extension_digests(config: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    paths = [
+        str(raw_path)
+        for section, key in (
+            ("gating", "policy_files"),
+            ("trust", "source_profile_files"),
+        )
+        for raw_path in _mapping(config, section).get(key, [])
+    ]
+    return tuple(
+        (raw_path, content_hash(Path(raw_path).read_bytes())) for raw_path in sorted(set(paths))
+    )
 
 
 def _is_within(path: Path, root: Path) -> bool:

@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..engine.validity import validate_content
+from ..engine.validity import normalize_content, validate_content
 from ..models import Perishability, Pramana
 
 _SENTENCE = re.compile(r"[^\n]+?(?:[.!?](?=\s|$)|$)", re.UNICODE)
@@ -47,6 +47,8 @@ def deterministic_candidates(
     max_claims: int = 24,
     require_assertion_signal: bool = True,
 ) -> tuple[ClaimCandidate, ...]:
+    if max_claims <= 0:
+        return ()
     candidates: list[ClaimCandidate] = []
     for match in _SENTENCE.finditer(payload):
         excerpt = match.group(0).strip()
@@ -104,6 +106,8 @@ def validate_candidate(
         reasons.append("span is outside persisted evidence")
     elif payload[candidate.span_start : candidate.span_end] != candidate.exact_excerpt:
         reasons.append("exact excerpt does not match persisted evidence")
+    if normalize_content(candidate.content) != normalize_content(candidate.exact_excerpt):
+        reasons.append("claim content is not the normalized persisted excerpt")
     if candidate.speech_act not in {"asserting", "quoting", "speculating", "instructing"}:
         reasons.append("invalid speech act")
     if candidate.speech_act != "asserting":

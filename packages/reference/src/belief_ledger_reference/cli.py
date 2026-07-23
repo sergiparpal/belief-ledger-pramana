@@ -35,6 +35,8 @@ def serve_jsonl(source: TextIO, destination: TextIO, *, state_root: Path) -> int
                 raise ValueError("unsupported request schema")
             operation = str(request.get("op", ""))
             if operation == "start":
+                if context is not None:
+                    raise ValueError("start may only be issued once per JSONL stream")
                 context = EpisodeContext.normalize(
                     session_id=request.get("session_id"),
                     turn_id=request.get("turn_id"),
@@ -67,9 +69,10 @@ def serve_jsonl(source: TextIO, destination: TextIO, *, state_root: Path) -> int
                     decision = runner.observe_health(str(request.get("value", "")))
                     response = {"outcome": decision.outcome, "reason_code": decision.reason_code}
                 elif operation == "approve":
-                    receipt = runner.approve_deployment(
-                        invocation, approved=bool(request.get("approved", True))
-                    )
+                    approved = request.get("approved", True)
+                    if not isinstance(approved, bool):
+                        raise ValueError("approved must be a boolean")
+                    receipt = runner.approve_deployment(invocation, approved=approved)
                     response = {
                         "outcome": "approved" if receipt else "block",
                         "reason_code": "APPROVAL_RECORDED" if receipt else "APPROVAL_DENIED",
@@ -90,7 +93,9 @@ def serve_jsonl(source: TextIO, destination: TextIO, *, state_root: Path) -> int
                     chunks = request.get("chunks", [])
                     if not isinstance(chunks, list):
                         raise ValueError("chunks must be an array")
-                    accepted = bool(request.get("accepted", True))
+                    accepted = request.get("accepted", True)
+                    if not isinstance(accepted, bool):
+                        raise ValueError("accepted must be a boolean")
                     delivered = runner.deliver_output(
                         (str(chunk) for chunk in chunks), lint=_constant_lint(accepted)
                     )

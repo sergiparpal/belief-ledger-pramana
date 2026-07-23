@@ -46,7 +46,7 @@ def test_compatibility_modes_versions_and_transform_order(monkeypatch) -> None:
         register_cli_command=lambda **kwargs: None,
         llm=object(),
     )
-    monkeypatch.setattr(compatibility, "_distribution_version", lambda: "0.18.2")
+    monkeypatch.setattr(compatibility, "_distribution_version", lambda: "0.19.0")
     monkeypatch.setattr(
         compatibility,
         "_host_contract_sets",
@@ -67,10 +67,10 @@ def test_compatibility_modes_versions_and_transform_order(monkeypatch) -> None:
     assert unavailable.mode.value == "diagnostics_only"
     assert unavailable.errors
 
-    assert compatibility._supported_version("0.18.2")
-    assert compatibility._supported_version("0.18.9+local")
-    assert not compatibility._supported_version("0.18.1")
-    assert not compatibility._supported_version("0.19.0")
+    assert compatibility._supported_version("0.19.0")
+    assert compatibility._supported_version("0.19.9+local")
+    assert not compatibility._supported_version("0.18.2")
+    assert not compatibility._supported_version("0.20.0")
     assert not compatibility._supported_version("invalid")
 
     def own():
@@ -185,8 +185,11 @@ def test_action_classifier_terminal_and_unknown_edges() -> None:
     assert registry.classify("mystery", {}, enforce=True).policy.effectful
     assert not registry.classify("mystery", {}, enforce=False).policy.effectful
     assert registry.classify("future_lookup", {"query": "x"}).policy.effectful
-    assert not registry.classify(
+    assert registry.classify(
         "future_lookup", {"query": "x"}, unknown_tool_policy="allow_read_only"
+    ).policy.effectful
+    assert registry.classify(
+        "show_and_wipe", {"target": "x"}, unknown_tool_policy="allow_read_only"
     ).policy.effectful
     assert registry.classify("future_publish", {"target": "x"}).policy.effectful
     with pytest.raises(ValueError, match="anchored"):

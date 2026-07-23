@@ -97,6 +97,8 @@ def test_extension_outside_private_state_directory_is_rejected(tmp_path: Path) -
     ("path", "value", "message"),
     [
         (("schema_version",), 2, "schema_version"),
+        (("schema_version",), True, "schema_version"),
+        (("enabled",), "yes", "enabled"),
         (("mode",), "permissive", "mode"),
         (("default_stakes",), "extreme", "default_stakes"),
         (("enforcement", "requested_profile"), "absolute", "requested_profile"),
@@ -109,6 +111,7 @@ def test_extension_outside_private_state_directory_is_rejected(tmp_path: Path) -
         (("ingestion", "max_atomic_claim_words"), 2, "max_atomic_claim_words"),
         (("ingestion", "near_duplicate_threshold"), True, "near_duplicate_threshold"),
         (("verification", "max_llm_calls_per_turn"), -1, "max_llm_calls_per_turn"),
+        (("verification", "structured_timeout_seconds"), 0, "structured_timeout_seconds"),
         (("lint", "med"), "loop", "lint.med"),
         (("lint", "max_rewrite_attempts"), 2, "max_rewrite_attempts"),
         (("gating", "unknown_tool_policy"), "guess", "unknown_tool_policy"),
@@ -119,6 +122,7 @@ def test_extension_outside_private_state_directory_is_rejected(tmp_path: Path) -
         (("trust", "matrix", "pratyaksha_tool", "med", "mode"), "maybe", "mode"),
         (("trust", "matrix", "pratyaksha_tool", "med", "k"), 99, "^k"),
         (("trust", "yogyata", "min_coverage"), True, "min_coverage"),
+        (("trust", "apta", "alpha_prior"), float("inf"), "alpha_prior"),
     ],
 )
 def test_every_safety_sensitive_config_family_rejects_invalid_values(

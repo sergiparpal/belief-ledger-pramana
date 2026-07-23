@@ -111,16 +111,24 @@ def _add_with_premises(
     max_depth: int,
     limit: int,
     depth: int = 0,
+    visiting: set[str] | None = None,
 ) -> None:
     if belief.id in chosen_ids or len(chosen) >= limit:
         return
-    chosen.append(belief)
-    chosen_ids.add(belief.id)
-    if depth >= max_depth:
+    current_path = visiting if visiting is not None else set()
+    if belief.id in current_path:
         return
-    premise_ids = sorted(
-        {premise for justification in belief.justifications for premise in justification.premises}
-    )
+    current_path.add(belief.id)
+    if depth >= max_depth:
+        premise_ids: list[str] = []
+    else:
+        premise_ids = sorted(
+            {
+                premise
+                for justification in belief.justifications
+                for premise in justification.premises
+            }
+        )
     for premise_id in premise_ids:
         premise = belief_map.get(premise_id)
         if premise and premise.status in {Status.IN, Status.PENDING}:
@@ -132,7 +140,12 @@ def _add_with_premises(
                 max_depth=max_depth,
                 limit=limit,
                 depth=depth + 1,
+                visiting=current_path,
             )
+    current_path.remove(belief.id)
+    if belief.id not in chosen_ids and len(chosen) < limit:
+        chosen.append(belief)
+        chosen_ids.add(belief.id)
 
 
 def _tokens(text: str) -> set[str]:

@@ -12,9 +12,6 @@ _MUTATION_WORDS = re.compile(
     r"\b(write|delete|remove|send|publish|execute|deploy|approve|purchase|install|enable|disable|update|create|submit|upload|patch|mutat|commit|push)\b",
     re.IGNORECASE,
 )
-_READ_WORDS = re.compile(
-    r"\b(read|get|list|search|find|query|inspect|view|fetch|stat|show)\b", re.IGNORECASE
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,17 +61,16 @@ class ActionPolicyRegistry:
             return ActionClassification(
                 _unknown_policy(Stakes.HIGH, True), False, "unknown tool appears effectful"
             )
-        if unknown_tool_policy == "allow_read_only" and _READ_WORDS.search(material):
-            return ActionClassification(
-                _unknown_policy(Stakes.MED, False), False, "unknown tool appears read-only"
-            )
         stakes = Stakes.HIGH if enforce else Stakes.MED
         return ActionClassification(
             _unknown_policy(stakes, enforce),
             False,
-            "unknown tool is ambiguous"
-            if unknown_tool_policy == "allow_read_only"
-            else "unknown tool is conservatively effectful",
+            (
+                "unknown tools require an exact read-only policy entry; "
+                "name-based read-only inference is disabled"
+                if unknown_tool_policy == "allow_read_only"
+                else "unknown tool is conservatively effectful"
+            ),
         )
 
     def _terminal_adjust(self, rule: ActionPolicy, args: dict[str, Any]) -> ActionClassification:

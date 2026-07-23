@@ -46,7 +46,7 @@ from .engine.defeat import RelabelResult
 from .engine.defeat import relabel as engine_relabel
 from .engine.graph import cycle_path
 from .engine.qualifiers import canonicalize_qualifiers
-from .engine.trust import TrustDecision
+from .engine.trust import TrustDecision, determine_admission
 from .engine.validity import normalize_content, validate_belief
 from .events import EventDraft, canonical_json, content_hash, to_primitive, utc_now
 from .gate.classify import ActionPolicyRegistry
@@ -103,6 +103,7 @@ from .models import (
     EvidenceRef,
     GateDecision,
     Health,
+    IngestionSupport,
     Integrity,
     Justification,
     LintClaim,
@@ -197,6 +198,8 @@ class PluginRuntime:
         self._injection_failures: set[str] = set()
         self._episode_health_reasons: dict[str, list[str]] = {}
         self._maintenance_queue: OrderedDict[str, str] = OrderedDict()
+        self._policy_cache: OrderedDict[str, ActionPolicyRegistry] = OrderedDict()
+        self._source_profile_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._maintenance_active = False
         self._maintenance_idle = threading.Event()
         self._maintenance_idle.set()
@@ -260,7 +263,7 @@ class PluginRuntime:
                 )
                 # The authenticated event chain alone cannot attest to mutable
                 # projections. Replay fails closed if any projection diverges.
-                store.replay()
+                store.verify_or_replay()
                 require_private_path(store.database, "ledger database")
                 require_private_path(paths.integrity_key, "ledger integrity key")
             except Exception as exc:
@@ -299,17 +302,47 @@ class PluginRuntime:
     @property
     def config(self) -> ConfigSnapshot:
         self.ensure_initialized()
-        assert self._config is not None
+        if self._config is None:
+            raise RuntimeUnavailable("configuration is unavailable after initialization")
         return self._config
 
     def operational(self) -> bool:
         return self.compatibility.mode in {CompatibilityMode.FULL, CompatibilityMode.HOOK_CONTEXT}
 
+    def policy_registry(self, config: ConfigSnapshot) -> ActionPolicyRegistry:
+        with self._registry_lock:
+            cached = self._policy_cache.get(config.digest)
+            if cached is not None:
+                self._policy_cache.move_to_end(config.digest)
+                return cached
+        registry = ActionPolicyRegistry(_action_policy_data(config.data))
+        with self._registry_lock:
+            self._policy_cache[config.digest] = registry
+            self._policy_cache.move_to_end(config.digest)
+            while len(self._policy_cache) > 8:
+                self._policy_cache.popitem(last=False)
+        return registry
+
+    def source_profiles(self, config: ConfigSnapshot) -> dict[str, Any]:
+        with self._registry_lock:
+            cached = self._source_profile_cache.get(config.digest)
+            if cached is not None:
+                self._source_profile_cache.move_to_end(config.digest)
+                return cached
+        profiles = _source_profile_data(config.data)
+        with self._registry_lock:
+            self._source_profile_cache[config.digest] = profiles
+            self._source_profile_cache.move_to_end(config.digest)
+            while len(self._source_profile_cache) > 8:
+                self._source_profile_cache.popitem(last=False)
+        return profiles
+
     def checkpoint(self) -> None:
         """Run storage maintenance through the runtime composition boundary."""
 
         self.ensure_initialized()
-        assert self.maintenance is not None
+        if self.maintenance is None:
+            raise RuntimeUnavailable("ledger maintenance is unavailable after initialization")
         self.maintenance.checkpoint()
 
     @staticmethod
@@ -337,7 +370,8 @@ class PluginRuntime:
                 self._trim_callback_caches()
         if first:
             self._reload_at_boundary()
-            assert self.store is not None
+            if self.store is None:
+                raise RuntimeUnavailable("ledger store is unavailable after initialization")
             episode = self.store.get_episode(service.episode_id)
             if episode is None:
                 raise RuntimeUnavailable("episode disappeared during turn initialization")
@@ -372,11 +406,14 @@ class PluginRuntime:
 
     def service_for_id(self, episode_id: str) -> EpisodeService:
         self.ensure_initialized()
-        assert self.store is not None
-        assert self.lifecycle is not None
-        assert self.ledger_reader is not None
-        assert self.event_writer is not None
-        assert self.llm_budget_ledger is not None
+        if (
+            self.store is None
+            or self.lifecycle is None
+            or self.ledger_reader is None
+            or self.event_writer is None
+            or self.llm_budget_ledger is None
+        ):
+            raise RuntimeUnavailable("ledger services are unavailable after initialization")
         with self._registry_lock:
             snapshot = self._turn_configs.get(episode_id, self.config)
         self._current_episode.set(episode_id)
@@ -389,7 +426,8 @@ class PluginRuntime:
             if current is not None and current.state == "active":
                 return self.service_for_id(episode_id)
         self.ensure_initialized()
-        assert self.store is not None
+        if self.store is None:
+            raise RuntimeUnavailable("ledger store is unavailable after initialization")
         active = [episode for episode in self.store.list_episodes() if episode.state == "active"]
         if not active:
             raise EpisodeResolutionError("no active ledger episode")
@@ -397,7 +435,8 @@ class PluginRuntime:
 
     def resolve_episode_id(self, **kwargs: Any) -> str:
         self.ensure_initialized()
-        assert self.store is not None
+        if self.store is None:
+            raise RuntimeUnavailable("ledger store is unavailable after initialization")
         session_id = _clean(kwargs.get("session_id"))
         session_key = _clean(kwargs.get("session_key"))
         turn_id = _clean(kwargs.get("turn_id"))
@@ -554,9 +593,23 @@ class PluginRuntime:
 
     def mark_injection_failure(self, episode_id: str, reason: str) -> None:
         self._injection_failures.add(episode_id)
-        self._episode_health_reasons.setdefault(episode_id, []).append(
-            f"context injection failed: {reason}"
-        )
+        reasons = self._episode_health_reasons.setdefault(episode_id, [])
+        entry = f"context injection failed: {reason}"
+        if entry not in reasons:
+            reasons.append(entry)
+
+    def clear_injection_failure(self, episode_id: str) -> None:
+        self._injection_failures.discard(episode_id)
+        reasons = self._episode_health_reasons.get(episode_id)
+        if reasons is None:
+            return
+        retained = [
+            reason for reason in reasons if not reason.startswith("context injection failed:")
+        ]
+        if retained:
+            self._episode_health_reasons[episode_id] = retained
+        else:
+            self._episode_health_reasons.pop(episode_id, None)
 
     def mark_global_failure(self, component: str, reason: str) -> None:
         if self.health is not Health.UNAVAILABLE:
@@ -591,8 +644,8 @@ class PluginRuntime:
 
     def finalize(self, episode_id: str, *, state: str = "finalized", **kwargs: Any) -> None:
         self.ensure_initialized()
-        assert self.store is not None
-        assert self.lifecycle is not None
+        if self.store is None or self.lifecycle is None:
+            raise RuntimeUnavailable("ledger lifecycle is unavailable after initialization")
         episode = self.store.get_episode(episode_id)
         if episode is None:
             raise EpisodeResolutionError("cannot finalize an unknown ledger episode")
@@ -661,13 +714,14 @@ class EpisodeService:
         self.snapshot = config
         self.settings = config.settings
         self.config = config.data
+        self.source_profiles = runtime.source_profiles(config)
         self.scheduler = VerificationScheduler(
             runtime.ledger_reader, config, writer=runtime.event_writer
         )
         self.gate = ActionGate(
             runtime.ledger_reader,
             config,
-            ActionPolicyRegistry(_action_policy_data(self.config)),
+            runtime.policy_registry(config),
             writer=runtime.event_writer,
         )
         self.actions = ActionEvaluationUseCase(self.gate)
@@ -738,15 +792,21 @@ class EpisodeService:
                 candidate, evidence, source, about_self=is_about_user_self(candidate.content)
             )
             drafts.extend(candidate_drafts)
-        idempotency_key = "user:" + content_hash(
-            canonical_json(
-                [
-                    self.episode_id,
-                    _clean(kwargs.get("turn_id")),
-                    prepared.full_hash,
-                    "pre_llm_call",
-                ]
+        turn_id = _clean(kwargs.get("turn_id"))
+        idempotency_key = (
+            "user:"
+            + content_hash(
+                canonical_json(
+                    [
+                        self.episode_id,
+                        turn_id,
+                        prepared.full_hash,
+                        "pre_llm_call",
+                    ]
+                )
             )
+            if turn_id
+            else None
         )
         events = self.store.append_events(
             self.episode_id,
@@ -792,15 +852,21 @@ class EpisodeService:
                     },
                 )
             )
-        idempotency_key = "tool:" + content_hash(
-            canonical_json(
-                [
-                    self.episode_id,
-                    _clean(kwargs.get("tool_call_id")),
-                    "transform_tool_result",
-                    tool_evidence.prepared.full_hash,
-                ]
+        tool_call_id = _clean(kwargs.get("tool_call_id"))
+        idempotency_key = (
+            "tool:"
+            + content_hash(
+                canonical_json(
+                    [
+                        self.episode_id,
+                        tool_call_id,
+                        "transform_tool_result",
+                        tool_evidence.prepared.full_hash,
+                    ]
+                )
             )
+            if tool_call_id
+            else None
         )
         events = self.store.append_events(
             self.episode_id,
@@ -1024,7 +1090,11 @@ class EpisodeService:
     def ensure_source(self, descriptor: SourceDescriptor | None) -> Source:
         if descriptor is None:
             raise ValueError("source descriptor is required")
-        descriptor = _apply_source_profile(descriptor, self.config)
+        descriptor = _apply_source_profile(
+            descriptor,
+            self.config,
+            self.source_profiles,
+        )
         existing = self.store.find_source(self.episode_id, descriptor.root, descriptor.kind)
         if existing:
             return existing
@@ -1464,18 +1534,20 @@ class EpisodeService:
                         )
                     )
                 source = self.store.get_source(belief.source_id)
-                if source:
+                outcome = "confirmed" if result == "confirmed" else "defeated"
+                if source and not self.store.source_outcome_sampled(belief.id, outcome):
                     drafts.append(
                         EventDraft(
                             "SOURCE_STATS_DELTA",
                             "source",
                             source.id,
                             {
+                                "belief_id": belief.id,
                                 "delta": {
                                     "confirmed": int(result == "confirmed"),
                                     "defeated": int(result == "disconfirmed"),
                                     "samples": 1,
-                                }
+                                },
                             },
                         )
                     )
@@ -1501,6 +1573,8 @@ class EpisodeService:
             for premise_id in justification.premises
         )
         all_events: list[str] = []
+        passed_any = False
+        failed_causes: list[str] = []
         for justification in belief.justifications:
             statuses = {
                 premise_id: premise.status
@@ -1509,11 +1583,8 @@ class EpisodeService:
             }
             missing = local_asiddha(justification, statuses)
             if missing:
-                return self.complete_verification(
-                    task,
-                    "disconfirmed",
-                    cause="asiddha premises: " + ",".join(missing),
-                )
+                failed_causes.append(f"{justification.id}:asiddha premises:" + ",".join(missing))
+                continue
             payload = canonical_json(
                 {
                     "belief": {"id": belief.id, "content": belief.content},
@@ -1541,10 +1612,16 @@ class EpisodeService:
             except LlmComponentError:
                 return tuple(all_events)
             audit = result.parsed
+            audit_passed = bool(
+                not audit.fallacies
+                and audit.paksadharmata
+                and audit.sapakse_sattvam
+                and audit.vipakse_asattvam
+            )
             verdict_drafts = self._component_verdict_drafts(
                 "chain_auditor",
                 _safe_text_hash(payload),
-                "passed" if not audit.fallacies else "failed",
+                "passed" if audit_passed else "failed",
                 {"fallacies": list(audit.fallacies)},
                 premise_ids=justification.premises,
             )
@@ -1557,7 +1634,7 @@ class EpisodeService:
                 ),
                 *verdict_drafts,
             ]
-            if audit.fallacies:
+            if not audit_passed:
                 verdict_belief_id = next(
                     (
                         str(draft.payload["record"]["id"])
@@ -1573,21 +1650,26 @@ class EpisodeService:
                         attacker=verdict_belief_id,
                         target=justification.id,
                         kind=DefeatKind.UNDERCUT,
-                        basis="chain audit: " + ",".join(audit.fallacies),
+                        basis=(
+                            "chain audit: " + ",".join(audit.fallacies)
+                            if audit.fallacies
+                            else "chain audit: trairupya conditions failed"
+                        ),
                     )
                     drafts.append(_record_draft("DEFEAT_ADDED", "defeat", edge.id, edge))
             events = self.store.append_events(self.episode_id, drafts)
             all_events.extend(event.id for event in events)
-            if audit.fallacies or not (
-                audit.paksadharmata and audit.sapakse_sattvam and audit.vipakse_asattvam
-            ):
-                all_events.extend(
-                    self.complete_verification(task, "disconfirmed", cause="chain audit failed")
-                )
-                return tuple(all_events)
-        all_events.extend(
-            self.complete_verification(task, "confirmed", cause="trairupya chain audit passed")
+            if audit_passed:
+                passed_any = True
+            else:
+                failed_causes.append(f"{justification.id}:chain audit failed")
+        verification_result = "confirmed" if passed_any else "disconfirmed"
+        cause = (
+            "at least one trairupya chain audit passed"
+            if passed_any
+            else "; ".join(failed_causes) or "all registered justifications failed"
         )
+        all_events.extend(self.complete_verification(task, verification_result, cause=cause))
         return tuple(all_events)
 
     def relabel(self) -> tuple[str, ...]:
@@ -1638,17 +1720,17 @@ class EpisodeService:
         beliefs: Mapping[str, Belief],
         justifications: Sequence[Justification],
         outcome: RelabelResult,
-    ) -> tuple[list[EventDraft], dict[str, int]]:
+    ) -> tuple[list[EventDraft], dict[str, list[str]]]:
         active_notices = {
             notice.defeated_belief_id
             for notice in self.store.list_retractions(self.episode_id, state="active")
         }
-        newly_defeated = [
+        newly_retracted = [
             belief_id
             for belief_id, new_status in outcome.statuses.items()
-            if beliefs[belief_id].status is Status.IN and new_status is Status.OUT
+            if beliefs[belief_id].status is Status.IN and new_status is not Status.IN
         ]
-        rendered_ids = self.store.rendered_belief_ids(self.episode_id, newly_defeated)
+        rendered_ids = self.store.rendered_belief_ids(self.episode_id, newly_retracted)
         dependents: dict[str, set[str]] = defaultdict(set)
         for justification in justifications:
             for premise_id in justification.premises:
@@ -1656,7 +1738,7 @@ class EpisodeService:
         current_turn = self.episode.current_turn
         ttl_turns = int(self.config["context"]["retraction_ttl_turns"])
         drafts: list[EventDraft] = []
-        defeated_by_source: dict[str, int] = {}
+        defeated_by_source: dict[str, list[str]] = {}
         for belief_id in sorted(outcome.statuses):
             old_belief = beliefs[belief_id]
             new_status = outcome.statuses[belief_id]
@@ -1671,23 +1753,28 @@ class EpisodeService:
                     {"from": old_belief.status.value, "to": new_status.value, "cause": cause},
                 )
             )
-            if old_belief.status is Status.IN and new_status is Status.OUT:
-                defeated_by_source[old_belief.source_id] = (
-                    defeated_by_source.get(old_belief.source_id, 0) + 1
+            if (
+                old_belief.status is Status.IN
+                and new_status is Status.OUT
+                and not self.store.source_outcome_sampled(belief_id, "defeated")
+            ):
+                defeated_by_source.setdefault(old_belief.source_id, []).append(belief_id)
+            if (
+                old_belief.status is Status.IN
+                and new_status is not Status.IN
+                and belief_id in rendered_ids
+                and belief_id not in active_notices
+            ):
+                notice = RetractionNotice(
+                    id=new_id("retraction"),
+                    episode_id=self.episode_id,
+                    defeated_belief_id=belief_id,
+                    cause=cause,
+                    descendants=_descendant_ids(belief_id, dependents),
+                    created_turn=current_turn,
+                    ttl_turns=ttl_turns,
                 )
-                if belief_id in rendered_ids and belief_id not in active_notices:
-                    notice = RetractionNotice(
-                        id=new_id("retraction"),
-                        episode_id=self.episode_id,
-                        defeated_belief_id=belief_id,
-                        cause=cause,
-                        descendants=_descendant_ids(belief_id, dependents),
-                        created_turn=current_turn,
-                        ttl_turns=ttl_turns,
-                    )
-                    drafts.append(
-                        _record_draft("RETRACTION_CREATED", "retraction", notice.id, notice)
-                    )
+                drafts.append(_record_draft("RETRACTION_CREATED", "retraction", notice.id, notice))
         return drafts, defeated_by_source
 
     def _conflict_transition_drafts(self, outcome: RelabelResult) -> list[EventDraft]:
@@ -1738,16 +1825,20 @@ class EpisodeService:
         return drafts
 
     def _relabel_summary_drafts(
-        self, defeated_by_source: Mapping[str, int], outcome: RelabelResult
+        self, defeated_by_source: Mapping[str, Sequence[str]], outcome: RelabelResult
     ) -> list[EventDraft]:
         drafts = [
             EventDraft(
                 "SOURCE_STATS_DELTA",
                 "source",
                 source_id,
-                {"delta": {"confirmed": 0, "defeated": count, "samples": count}},
+                {
+                    "belief_id": belief_id,
+                    "delta": {"confirmed": 0, "defeated": 1, "samples": 1},
+                },
             )
-            for source_id, count in sorted(defeated_by_source.items())
+            for source_id, belief_ids in sorted(defeated_by_source.items())
+            for belief_id in sorted(belief_ids)
         ]
         if outcome.oscillation:
             drafts.append(
@@ -2209,18 +2300,81 @@ class EpisodeService:
             raise ValueError("only an explicit user command may lower stakes")
         if stakes is current:
             return ()
-        events = self.store.append_events(
-            self.episode_id,
-            [
-                EventDraft(
-                    "EPISODE_STAKES_CHANGED",
-                    "episode",
-                    self.episode_id,
-                    {"from": current.value, "to": stakes.value, "user_initiated": user_initiated},
+        drafts = [
+            EventDraft(
+                "EPISODE_STAKES_CHANGED",
+                "episode",
+                self.episode_id,
+                {"from": current.value, "to": stakes.value, "user_initiated": user_initiated},
+            )
+        ]
+        beliefs = self.store.list_beliefs(self.episode_id)
+        sources = {source.id: source for source in self.store.list_sources(self.episode_id)}
+        open_tasks = self.store.list_verification_tasks(self.episode_id, state="open")
+        tasks_by_belief: dict[str, list[VerificationTask]] = defaultdict(list)
+        for task in open_tasks:
+            tasks_by_belief[task.belief_id].append(task)
+        for belief in beliefs:
+            source = sources.get(belief.source_id)
+            if source is None:
+                continue
+            decision = determine_admission(
+                belief,
+                source,
+                self.config,
+                episode_stakes=stakes,
+            )
+            if decision.status is not belief.admission_status:
+                drafts.append(
+                    EventDraft(
+                        "BELIEF_ADMISSION_CHANGED",
+                        "belief",
+                        belief.id,
+                        {
+                            "from": belief.admission_status.value,
+                            "to": decision.status.value,
+                            "cause": f"episode_stakes:{current.value}->{stakes.value}",
+                        },
+                    )
                 )
-            ],
-        )
-        return tuple(event.id for event in events)
+            retained_method = (
+                decision.method if decision.status in {Status.PENDING, Status.QUARANTINED} else None
+            )
+            required_k = max(1, decision.k_required)
+            retained_tasks = {
+                task.id
+                for task in tasks_by_belief.get(belief.id, ())
+                if task.method is retained_method and task.k_required >= required_k
+            }
+            for task in tasks_by_belief.get(belief.id, ()):
+                if task.id not in retained_tasks:
+                    drafts.append(
+                        EventDraft(
+                            "VERIFICATION_TASK_COMPLETED",
+                            "verification_task",
+                            task.id,
+                            {
+                                "result": "superseded",
+                                "state": "completed",
+                                "cause": "episode stakes changed",
+                            },
+                        )
+                    )
+            if retained_method is not None and not retained_tasks:
+                task = VerificationTask(
+                    id=new_id("verification"),
+                    episode_id=self.episode_id,
+                    belief_id=belief.id,
+                    method=retained_method,
+                    k_required=required_k,
+                    budget=required_k,
+                )
+                drafts.append(
+                    _record_draft("VERIFICATION_TASK_CREATED", "verification_task", task.id, task)
+                )
+        events = self.store.append_events(self.episode_id, drafts)
+        transitions = self.relabel()
+        return tuple(event.id for event in events) + transitions
 
     def expire_retractions(self) -> tuple[str, ...]:
         turn = self.episode.current_turn
@@ -2247,6 +2401,26 @@ class EpisodeService:
         *,
         about_self: bool = False,
     ) -> list[EventDraft]:
+        candidate_validation = validate_candidate(
+            candidate,
+            evidence.payload or "",
+            max_words=int(self.config["ingestion"]["max_atomic_claim_words"]),
+            max_chars=int(self.config["ingestion"]["max_atomic_claim_chars"]),
+            allowed_source_identity=source.name,
+            allowed_pramanas={Pramana.SHABDA, Pramana.ANUPALABDHI},
+        )
+        if not candidate_validation.accepted:
+            return [
+                EventDraft(
+                    "CLAIM_REJECTED",
+                    "evidence",
+                    evidence.id,
+                    {
+                        "claim_hash": fingerprint(candidate.content),
+                        "reasons": list(candidate_validation.reasons),
+                    },
+                )
+            ]
         if candidate.pramana is Pramana.ANUPALABDHI:
             return [
                 EventDraft(
@@ -2257,21 +2431,6 @@ class EpisodeService:
                 )
             ]
         normalized = normalize_content(candidate.content)
-        existing_beliefs = self.store.find_exact_beliefs(self.episode_id, normalized)
-        existing_sources = self.store.get_sources(
-            existing.source_id for existing in existing_beliefs
-        )
-        for existing in existing_beliefs:
-            existing_source = existing_sources.get(existing.source_id)
-            if existing_source and existing_source.root == source.root:
-                return [
-                    EventDraft(
-                        "DUPLICATE_CONTENT_OBSERVED",
-                        "belief",
-                        existing.id,
-                        {"evidence_id": evidence.id, "source_root": source.root},
-                    )
-                ]
         belief_id = new_id("belief")
         validity = (
             {
@@ -2326,6 +2485,81 @@ class EpisodeService:
                     },
                 )
             ]
+        existing_beliefs = self.store.find_exact_beliefs(self.episode_id, normalized)
+        existing_sources = self.store.get_sources(
+            existing.source_id for existing in existing_beliefs
+        )
+        for existing in existing_beliefs:
+            existing_source = existing_sources.get(existing.source_id)
+            if existing_source is None or existing_source.root != source.root:
+                continue
+            refresh_support = IngestionSupport(
+                id=new_id("support"),
+                episode_id=self.episode_id,
+                belief_id=existing.id,
+                evidence_id=evidence.id,
+                validity={**validity, "checks": validation.checks, "duplicate_refresh": True},
+            )
+            drafts = [
+                EventDraft(
+                    "DUPLICATE_CONTENT_OBSERVED",
+                    "belief",
+                    existing.id,
+                    {
+                        "evidence_id": evidence.id,
+                        "source_root": source.root,
+                        "observed_at": evidence.observed_at.isoformat(),
+                    },
+                ),
+                EventDraft(
+                    "BELIEF_OBSERVATION_REFRESHED",
+                    "belief",
+                    existing.id,
+                    {
+                        "evidence_id": evidence.id,
+                        "span": [candidate.span_start, candidate.span_end],
+                        "observed_at": evidence.observed_at.isoformat(),
+                    },
+                ),
+                _record_draft(
+                    "INGESTION_SUPPORT_ADDED",
+                    "ingestion_support",
+                    refresh_support.id,
+                    refresh_support,
+                ),
+            ]
+            admission = self.admission.admit(
+                replace(
+                    existing,
+                    observed_at=evidence.observed_at,
+                    evidence=(
+                        *existing.evidence,
+                        EvidenceRef(
+                            evidence.id,
+                            (candidate.span_start, candidate.span_end),
+                        ),
+                    ),
+                ),
+                existing_source,
+                episode_stakes=self.episode.default_stakes,
+                support_evidence_id=evidence.id,
+                support_validity=refresh_support.validity,
+            )
+            if admission.belief.admission_status is not existing.admission_status:
+                drafts.append(
+                    EventDraft(
+                        "BELIEF_ADMISSION_CHANGED",
+                        "belief",
+                        existing.id,
+                        {
+                            "from": existing.admission_status.value,
+                            "to": admission.belief.admission_status.value,
+                            "cause": "fresh duplicate observation",
+                        },
+                    )
+                )
+                drafts.extend(self._verification_drafts(admission.belief, admission.trust))
+            return drafts
         admission = self.admission.admit(
             initial,
             source,
@@ -2665,6 +2899,7 @@ class EpisodeService:
                 if (
                     decision.outcome == "uncertain"
                     and semantic_candidate is None
+                    and len(tokens & tokens_by_belief[other.id]) >= 2
                     and belief.domain not in {"runtime_state", "monitoring"}
                     and other.domain not in {"runtime_state", "monitoring"}
                     and _safe_text_hash(_contradiction_payload(belief, other))
@@ -2895,9 +3130,7 @@ def _action_policy_data(config: dict[str, Any]) -> dict[str, Any]:
     return {"schema_version": 1, "rules": [*extension_rules, *packaged["rules"]]}
 
 
-def _apply_source_profile(descriptor: SourceDescriptor, config: dict[str, Any]) -> SourceDescriptor:
-    if descriptor.kind is SourceKind.RETRIEVER:
-        return descriptor
+def _source_profile_data(config: dict[str, Any]) -> dict[str, Any]:
     profiles = dict(packaged_yaml("source-profiles.yaml")["profiles"])
     for raw_path in config.get("trust", {}).get("source_profile_files", []):
         path = Path(str(raw_path)).expanduser().resolve()
@@ -2910,6 +3143,18 @@ def _apply_source_profile(descriptor: SourceDescriptor, config: dict[str, Any]) 
         if not isinstance(additions, dict):
             raise ValueError(f"source profile extension profiles are invalid: {path}")
         profiles.update(additions)
+    return profiles
+
+
+def _apply_source_profile(
+    descriptor: SourceDescriptor,
+    config: dict[str, Any],
+    profiles: Mapping[str, Any] | None = None,
+) -> SourceDescriptor:
+    if descriptor.kind is SourceKind.RETRIEVER:
+        return descriptor
+    if profiles is None:
+        profiles = _source_profile_data(config)
     profile_name = {
         SourceKind.TOOL: "hermes_tool",
         SourceKind.DOCUMENT: "workspace_file",
@@ -2943,6 +3188,8 @@ def _apply_source_profile(descriptor: SourceDescriptor, config: dict[str, Any]) 
 
 
 def _is_relative_workspace_path(value: str) -> bool:
+    if value.casefold().strip() in {"", "unknown", "unidentified-file"}:
+        return False
     path = Path(value)
     windows_path = PureWindowsPath(value)
     return (

@@ -78,7 +78,7 @@ def _write_activation(home: Path, *, enabled: bool) -> None:
 def test_real_pinned_entrypoint_manager_enable_and_disable(tmp_path: Path) -> None:
     _write_activation(tmp_path, enabled=True)
     enabled = _run_manager(tmp_path)
-    assert enabled["version"] == "0.18.2"
+    assert enabled["version"] == "0.19.0"
     assert enabled["enabled"] is True
     assert enabled["source"] == "entrypoint"
     assert set(enabled["tools"]) == EXPECTED_TOOLS
@@ -113,7 +113,7 @@ def test_real_pinned_manager_loads_directory_layout() -> None:
         )
         _write_activation(home, enabled=True)
         report = _run_manager(home, without_entrypoints=True)
-        assert report["version"] == "0.18.2"
+        assert report["version"] == "0.19.0"
         assert report["enabled"] is True
         assert report["source"] == "user"
         assert set(report["tools"]) == EXPECTED_TOOLS

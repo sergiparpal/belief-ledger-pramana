@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import PurePath
 from typing import Any
 
 from ..engine.validity import normalize_content
 from ..models import Belief, Conflict, Integrity, Source, Status
-
-_AFFIRMATIVE_CONFIRMATION = re.compile(
-    r"^(?:i|we|yo)\s+(?:hereby\s+)?(?:confirm\w*|authoriz\w*|approve\w*|autoriz\w*)\b"
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +37,12 @@ def resolve_preconditions(
     results: list[PreconditionResult] = []
     for name in names:
         if name == "no_open_conflict":
-            satisfied = not conflicts
+            relevant_conflicts = [
+                conflict
+                for conflict in conflicts
+                if _conflict_affects_target(conflict, target, beliefs)
+            ]
+            satisfied = not relevant_conflicts
             results.append(
                 PreconditionResult(
                     name,
@@ -57,21 +56,13 @@ def resolve_preconditions(
             continue
         proposition, suggestion = _proposition(name, target)
         match = (
-            _confirmation_belief(
-                target,
-                action_name,
-                beliefs,
-                sources,
-                minimum_integrity,
-                confirmation_ttl_seconds=confirmation_ttl_seconds,
-            )
+            None
             if name == "explicit_user_confirmation"
             else _entailing_belief(
                 proposition,
                 beliefs,
                 sources,
                 minimum_integrity,
-                exact=name == "resource_identity",
             )
         )
         results.append(
@@ -80,7 +71,13 @@ def resolve_preconditions(
                 proposition,
                 match is not None,
                 match.id if match else None,
-                "supported by an IN belief" if match else "no qualifying IN belief",
+                (
+                    "host-bound approval is required"
+                    if name == "explicit_user_confirmation"
+                    else "supported by an exact IN belief"
+                    if match
+                    else "no qualifying exact IN belief"
+                ),
                 suggestion,
             )
         )
@@ -131,70 +128,53 @@ def _entailing_belief(
     beliefs: list[Belief],
     sources: Mapping[str, Source],
     minimum_integrity: str,
-    *,
-    exact: bool = False,
 ) -> Belief | None:
     ranks = {Integrity.UNTRUSTED: 0, Integrity.SEMI: 1, Integrity.TRUSTED: 2}
     required = {"untrusted": 0, "semi": 1, "trusted": 2}.get(minimum_integrity, 2)
-    wanted = set(normalize_content(proposition).split())
+    normalized = normalize_content(proposition)
     for belief in sorted(beliefs, key=lambda item: item.id):
         if belief.status is not Status.IN or ranks[sources[belief.source_id].integrity] < required:
             continue
         if _contains_negation(belief.normalized_content):
             continue
-        actual = set(belief.normalized_content.split())
-        normalized = normalize_content(proposition)
         if belief.normalized_content == normalized:
-            return belief
-        if not exact and wanted <= actual:
-            return belief
-    return None
-
-
-def _confirmation_belief(
-    target: str,
-    action_name: str,
-    beliefs: list[Belief],
-    sources: Mapping[str, Source],
-    minimum_integrity: str,
-    *,
-    confirmation_ttl_seconds: int,
-) -> Belief | None:
-    target_tokens = set(normalize_content(target).split())
-    required = {"untrusted": 0, "semi": 1, "trusted": 2}.get(minimum_integrity, 2)
-    ranks = {Integrity.UNTRUSTED: 0, Integrity.SEMI: 1, Integrity.TRUSTED: 2}
-    now = datetime.now(UTC)
-    for belief in sorted(beliefs, key=lambda item: item.id):
-        source = sources[belief.source_id]
-        if (
-            belief.status is not Status.IN
-            or source.kind.value != "user"
-            or ranks[source.integrity] < required
-        ):
-            continue
-        age_seconds = (
-            (now - belief.observed_at).total_seconds()
-            if belief.observed_at.tzinfo is not None
-            else float("inf")
-        )
-        if age_seconds < 0 or age_seconds > confirmation_ttl_seconds:
-            continue
-        content = belief.normalized_content
-        tokens = set(re.findall(r"[\w.-]+", content))
-        if _contains_negation(content):
-            continue
-        if _AFFIRMATIVE_CONFIRMATION.search(content) is None:
-            continue
-        action_tokens = set(re.findall(r"[\w.-]+", action_name.replace("_", " ")))
-        if target_tokens <= tokens and action_tokens <= tokens:
             return belief
     return None
 
 
 def _contains_negation(content: str) -> bool:
+    tokens = set(normalize_content(content).replace("'", "").split())
     return bool(
-        re.search(
-            r"\b(?:not|no|never|without|deny|denied|decline|declined|don't|do not|cannot|can't|unconfirm)\b",
-            content,
-        )
+        tokens
+        & {
+            "not",
+            "no",
+            "never",
+            "without",
+            "deny",
+            "denied",
+            "decline",
+            "declined",
+            "dont",
+            "cannot",
+            "cant",
+            "unconfirm",
+        }
     )
+
+
+def _conflict_affects_target(conflict: Conflict, target: str, beliefs: list[Belief]) -> bool:
+    target_tokens = set(normalize_content(target).split())
+    if not target_tokens or target == "the requested target":
+        return True
+    by_id = {belief.id: belief for belief in beliefs}
+    conflict_tokens: set[str] = set()
+    for value in conflict.normalized_scope.values():
+        conflict_tokens.update(normalize_content(value).split())
+    for belief_id in (conflict.left_belief_id, conflict.right_belief_id):
+        belief = by_id.get(belief_id)
+        if belief is not None:
+            conflict_tokens.update(belief.normalized_content.split())
+            for value in belief.qualifiers.values():
+                conflict_tokens.update(normalize_content(value).split())
+    return bool(target_tokens & conflict_tokens)

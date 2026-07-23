@@ -146,6 +146,22 @@ def _apply_belief_admission_changed(connection: sqlite3.Connection, event: Event
     )
 
 
+def _apply_belief_observation_refreshed(connection: sqlite3.Connection, event: Event) -> None:
+    payload = event.payload
+    connection.execute(
+        "UPDATE beliefs SET observed_at=? WHERE id=?",
+        (str(payload["observed_at"]), event.aggregate_id),
+    )
+    connection.execute(
+        "INSERT INTO belief_evidence(belief_id,evidence_id,span_json) VALUES (?,?,?)",
+        (
+            event.aggregate_id,
+            str(payload["evidence_id"]),
+            canonical_json(payload["span"]) if payload.get("span") is not None else None,
+        ),
+    )
+
+
 def _apply_belief_corroboration_changed(connection: sqlite3.Connection, event: Event) -> None:
     connection.execute(
         "UPDATE beliefs SET corroboration=? WHERE id=?",
@@ -285,6 +301,7 @@ _EVENT_HANDLERS: dict[str, ProjectionHandler] = {
     "DEFEAT_ACTIVITY_CHANGED": _apply_defeat_activity_changed,
     "BELIEF_STATUS_CHANGED": _apply_belief_status_changed,
     "BELIEF_ADMISSION_CHANGED": _apply_belief_admission_changed,
+    "BELIEF_OBSERVATION_REFRESHED": _apply_belief_observation_refreshed,
     "BELIEF_CORROBORATION_CHANGED": _apply_belief_corroboration_changed,
     "VERIFICATION_TASK_CREATED": _apply_verification_created,
     "VERIFICATION_TASK_COMPLETED": _apply_verification_completed,
@@ -585,8 +602,10 @@ def _fts_replace(
             "INSERT INTO beliefs_fts(belief_id,episode_id,status,content) VALUES (?,?,?,?)",
             (belief_id, episode_id, status, content),
         )
-    except sqlite3.OperationalError:
-        return
+    except sqlite3.OperationalError as exc:
+        if "no such table: beliefs_fts" in str(exc).casefold():
+            return
+        raise
 
 
 def _record(value: Any) -> dict[str, Any]:

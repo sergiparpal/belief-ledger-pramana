@@ -111,7 +111,11 @@ def _type_key(belief: Belief, reliability: float, config: dict[str, Any]) -> str
         return f"shabda_apta_{band}"
     if belief.pramana is Pramana.ANUMANA:
         audited = any(
-            justification.audit is not None and not justification.audit.fallacies
+            justification.audit is not None
+            and justification.audit.paksadharmata
+            and justification.audit.sapakse_sattvam
+            and justification.audit.vipakse_asattvam
+            and not justification.audit.fallacies
             for justification in belief.justifications
         )
         return "anumana_audited" if audited else "anumana_raw"

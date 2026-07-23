@@ -44,6 +44,10 @@ def assess_negative_search(
         reasons.append("search result was truncated")
     if not corpus or not scope or not query or not parameters:
         reasons.append("search provenance is incomplete")
+    if not 0.0 <= coverage <= 1.0:
+        reasons.append("coverage must be in [0,1]")
+    if not 0.0 <= recall <= 1.0:
+        reasons.append("recall must be in [0,1]")
     if coverage < min_coverage:
         reasons.append("coverage below yogyata threshold")
     if recall < min_recall:

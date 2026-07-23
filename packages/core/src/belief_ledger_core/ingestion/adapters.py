@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import PurePath
@@ -81,7 +82,7 @@ class ToolAdapterRegistry:
                 )
                 metadata["url"] = redact_secrets(url)[0]
         elif family == "file":
-            path = str(args.get("path") or args.get("file_path") or "unknown")
+            path = str(args.get("path") or args.get("file_path") or "unidentified-file")
             safe_path = redact_secrets(path)[0]
             content_source = SourceDescriptor(
                 SourceKind.DOCUMENT,
@@ -266,6 +267,7 @@ def _requested_path(args: dict[str, Any]) -> str:
 def _same_path(requested: str, returned: str) -> bool:
     def normalize(value: str) -> str:
         normalized = value.strip().replace("\\", "/")
-        return normalized.rstrip("/").casefold()
+        normalized = normalized.rstrip("/")
+        return normalized.casefold() if os.name == "nt" else normalized
 
     return bool(returned.strip()) and normalize(requested) == normalize(returned)

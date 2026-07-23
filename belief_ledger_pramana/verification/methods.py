@@ -1,1 +1,3 @@
-from belief_ledger_core.verification.methods import *  # noqa: F403
+from belief_ledger_core.verification.methods import method_instruction
+
+__all__ = ["method_instruction"]

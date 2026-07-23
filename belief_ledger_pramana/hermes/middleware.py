@@ -31,8 +31,12 @@ class LlmRequestMiddleware:
                 request,
                 api_mode=str(kwargs.get("api_mode") or ""),
                 context=rendered.text,
-                binding=request_id or f"{service.episode_id}:{service.episode.current_turn}",
+                binding=(
+                    f"{request_id or f'{service.episode_id}:{service.episode.current_turn}'}:"
+                    f"{content_hash(rendered.text)}"
+                ),
             )
+            self.runtime.clear_injection_failure(service.episode_id)
             if not result.changed:
                 return None
             return {

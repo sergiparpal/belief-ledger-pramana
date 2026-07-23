@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -128,6 +129,9 @@ class LedgerStore:
         if requested_key.is_symlink():
             raise StoreError("ledger integrity key must not be a symbolic link")
         self.integrity_key_path = requested_key
+        self.projection_seal_path = requested_key.with_name(
+            f"{requested_key.name}.projection-seal.json"
+        )
         self._integrity_key = load_or_create_integrity_key(self.integrity_key_path)
         self.migration: MigrationResult = migrate(
             self.database,
@@ -703,8 +707,13 @@ class LedgerStore:
                     (expression, episode_id, max(1, min(limit, 1_000))),
                 ).fetchall()
             return tuple(str(row[0]) for row in rows)
-        except sqlite3.OperationalError:
-            return ()
+        except sqlite3.OperationalError as exc:
+            if "no such table: beliefs_fts" in str(exc).casefold():
+                return ()
+            raise
+
+    def fts_available(self) -> bool:
+        return self.migration.fts5_available
 
     def descendants(self, episode_id: str, belief_id: str) -> tuple[str, ...]:
         """Return transitive justification descendants in deterministic order."""
@@ -737,13 +746,18 @@ class LedgerStore:
     def _events_by_ids(
         self, connection: sqlite3.Connection, event_ids: Iterable[object]
     ) -> list[Event]:
-        ids = [str(event_id) for event_id in event_ids]
+        ids = list(dict.fromkeys(str(event_id) for event_id in event_ids))
         if not ids:
             return []
-        placeholders = ",".join("?" for _ in ids)
-        rows = connection.execute(
-            f"SELECT * FROM events WHERE id IN ({placeholders}) ORDER BY seq", ids
-        ).fetchall()
+        rows: list[sqlite3.Row] = []
+        for chunk in _chunks(ids):
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(
+                connection.execute(
+                    f"SELECT * FROM events WHERE id IN ({placeholders})", chunk
+                ).fetchall()
+            )
+        rows.sort(key=lambda row: int(row["seq"]))
         return self._authenticated_events(connection, rows)
 
     def verify_hash_chain(self) -> tuple[bool, str]:
@@ -793,14 +807,22 @@ class LedgerStore:
         if not events:
             return []
         ids = [event.id for event in events]
-        auth_rows = connection.execute(
-            f"SELECT event_id,event_hash,auth_tag FROM event_auth WHERE event_id IN ({','.join('?' for _ in ids)})",
-            ids,
-        ).fetchall()
-        auth = {
-            str(row["event_id"]): (str(row["event_hash"]), str(row["auth_tag"]))
-            for row in auth_rows
-        }
+        auth: dict[str, tuple[str, str]] = {}
+        for chunk in _chunks(ids):
+            auth_rows = connection.execute(
+                "SELECT event_id,event_hash,auth_tag FROM event_auth "
+                f"WHERE event_id IN ({','.join('?' for _ in chunk)})",
+                chunk,
+            ).fetchall()
+            auth.update(
+                {
+                    str(row["event_id"]): (
+                        str(row["event_hash"]),
+                        str(row["auth_tag"]),
+                    )
+                    for row in auth_rows
+                }
+            )
         hydrated: list[Event] = []
         for event in events:
             stored = auth.get(event.id)
@@ -835,6 +857,21 @@ class LedgerStore:
             ).fetchall()
         return {str(row["input_hash"]) for row in rows}
 
+    def source_outcome_sampled(self, belief_id: str, outcome: str) -> bool:
+        """Whether source learning already counted this belief/outcome pair."""
+
+        if outcome not in {"confirmed", "defeated"}:
+            raise ValueError("unsupported source outcome")
+        path = f"$.delta.{outcome}"
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM events WHERE kind='SOURCE_STATS_DELTA' "
+                "AND json_extract(payload_json,'$.belief_id')=? "
+                "AND CAST(json_extract(payload_json,?) AS INTEGER)>0 LIMIT 1",
+                (belief_id, path),
+            ).fetchone()
+        return row is not None
+
     def replay(self) -> ReplayResult:
         from belief_ledger_core.enforcement import rebuild_enforcement_projection
 
@@ -867,6 +904,7 @@ class LedgerStore:
                     f"projection replay mismatch: v1={before}/{after} v2={before_v2}/{after_v2}"
                 )
             connection.commit()
+            self._write_projection_seal()
             return ReplayResult(len(rows), before, after)
         except Exception:
             connection.rollback()
@@ -877,6 +915,16 @@ class LedgerStore:
     def checkpoint(self) -> None:
         with self.connect() as connection:
             connection.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        self._write_projection_seal()
+
+    def verify_or_replay(self) -> ReplayResult:
+        """Use an authenticated clean-shutdown seal, falling back to exact replay."""
+
+        self.verify_hash_chain()
+        sealed = self._sealed_projection_hash()
+        if sealed is not None:
+            return ReplayResult(0, sealed, sealed)
+        return self.replay()
 
     def purge_episode(self, episode_id: str, *, confirmation: str) -> PurgeResult:
         """Offline-compaction purge of one episode after exact confirmation.
@@ -893,6 +941,7 @@ class LedgerStore:
         all_events = self.events()
         preserved = [event for event in all_events if event.episode_id != episode_id]
         removed = len(all_events) - len(preserved)
+        enforcement_events = self._enforcement_events_snapshot()
         with self.connect() as connection:
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
@@ -917,6 +966,17 @@ class LedgerStore:
                 destination,
                 _idempotency_batches(preserved),
             )
+            for row in enforcement_events:
+                destination.execute(
+                    "INSERT INTO enforcement_events"
+                    "(seq,id,at,kind,payload_schema_version,payload_json,previous_hash,event_hash) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    row,
+                )
+            if enforcement_events:
+                from belief_ledger_core.enforcement import rebuild_enforcement_projection
+
+                rebuild_enforcement_projection(destination)
             destination.commit()
         except Exception:
             destination.rollback()
@@ -925,18 +985,105 @@ class LedgerStore:
             destination.close()
         replacement.verify_hash_chain()
         projection_hash = replacement.projection_hash()
-        replacement.checkpoint()
+        with replacement.connect() as connection:
+            connection.execute("PRAGMA wal_checkpoint(PASSIVE)")
         try:
             os.replace(temporary, self.database)
             for suffix in ("-wal", "-shm"):
                 Path(f"{self.database}{suffix}").unlink(missing_ok=True)
             self.database.chmod(0o600)
             self.verify_hash_chain()
+            self.checkpoint()
             return PurgeResult(episode_id, removed, len(preserved), projection_hash)
         finally:
             temporary.unlink(missing_ok=True)
             Path(f"{temporary}-wal").unlink(missing_ok=True)
             Path(f"{temporary}-shm").unlink(missing_ok=True)
+
+    def _enforcement_events_snapshot(self) -> tuple[tuple[Any, ...], ...]:
+        """Preserve the independent global authorization audit during ledger compaction."""
+
+        columns = (
+            "seq",
+            "id",
+            "at",
+            "kind",
+            "payload_schema_version",
+            "payload_json",
+            "previous_hash",
+            "event_hash",
+        )
+        with self.connect() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='enforcement_events'"
+            ).fetchone()
+            if exists is None:
+                return ()
+            rows = connection.execute(
+                f"SELECT {','.join(columns)} FROM enforcement_events ORDER BY seq"
+            ).fetchall()
+        return tuple(tuple(row[column] for column in columns) for row in rows)
+
+    def _sealed_projection_hash(self) -> str | None:
+        try:
+            raw = json.loads(self.projection_seal_path.read_text(encoding="utf-8"))
+            payload = raw["payload"]
+            tag = str(raw["auth_tag"])
+            if not isinstance(payload, dict):
+                return None
+            if payload.get("schema_version") != 1:
+                return None
+            if payload.get("database") != str(self.database):
+                return None
+            expected = hmac.new(
+                self._integrity_key,
+                canonical_json(payload).encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            if not hmac.compare_digest(tag, expected):
+                return None
+            with self.connect() as connection:
+                current_seq = int(
+                    connection.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0]
+                )
+                if current_seq != int(payload["event_seq"]):
+                    return None
+                projection_v1 = _projection_hash(connection, version=1)
+                projection_v2 = _projection_hash(connection, version=2)
+            if projection_v1 != str(payload["projection_hash_v1"]) or projection_v2 != str(
+                payload["projection_hash_v2"]
+            ):
+                return None
+            return projection_v1
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+    def _write_projection_seal(self) -> None:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                payload = {
+                    "schema_version": 1,
+                    "database": str(self.database),
+                    "event_seq": int(
+                        connection.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0]
+                    ),
+                    "projection_hash_v1": _projection_hash(connection, version=1),
+                    "projection_hash_v2": _projection_hash(connection, version=2),
+                }
+                tag = hmac.new(
+                    self._integrity_key,
+                    canonical_json(payload).encode("utf-8"),
+                    hashlib.sha256,
+                ).hexdigest()
+                _write_private_json(
+                    self.projection_seal_path,
+                    {"payload": payload, "auth_tag": tag},
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
 
 def _event_from_row(row: sqlite3.Row) -> Event:
@@ -983,6 +1130,34 @@ def _insert_event(connection: sqlite3.Connection, event: Event) -> None:
         "INSERT INTO event_auth(event_id,event_hash,auth_tag) VALUES (?,?,?)",
         (event.id, event.event_hash, event.auth_tag),
     )
+
+
+def _write_private_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(canonical_json(value) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        with suppress(OSError):
+            temporary.chmod(0o600)
+        os.replace(temporary, path)
+        with suppress(OSError):
+            path.chmod(0o600)
+        if os.name != "nt":
+            with suppress(OSError):
+                directory_descriptor = os.open(
+                    path.parent,
+                    os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+                )
+                try:
+                    os.fsync(directory_descriptor)
+                finally:
+                    os.close(directory_descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _episode_from_row(row: sqlite3.Row) -> Episode:

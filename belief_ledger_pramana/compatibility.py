@@ -12,8 +12,8 @@ from typing import Any
 from .contracts import HostCapabilities
 from .models import CompatibilityMode
 
-AUDITED_HERMES_VERSION = "0.18.2"
-AUDITED_HERMES_COMMIT = "3b2ef789dfcf92f5b7b18c08c59d25948e50857f"
+AUDITED_HERMES_VERSION = "0.19.0"
+AUDITED_HERMES_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
 REQUIRED_HOOKS = {
     "pre_llm_call",
     "pre_tool_call",
@@ -70,7 +70,7 @@ class CompatibilityReport:
             exclusive_final_output_gate=False,
             buffered_stream_delivery=False,
             bound_approval=False,
-            # Hermes 0.18.2 exposes plugin-registered names but no audited complete
+            # Hermes 0.19.0 exposes plugin-registered names but no audited complete
             # inventory of every built-in and dynamically added tool.
             tool_inventory=False,
         )
@@ -85,7 +85,7 @@ def inspect_host(ctx: Any) -> CompatibilityReport:
         errors.append("Python must be >=3.11,<3.14")
     version_ok = version is not None and _supported_version(version)
     if not version_ok:
-        errors.append(f"Hermes {version or 'unknown'} is outside audited >=0.18.2,<0.19 range")
+        errors.append(f"Hermes {version or 'unknown'} is outside audited >=0.19,<0.20 range")
 
     capabilities = {
         "register_tool": callable(getattr(ctx, "register_tool", None)),
@@ -95,33 +95,37 @@ def inspect_host(ctx: Any) -> CompatibilityReport:
         "register_cli_command": callable(getattr(ctx, "register_cli_command", None)),
         "llm_facade": inspect.getattr_static(ctx, "llm", None) is not None,
     }
-    missing = sorted(name for name, available in capabilities.items() if not available)
-    if missing:
-        errors.append("missing Hermes capabilities: " + ", ".join(missing))
+    required_missing = sorted(
+        name for name in ("register_tool", "register_hook", "llm_facade") if not capabilities[name]
+    )
+    if not (capabilities["register_command"] or capabilities["register_cli_command"]):
+        required_missing.append("command_registration")
+    if required_missing:
+        errors.append("missing Hermes capabilities: " + ", ".join(required_missing))
 
     hook_set, middleware_set = _host_contract_sets(ctx)
+    hooks_ok = True
     if hook_set is not None:
         absent_hooks = sorted(REQUIRED_HOOKS - hook_set)
         if absent_hooks:
+            hooks_ok = False
             errors.append("host lacks required hooks: " + ", ".join(absent_hooks))
-    if middleware_set is not None and "llm_request" not in middleware_set:
-        errors.append("host lacks llm_request middleware")
+    middleware_ok = capabilities["register_middleware"] and (
+        middleware_set is None or "llm_request" in middleware_set
+    )
+    if not middleware_ok:
+        warnings.append("host lacks llm_request middleware")
 
-    if not python_ok or not capabilities["register_hook"] or not capabilities["register_tool"]:
+    baseline_ok = python_ok and version_ok and not required_missing and hooks_ok
+    if not baseline_ok:
         mode = CompatibilityMode.DIAGNOSTICS_ONLY
-    elif (
-        version_ok
-        and capabilities["register_middleware"]
-        and (middleware_set is None or "llm_request" in middleware_set)
-    ):
+    elif middleware_ok:
         mode = CompatibilityMode.FULL
-    elif capabilities["register_hook"]:
+    else:
         mode = CompatibilityMode.HOOK_CONTEXT
         warnings.append(
             "per-request context injection is unavailable; compatibility context is per turn"
         )
-    else:
-        mode = CompatibilityMode.DIAGNOSTICS_ONLY
     if mode is not CompatibilityMode.FULL:
         warnings.append("strict enforcement is not claimed in this compatibility mode")
     return CompatibilityReport(
@@ -169,13 +173,13 @@ def _supported_version(value: str) -> bool:
         major, minor, patch = (int(parts[index]) for index in range(3))
     except (IndexError, ValueError):
         return False
-    return (major, minor, patch) >= (0, 18, 2) and (major, minor) < (0, 19)
+    return (major, minor, patch) >= (0, 19, 0) and (major, minor) < (0, 20)
 
 
 def _host_contract_sets(ctx: Any) -> tuple[set[str] | None, set[str] | None]:
     try:
-        from hermes_cli.middleware import VALID_MIDDLEWARE  # type: ignore[import-untyped]
-        from hermes_cli.plugins import VALID_HOOKS  # type: ignore[import-untyped]
+        from hermes_cli.middleware import VALID_MIDDLEWARE  # type: ignore
+        from hermes_cli.plugins import VALID_HOOKS  # type: ignore
 
         return set(VALID_HOOKS), set(VALID_MIDDLEWARE)
     except ImportError:

@@ -94,7 +94,7 @@ class FakeContext:
 def compatibility() -> CompatibilityReport:
     return CompatibilityReport(
         mode=CompatibilityMode.FULL,
-        hermes_version="0.18.2",
+        hermes_version="0.19.0",
         python_version="3.12.3",
         capabilities={},
         errors=(),

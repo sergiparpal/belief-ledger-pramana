@@ -12,8 +12,8 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-AUDITED_VERSION = "0.18.2"
-AUDITED_COMMIT = "3b2ef789dfcf92f5b7b18c08c59d25948e50857f"
+AUDITED_VERSION = "0.19.0"
+AUDITED_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
 
 
 def check_checkout(path: Path) -> dict[str, Any]:
