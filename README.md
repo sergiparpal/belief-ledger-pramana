@@ -141,6 +141,7 @@ hermes belief-ledger db status|migrate [--dry-run]|verify-chain|replay
 hermes belief-ledger episode list|show|export
 hermes belief-ledger purge --episode EP_ID --confirm EP_ID
 hermes belief-ledger evaluate --suite all --offline
+hermes belief-ledger policy validate|inventory|scaffold TOOL|explain TOOL
 ```
 
 ## Configuration and data
@@ -211,10 +212,16 @@ Detailed schema-6 backup and code/database rollback steps are in
 ## Development and offline gate
 
 ```bash
-uv sync --extra dev
-uv run python scripts/verify_stage.py all --hermes-checkout /path/to/pinned/hermes
+uv sync --frozen --all-packages --group dev
+uv pip install --python .venv "hermes-agent==0.19.0"
+git clone https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent
+git -C /tmp/hermes-agent checkout 3ef6bbd201263d354fd83ec55b3c306ded2eb72a
+uv run --no-sync python scripts/verify_stage.py all --hermes-checkout /tmp/hermes-agent
 ```
 
-Live model tests are opt-in and never part of the default gate. Offline suites A-E and the
-collapse decision write a versioned JSON report. No remote publication, signing, or public
-release is performed by the repository scripts.
+The audited Hermes host is intentionally installed after the workspace sync: it is a peer host,
+not a project dependency. Omit `--hermes-checkout` only when a source-contract audit is not
+available; the verification script will report the check as allowed missing. Live model tests are
+opt-in and never part of the default gate. Offline suites A-E and the collapse decision write a
+versioned JSON report. No remote publication, signing, or public release is performed by the
+repository scripts.

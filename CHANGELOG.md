@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Fixed the CI environment setup for the peer-host model: Hermes 0.19.0 is installed after the
+  workspace sync and checks run without a later re-sync replacing it.
+
+## 1.0.0rc2 - 2026-07-23
+
+- Split the project into synchronized `belief-ledger-core`, backward-compatible
+  `belief-ledger-pramana`, and strict `belief-ledger-reference` distributions.
+- Made enforcement capability-profiled. Hermes is honestly limited to `accepted_final`, while the
+  reference adapter demonstrates strict dispatch and buffered delivery.
+- Added versioned tool-policy manifests, deterministic profile negotiation, exact approval
+  receipts, opaque single-use action decisions, and an append-only enforcement chain.
+- Preserved frozen v1 event and projection hashes while adding schema-6 authorization projections
+  that rebuild from the enforcement event stream.
+- Updated the audited peer-host contract to Hermes Agent `0.19.0` at commit
+  `3ef6bbd201263d354fd83ec55b3c306ded2eb72a`.
 - Made terminal command strings fail closed; every terminal invocation now requires the
   effectful-action confirmation path.
 - Added target-bound direct observations for recognised structured file and environment APIs.
@@ -20,7 +35,7 @@
 - Fixed multi-event idempotency, verification-task races, source-stat deltas, and atomic LLM
   budget reservation; added schema migration 2.
 - Added batching for belief hydration, stronger input validation, expanded regression/evaluation
-  coverage, package smoke checks, and pinned audited runtime dependencies.
+  coverage, package smoke checks, and audited peer-host verification.
 
 ## 1.0.0rc1 - 2026-07-11
 

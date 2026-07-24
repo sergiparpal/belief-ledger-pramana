@@ -80,7 +80,7 @@ a claim of external scientific validity.
 | §10 suite D monitor | `evaluations/suite_d_linter` | precision/recall gates |
 | §10 suite E action/inventory/token binding | `evaluations/suite_e_action_gate` | allow/block, false-block, unknown, binding, retraction gates |
 | §10 ablations/overhead/collapse | `evaluations/ablations.py`, frozen config/report | evaluation e2e test/report |
-| §11 roadmap | `IMPLEMENTATION_PLAN.md` execution log and unified verification script | complete local gate |
+| §11 roadmap | `scripts/verify_stage.py` and release qualification notes | complete local gate |
 | §12 risks | README, threat model, evaluation metrics | suites/fuzz/property checks |
 | Appendix A trairūpya/hetvābhāsa | `verification/chain_audit.py`, schema/prompt | chain-audit validation tests |
 | Appendix B concept mapping | matching domain models/modules | this matrix plus architecture docs |

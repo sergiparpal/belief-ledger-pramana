@@ -6,14 +6,14 @@ Status: frozen on 2026-07-22 from the completed local baseline described in
 This snapshot is the compatibility reference for the post-1.0.0rc1 rearchitecture. It records
 repository facts, not a new release claim.
 
-| Surface | Frozen value | Source of truth |
+| Surface | Frozen value | Source of frozen value |
 |---|---|---|
 | Hermes distribution/import | `belief-ledger-pramana` / `belief_ledger_pramana` | `pyproject.toml` |
-| Baseline version | `1.0.0rc1` | `pyproject.toml`, `plugin.yaml` |
+| Baseline version | `1.0.0rc1` | `pyproject.toml` and `plugin.yaml` at the `v0.1.1` tag |
 | Next synchronized workspace version | `1.0.0rc2` | ADR 0005 and package metadata |
-| Plugin entry point | `belief-ledger-pramana = belief_ledger_pramana.plugin` | `pyproject.toml` |
-| Hermes dependency | exactly `hermes-agent==0.18.2` | `pyproject.toml` |
-| Audited Hermes commit | `3b2ef789dfcf92f5b7b18c08c59d25948e50857f` | `compatibility.py`, contract tests |
+| Plugin entry point | `belief-ledger-pramana = belief_ledger_pramana.plugin` | `pyproject.toml` at the `v0.1.1` tag |
+| Hermes dependency | exactly `hermes-agent==0.18.2` | `pyproject.toml` at the `v0.1.1` tag |
+| Audited Hermes commit | `3b2ef789dfcf92f5b7b18c08c59d25948e50857f` | `compatibility.py` and contract tests at the `v0.1.1` tag |
 | Python | `>=3.11,<3.14` | `pyproject.toml` |
 | Event envelope | schema version 1, SHA-256 canonical JSON chain | `events.py`, `store.py` |
 | Database migrations | `0001_initial.sql`, `0002_llm_reservations.sql`; runtime schema 2 | package data, `migrations.py` |

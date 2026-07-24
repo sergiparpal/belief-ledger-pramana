@@ -1,8 +1,11 @@
 # 1.0.0rc1 baseline implementation state
 
-This file is the completed, frozen `1.0.0rc1` baseline. Post-baseline rearchitecture progress is
-tracked separately in `IMPLEMENTATION_PLAN.md`; unchecked tasks there are not implied complete by
-the phase table below.
+This file is the completed, frozen `1.0.0rc1` baseline. Its entries intentionally retain the
+then-current Hermes 0.18.2 contract, package version, and local-gate evidence. For the current
+`1.0.0rc2` workspace architecture and release qualification, see
+[`RELEASE_NOTES.md`](RELEASE_NOTES.md), [`docs/architecture.md`](docs/architecture.md), and
+[`HERMES_COMPATIBILITY.md`](HERMES_COMPATIBILITY.md). Those documents do not revise the historical
+baseline evidence below.
 
 Local implementation completed on 2026-07-11. No publication, signing, remote release, or
 license selection was authorized or performed.

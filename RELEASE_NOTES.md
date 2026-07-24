@@ -1,4 +1,4 @@
-# Belief Ledger Pramāṇa 1.0.0rc2 (unreleased)
+# Belief Ledger Pramana 1.0.0rc2 (unreleased)
 
 This candidate repositions the project as evidence-backed policy enforcement for AI agents,
 extracts a host-neutral core, and adds a strict standalone reference adapter while preserving the

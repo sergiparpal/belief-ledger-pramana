@@ -15,6 +15,8 @@ hermes belief-ledger db replay
 hermes belief-ledger episode list
 hermes belief-ledger episode export EPISODE --format jsonl
 hermes belief-ledger evaluate --suite all --offline
+hermes belief-ledger policy validate
+hermes belief-ledger policy inventory
 ```
 
 WAL checkpoints occur after turns; finalization releases process-local handles without deleting
