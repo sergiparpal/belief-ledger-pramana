@@ -1,9 +1,10 @@
-# Belief Ledger Pramana 1.0.0rc2 (unreleased)
+# Belief Ledger Pramana v0.1.2
 
-This candidate repositions the project as evidence-backed policy enforcement for AI agents,
-extracts a host-neutral core, and adds a strict standalone reference adapter while preserving the
-Hermes installation and state paths. Enforcement guarantees are now capability-profiled; no
-package has been published by this repository work.
+This GitHub release contains the synchronized `1.0.0rc2` package candidates. It repositions the
+project as evidence-backed policy enforcement for AI agents, extracts a host-neutral core, and adds
+a strict standalone reference adapter while preserving the Hermes installation and state paths.
+Enforcement guarantees are now capability-profiled. No package-registry publication is part of
+this release.
 
 The workspace now ships three synchronized `1.0.0rc2` distributions: host-neutral
 `belief-ledger-core`, backward-compatible Hermes adapter `belief-ledger-pramana`, and strict
@@ -20,7 +21,8 @@ protocol, and demonstrates strict deployment gating. The final local gate passed
 88.28% combined branch coverage, Suites A–E, all dependency/product/contract checks, and fresh
 manifest builds plus Twine/inspection/clean-install checks for all three wheels. GitHub Actions run
 `29991731616` passed all 15 supported platform, Python, dependency, contract, conformance, and
-artifact jobs. Package and release publication remain deliberately unperformed.
+artifact jobs. GitHub provides the source archives for tag `v0.1.2`; built Python distributions
+remain deliberately unpublished.
 
 ## 1.0.0rc1 baseline
 

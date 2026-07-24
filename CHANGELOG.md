@@ -2,10 +2,7 @@
 
 ## Unreleased
 
-- Fixed the CI environment setup for the peer-host model: Hermes 0.19.0 is installed after the
-  workspace sync and checks run without a later re-sync replacing it.
-
-## 1.0.0rc2 - 2026-07-23
+## v0.1.2 / 1.0.0rc2 - 2026-07-24
 
 - Split the project into synchronized `belief-ledger-core`, backward-compatible
   `belief-ledger-pramana`, and strict `belief-ledger-reference` distributions.
@@ -17,6 +14,8 @@
   that rebuild from the enforcement event stream.
 - Updated the audited peer-host contract to Hermes Agent `0.19.0` at commit
   `3ef6bbd201263d354fd83ec55b3c306ded2eb72a`.
+- Fixed the CI environment setup for the peer-host model: Hermes 0.19.0 is installed after the
+  workspace sync and checks run without a later re-sync replacing it.
 - Made terminal command strings fail closed; every terminal invocation now requires the
   effectful-action confirmation path.
 - Added target-bound direct observations for recognised structured file and environment APIs.
