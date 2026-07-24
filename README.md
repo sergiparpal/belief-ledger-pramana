@@ -21,7 +21,8 @@ support, so a retry is blocked again. The deterministic fixture in
 
 ## How it works
 
-The host-neutral core keeps an append-only, hash-chained event ledger, types evidence by pramāṇa,
+The host-neutral core keeps an append-only, hash-chained event ledger, classifies evidence by how
+it was obtained or derived,
 maintains a justification/defeat graph, selects bounded context, and returns action/output
 decisions. Beliefs are discrete (`IN`, `OUT`, `PENDING`, `QUARANTINED`); scalar confidence never
 decides defeat. Host adapters enforce those decisions at the boundaries they actually control.
@@ -29,6 +30,21 @@ decides defeat. Host adapters enforce those decisions at the boundaries they act
 Hermes Agent is the first audited integration and remains available through the backward-compatible
 `belief-ledger-pramana` package. A strict standalone reference runner demonstrates exclusive action
 dispatch and buffered high-stakes delivery without making Hermes the product boundary.
+
+## Why the name Pramana?
+
+*Pramāṇa* is a Sanskrit term from classical Indian epistemology meaning a means or source of
+reliable knowledge. This repository uses it as a provenance scheme: the ledger records not just a
+claim, but whether it came from direct observation, testimony, a derived inference, or another
+defined evidential route. That distinction lets the software check the right admission conditions,
+trace a decision back to its support, and retract conclusions when their support fails.
+
+The `pramana` spelling in package and tool names is the ASCII form of *pramāṇa*. The inference
+tool also recognizes three related forms of reasoning: *anumāna* (a conclusion drawn from stated
+premises and a rule), *arthāpatti* (an explanatory inference made after alternatives are
+considered), and *upamāna* (an analogy based on an explicit similarity). They are useful labels
+for the ledger because each records a different kind of support and can be checked or challenged
+in a different way.
 
 ## Compatibility
 
@@ -116,7 +132,9 @@ effectful regardless of the command text.
 
 Model tools are deliberately narrow:
 
-- `pramana_record_inference`: ANUMĀNA/ARTHĀPATTI/UPAMĀNA only, with IN premises and warrant.
+- `pramana_record_inference`: records only one of three derived-belief types: a conclusion drawn
+  from stated premises, an explanatory inference that records alternatives, or an analogy with an
+  explicit similarity basis. Every record requires `IN` premises and a warrant.
 - `pramana_query`: concise belief search without full evidence payloads.
 - `pramana_explain`: provenance, validity, support, priority, defeat, and transitions.
 - `pramana_request_verification`: persist/deduplicate a bounded task; scheduling is not confirmation.
