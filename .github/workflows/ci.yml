@@ -152,3 +152,20 @@ jobs:
       - run: uv sync --frozen --all-packages --group dev
       - run: git clone --depth 1 https://github.com/NousResearch/hermes-agent.git /tmp/hermes-main
       - run: uv run python scripts/check_hermes_contract.py --checkout /tmp/hermes-main --allow-version-drift
+
+  ci-complete:
+    # One stable check name for the branch ruleset to require. Matrix legs come and go, so
+    # requiring them individually would turn a dropped Python version into a required check
+    # that never reports again — and an unsatisfiable required check blocks every merge.
+    # This job depends on the ones that must pass and fails unless all of them succeeded.
+    # hermes-main-canary is continue-on-error, so it stays out by its author's intent.
+    if: always()
+    needs: [core-no-hermes, hermes-adapter, hermes-supported, exact-hermes-contract, reference-conformance, replay-claims-evaluations, all-wheel-artifacts, dependency-audit, path-config-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless every required job succeeded
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: |
+          echo "A required job did not succeed:"
+          echo '${{ toJSON(needs) }}'
+          exit 1
