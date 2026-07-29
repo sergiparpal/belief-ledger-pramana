@@ -66,7 +66,7 @@ diagnostics-only. See [HERMES_COMPATIBILITY.md](HERMES_COMPATIBILITY.md).
 From Git/directory form:
 
 ```bash
-hermes plugins install OWNER/REPO --enable
+hermes plugins install sergiparpal/belief-ledger-pramana --enable
 hermes belief-ledger doctor
 ```
 
