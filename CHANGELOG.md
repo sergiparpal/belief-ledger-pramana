@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## v0.1.3 / 1.0.0rc2 - 2026-07-30
+
+Repository and supply-chain hardening. No library code changed in this release: the
+`belief-ledger-core`, `belief-ledger-pramana`, and `belief-ledger-reference` distributions stay at
+`1.0.0rc2` and their package sources are identical to v0.1.2.
+
+- Added `ci-complete`, a single aggregating CI job that fails unless every required job succeeded,
+  so the branch ruleset can require one stable check name instead of the individual matrix legs.
+  Requiring the legs directly would turn a dropped Python version into a required check that never
+  reports again and blocks every merge.
+- Pinned every third-party GitHub Action to a full commit SHA with a trailing version comment. A
+  tag is mutable and can be repointed by its upstream owner; a commit SHA cannot.
+- Declared `permissions: contents: read` on the workflow, added `timeout-minutes` to every job, and
+  added a concurrency group that cancels superseded runs on the same ref.
+- Added `SECURITY.md` with a private advisory reporting path, a 7-day initial response commitment,
+  and an explicit scope that names ledger integrity, gate bypass, approval handling, retraction
+  correctness, and adapter boundaries as the areas most worth scrutiny.
+- Documented the branch ruleset and the CI gating rules in `CLAUDE.md`, including why
+  `hermes-main-canary` is deliberately excluded from `ci-complete`'s `needs:` list.
+- Replaced untranslated Sanskrit terminology in `README.md` with plain descriptions of what each
+  evidence type records, and added a "Why the name Pramana?" section explaining the provenance
+  scheme the name refers to.
+
 ## v0.1.2 / 1.0.0rc2 - 2026-07-24
 
 - Split the project into synchronized `belief-ledger-core`, backward-compatible

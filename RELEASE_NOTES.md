@@ -1,4 +1,38 @@
-# Belief Ledger Pramana v0.1.2
+# Belief Ledger Pramana v0.1.3
+
+This release hardens the repository and its build pipeline. It changes no library code: the
+synchronized `belief-ledger-core`, `belief-ledger-pramana`, and `belief-ledger-reference`
+distributions remain at `1.0.0rc2`, and their package sources are identical to v0.1.2. Anyone
+already running v0.1.2 gains nothing by upgrading the code and loses nothing by staying.
+
+CI now aggregates into `ci-complete`, one job that fails unless every required job succeeded. The
+branch ruleset requires that single stable check name rather than the individual matrix legs,
+because requiring a leg such as a specific Python version turns a later removal of that version
+into a required check that never reports again and blocks every merge permanently. Every
+third-party action is pinned to a full commit SHA with a trailing version comment, so an upstream
+tag repoint cannot silently change what CI executes. The workflow declares
+`permissions: contents: read`, every job carries a `timeout-minutes` bound, and a concurrency group
+cancels superseded runs on the same ref.
+
+`SECURITY.md` establishes a private GitHub Security Advisory reporting path with a 7-day initial
+response commitment, and states the scope explicitly: ledger integrity, gate bypass, approval
+reuse or replay, retraction correctness, and adapter boundaries are the areas most worth scrutiny.
+The substantive correctness of an operator-authored policy and the behaviour of the underlying
+model are out of scope.
+
+`README.md` no longer relies on untranslated Sanskrit terminology to describe what the ledger
+records. Each evidence type is now described by what it actually captures, and a new section
+explains that *pramāṇa* names a provenance scheme: the ledger records not just a claim but the
+evidential route it arrived by, which is what lets it check admission conditions, trace a decision
+to its support, and retract conclusions when that support fails.
+
+Two repository settings changed alongside the tag and are not visible in the source tree: the
+`main` branch ruleset (added 2026-07-27) requires a pull request and a green `ci-complete` before
+merge and blocks deletion and non-fast-forward pushes, and CodeQL default setup (configured
+2026-07-29) scans Python and Actions weekly. As with previous tags, GitHub provides the source
+archives and no package-registry publication or built-distribution upload is included.
+
+## v0.1.2
 
 This GitHub release contains the synchronized `1.0.0rc2` package candidates. It repositions the
 project as evidence-backed policy enforcement for AI agents, extracts a host-neutral core, and adds
