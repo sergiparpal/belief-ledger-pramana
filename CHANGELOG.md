@@ -16,6 +16,8 @@ Repository and supply-chain hardening. No library code changed in this release: 
   tag is mutable and can be repointed by its upstream owner; a commit SHA cannot.
 - Declared `permissions: contents: read` on the workflow, added `timeout-minutes` to every job, and
   added a concurrency group that cancels superseded runs on the same ref.
+- Bumped `astral-sh/setup-uv` from 7.6.0 to 9.0.0 via Dependabot — the first pinned-SHA bump to
+  land under the new policy, confirming that pinning still leaves upgrades visible and reviewable.
 - Added `SECURITY.md` with a private advisory reporting path, a 7-day initial response commitment,
   and an explicit scope that names ledger integrity, gate bypass, approval handling, retraction
   correctness, and adapter boundaries as the areas most worth scrutiny.
@@ -24,6 +26,8 @@ Repository and supply-chain hardening. No library code changed in this release: 
 - Replaced untranslated Sanskrit terminology in `README.md` with plain descriptions of what each
   evidence type records, and added a "Why the name Pramana?" section explaining the provenance
   scheme the name refers to.
+- Fixed the plugin installation command in `README.md`, which still carried the literal
+  `OWNER/REPO` placeholder instead of the actual repository path.
 
 ## v0.1.2 / 1.0.0rc2 - 2026-07-24
 

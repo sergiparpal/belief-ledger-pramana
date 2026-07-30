@@ -12,7 +12,9 @@ into a required check that never reports again and blocks every merge permanentl
 third-party action is pinned to a full commit SHA with a trailing version comment, so an upstream
 tag repoint cannot silently change what CI executes. The workflow declares
 `permissions: contents: read`, every job carries a `timeout-minutes` bound, and a concurrency group
-cancels superseded runs on the same ref.
+cancels superseded runs on the same ref. The first bump to land under that policy —
+`astral-sh/setup-uv` 7.6.0 to 9.0.0, proposed by Dependabot — confirms the intended property: SHA
+pinning freezes what runs without hiding that an upgrade is available.
 
 `SECURITY.md` establishes a private GitHub Security Advisory reporting path with a 7-day initial
 response commitment, and states the scope explicitly: ledger integrity, gate bypass, approval
@@ -24,7 +26,8 @@ model are out of scope.
 records. Each evidence type is now described by what it actually captures, and a new section
 explains that *pramāṇa* names a provenance scheme: the ledger records not just a claim but the
 evidential route it arrived by, which is what lets it check admission conditions, trace a decision
-to its support, and retract conclusions when that support fails.
+to its support, and retract conclusions when that support fails. The documented install command
+also no longer ships the literal `OWNER/REPO` placeholder in place of the real repository path.
 
 Two repository settings changed alongside the tag and are not visible in the source tree: the
 `main` branch ruleset (added 2026-07-27) requires a pull request and a green `ci-complete` before
