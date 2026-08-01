@@ -252,10 +252,11 @@ def test_confirmed_offline_purge_rewrites_only_other_episodes(tmp_path: Path) ->
     assert store.get_episode(first.id) is None
     assert store.get_episode(second.id) is not None
     assert all(event.episode_id == second.id for event in store.events())
-    preserved_enforcement = EnforcementStore(database, deterministic_dependencies())
-    assert preserved_enforcement.events() == enforcement_events
-    assert preserved_enforcement.projection_snapshot() == enforcement_snapshot
-    assert preserved_enforcement.rebuild()
+    purged_enforcement = EnforcementStore(database, deterministic_dependencies())
+    assert enforcement_events
+    assert purged_enforcement.events() == ()
+    assert purged_enforcement.projection_snapshot() != enforcement_snapshot
+    assert purged_enforcement.rebuild()
     assert store.replay().deterministic
 
 

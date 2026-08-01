@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "belief-ledger-mcp"
+version = "1.0.0rc3"
+description = "Evidence-backed policy enforcement for AI agents"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "belief-ledger-core==1.0.0rc3",
+  "belief-ledger-gateway==1.0.0rc3",
+  "mcp>=2,<3",
+]
+
+[project.scripts]
+belief-ledger-mcp = "belief_ledger_mcp.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/belief_ledger_mcp"]

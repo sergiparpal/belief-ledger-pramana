@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Advanced all five synchronized workspace distributions to `1.0.0rc3`.
+- Added the generic `belief_ledger_core.BeliefLedger` API with normalized evidence, exact approvals,
+  opaque single-use permits, output evaluation, explanations, verification, and replay.
+- Generalized the strict reference runner to caller-defined descriptors, policies, classifications,
+  and handlers; retained the frozen deployment result through example composition and added a CRM
+  custom-tool example.
+- Added `belief-ledger-gateway`, which owns the neutral `belief-ledger` CLI, local versioned JSONL
+  decision service, and optional owned in-process dispatcher.
+- Added `belief-ledger-mcp` inspection and complete-inventory proxy modes with an explicit
+  direct-upstream bypass warning and a maximum `action_enforce` claim.
+- Made the host-neutral quickstart and five-package responsibility model the primary documentation
+  path while retaining the Hermes distribution, plugin surface, state paths, and audited contract.
+- Extended dependency/claim checks, workspace builds, artifact inspection, smoke matrices, and CI
+  definitions for the five-package architecture.
+- Hardened permits against policy/config drift, cross-episode references, finalized-episode reuse,
+  retracted support, reopened conflicts, replay races, and authorization-audit leakage during purge.
+- Made public inputs, configuration, gateway JSONL, MCP inventory/results, immutable records, and
+  state-root paths fail closed on malformed, ambiguous, oversized, or symlinked data.
+- Migrated the MCP surface to the official SDK 2.x, added injective proxy names and explicit
+  upstream result status, and bounded both inventory and output sizes.
+- Updated development dependencies and secured the audited Hermes 0.19.0 host combination by
+  overriding its vulnerable Pillow and cryptography leaf pins in CI and clean-install smoke tests.
+- Added authorization indexes, bounded FTS retrieval, single-pass explanation hydration, exact
+  UTF-8 LLM-budget reservation, and focused safety/regression coverage.
+
 ## v0.1.3 / 1.0.0rc2 - 2026-07-30
 
 Repository and supply-chain hardening. No library code changed in this release: the

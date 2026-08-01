@@ -1,4 +1,4 @@
-"""Privacy-preserving evidence preparation for Hermes tool results."""
+"""Privacy-preserving evidence preparation for host tool results."""
 
 from __future__ import annotations
 

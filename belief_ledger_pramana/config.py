@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import subprocess
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -137,9 +138,9 @@ class ConfigSnapshot:
 
     def section(self, name: str) -> dict[str, Any]:
         section = self.data.get(name)
-        if not isinstance(section, dict):
+        if not isinstance(section, Mapping):
             raise ConfigError(f"configuration section {name!r} is not a mapping")
-        return copy.deepcopy(section)
+        return copy.deepcopy(dict(section))
 
     @property
     def settings(self) -> RuntimeSettings:
@@ -366,9 +367,10 @@ def load_config(
     return snapshot, paths
 
 
-def validate_config(config: dict[str, Any]) -> list[str]:
+def validate_config(config: Mapping[str, Any]) -> list[str]:
     """Validate all safety-sensitive values and return non-fatal warnings."""
 
+    config = _mutable_config(config)
     if type(config.get("schema_version")) is not int or config["schema_version"] != 1:
         raise ConfigError("schema_version must be 1")
     if not isinstance(config.get("enabled"), bool):
@@ -614,6 +616,14 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     return []
 
 
+def _mutable_config(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _mutable_config(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_mutable_config(item) for item in value]
+    return value
+
+
 def config_needs_reload(snapshot: ConfigSnapshot) -> bool:
     if snapshot.source is not None:
         try:
@@ -656,11 +666,11 @@ def _unknown_paths(
     return unknown
 
 
-def _mapping(container: dict[str, Any], key: str) -> dict[str, Any]:
+def _mapping(container: Mapping[str, Any], key: str) -> dict[str, Any]:
     value = container.get(key)
-    if not isinstance(value, dict):
+    if not isinstance(value, Mapping):
         raise ConfigError(f"{key} must be a mapping")
-    return value
+    return dict(value)
 
 
 def _bounded_int(container: dict[str, Any], key: str, minimum: int, maximum: int) -> int:

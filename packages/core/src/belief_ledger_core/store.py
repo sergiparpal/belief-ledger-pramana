@@ -26,6 +26,7 @@ from .events import (
     canonical_json,
     compute_event_auth,
     compute_event_hash,
+    content_hash,
     isoformat_utc,
     parse_datetime,
     to_primitive,
@@ -107,7 +108,7 @@ class PurgeResult:
 
 
 class LedgerStore:
-    """A connection-per-operation event store safe for threaded Hermes callbacks."""
+    """A connection-per-operation event store safe for threaded host callbacks."""
 
     def __init__(
         self,
@@ -219,7 +220,20 @@ class LedgerStore:
                     (episode_id, storage_idempotency_key, idempotency_key),
                 ).fetchone()
                 if existing:
-                    return self._events_by_ids(connection, json.loads(str(existing[0])))
+                    existing_events = self._events_by_ids(connection, json.loads(str(existing[0])))
+                    previous_fingerprint = (
+                        existing_events[0].correlation.get("idempotency_fingerprint")
+                        if existing_events
+                        else None
+                    )
+                    current_fingerprint = clean_correlation.get("idempotency_fingerprint")
+                    if (
+                        previous_fingerprint
+                        and current_fingerprint
+                        and previous_fingerprint != current_fingerprint
+                    ):
+                        raise StoreError("idempotency key was reused for a different request")
+                    return existing_events
 
             head = connection.execute(
                 "SELECT seq,event_hash FROM event_heads WHERE episode_id=?", (episode_id,)
@@ -873,7 +887,10 @@ class LedgerStore:
         return row is not None
 
     def replay(self) -> ReplayResult:
-        from belief_ledger_core.enforcement import rebuild_enforcement_projection
+        from belief_ledger_core.enforcement import (
+            enforcement_projection_snapshot,
+            rebuild_enforcement_projection,
+        )
 
         self.verify_hash_chain()
         connection = self.connect()
@@ -881,6 +898,7 @@ class LedgerStore:
             connection.execute("BEGIN IMMEDIATE")
             before = _projection_hash(connection, version=1)
             before_v2 = _projection_hash(connection, version=2)
+            enforcement_before = enforcement_projection_snapshot(connection)
             with suppress(sqlite3.OperationalError):
                 connection.execute("DELETE FROM beliefs_fts")
             connection.execute("DELETE FROM llm_reservations")
@@ -896,12 +914,16 @@ class LedgerStore:
                     idempotency_batches.setdefault((event.episode_id, key), []).append(event)
             _restore_idempotency(connection, idempotency_batches)
             rebuild_enforcement_projection(connection)
+            enforcement_after = enforcement_projection_snapshot(connection)
             after = _projection_hash(connection, version=1)
             after_v2 = _projection_hash(connection, version=2)
-            if before != after or before_v2 != after_v2:
+            if before != after or before_v2 != after_v2 or enforcement_before != enforcement_after:
                 connection.rollback()
                 raise StoreError(
-                    f"projection replay mismatch: v1={before}/{after} v2={before_v2}/{after_v2}"
+                    "projection replay mismatch: "
+                    f"v1={before}/{after} v2={before_v2}/{after_v2} "
+                    f"authorization={content_hash(enforcement_before)}/"
+                    f"{content_hash(enforcement_after)}"
                 )
             connection.commit()
             self._write_projection_seal()
@@ -930,7 +952,7 @@ class LedgerStore:
         """Offline-compaction purge of one episode after exact confirmation.
 
         This rewrites the database instead of deleting append-only rows in place.
-        Hermes must be stopped so no other process can retain an old connection.
+        The owning host must be stopped so no other process retains an old connection.
         """
 
         if confirmation != episode_id:
@@ -941,7 +963,11 @@ class LedgerStore:
         all_events = self.events()
         preserved = [event for event in all_events if event.episode_id != episode_id]
         removed = len(all_events) - len(preserved)
-        enforcement_events = self._enforcement_events_snapshot()
+        from belief_ledger_core.enforcement import compact_enforcement_events
+
+        enforcement_events = compact_enforcement_events(
+            self._enforcement_events_snapshot(), episode_id
+        )
         with self.connect() as connection:
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
@@ -1405,11 +1431,13 @@ def _projection_hash(connection: sqlite3.Connection, *, version: int = 1) -> str
         raise ValueError(f"unsupported projection hash version: {version}") from exc
     state: dict[str, list[dict[str, Any]]] = {}
     for table, columns in manifest:
-        rows = [dict(row) for row in connection.execute(f"SELECT * FROM {table}").fetchall()]
+        selected = ",".join(f'"{column}"' for column in columns)
+        rows = [
+            {column: row[column] for column in columns}
+            for row in connection.execute(f'SELECT {selected} FROM "{table}"').fetchall()
+        ]
         rows.sort(key=canonical_json)
-        state[table] = [{column: row.get(column) for column in columns} for row in rows]
-    from .events import content_hash
-
+        state[table] = rows
     return content_hash(canonical_json(state))
 
 

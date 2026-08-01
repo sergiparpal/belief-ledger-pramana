@@ -96,17 +96,43 @@ class EnforcementStore:
         *,
         busy_timeout_ms: int = 5_000,
     ) -> None:
-        self.database = database.expanduser().resolve()
+        requested = database.expanduser().absolute()
+        if requested.is_symlink():
+            raise ValueError("authorization database must not be a symbolic link")
+        self.database = requested.resolve()
         self.database.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.dependencies = dependencies
         self.busy_timeout_ms = busy_timeout_ms
         connection = self._connect()
         try:
             connection.executescript(_SCHEMA)
+            self._backfill_decision_indexes(connection)
+            connection.commit()
         finally:
             connection.close()
         with suppress(OSError):
             self.database.chmod(0o600)
+
+    @staticmethod
+    def _backfill_decision_indexes(connection: sqlite3.Connection) -> None:
+        """Populate derived lookup tables for databases created by older RCs."""
+
+        rows = connection.execute(
+            "SELECT token_digest,binding_json FROM action_decisions"
+        ).fetchall()
+        for row in rows:
+            token_digest = str(row["token_digest"])
+            binding = _action_binding(json.loads(str(row["binding_json"])))
+            connection.execute(
+                "INSERT OR IGNORE INTO action_decision_episodes(token_digest,episode_id) "
+                "VALUES (?,?)",
+                (token_digest, binding.episode_id),
+            )
+            connection.executemany(
+                "INSERT OR IGNORE INTO action_decision_supports(token_digest,belief_id) "
+                "VALUES (?,?)",
+                ((token_digest, belief_id) for belief_id in binding.supporting_belief_ids),
+            )
 
     def issue_approval(
         self,
@@ -136,6 +162,7 @@ class EnforcementStore:
                     {
                         "receipt_digest": digest,
                         "binding_digest": binding.digest,
+                        "binding": asdict(binding),
                         "revoked_prior_receipts": revoked,
                     },
                 )
@@ -196,6 +223,32 @@ class EnforcementStore:
         finally:
             connection.close()
 
+    def current_approval(self, binding: ApprovalBinding) -> ApprovalReceipt | None:
+        """Return a live exact-binding receipt without exposing any secret material."""
+
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT digest,binding_json,issued_at,expires_at,state "
+                "FROM approval_receipts WHERE binding_digest=? "
+                "ORDER BY rowid DESC LIMIT 1",
+                (binding.digest,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None or str(row["state"]) != "issued":
+            return None
+        if isoformat_utc(self.dependencies.clock.now()) >= str(row["expires_at"]):
+            return None
+        return ApprovalReceipt(
+            1,
+            str(row["digest"]),
+            _approval_binding(json.loads(str(row["binding_json"]))),
+            str(row["issued_at"]),
+            str(row["expires_at"]),
+            str(row["state"]),
+        )
+
     def issue_action(self, binding: ActionBinding, *, ttl_seconds: int) -> ActionDecision:
         if ttl_seconds <= 0:
             raise ValueError("action ttl_seconds must be positive")
@@ -211,7 +264,11 @@ class EnforcementStore:
                 self._append_event(
                     connection,
                     "ACTION_DECISION_REJECTED",
-                    {"token_digest": token_digest, "reason_code": approval_reason},
+                    {
+                        "token_digest": token_digest,
+                        "reason_code": approval_reason,
+                        "binding": asdict(binding),
+                    },
                 )
                 connection.commit()
                 raise ValueError(approval_reason)
@@ -224,6 +281,14 @@ class EnforcementStore:
                     isoformat_utc(now),
                     isoformat_utc(expires),
                 ),
+            )
+            connection.executemany(
+                "INSERT INTO action_decision_supports(token_digest,belief_id) VALUES (?,?)",
+                ((token_digest, belief_id) for belief_id in binding.supporting_belief_ids),
+            )
+            connection.execute(
+                "INSERT INTO action_decision_episodes(token_digest,episode_id) VALUES (?,?)",
+                (token_digest, binding.episode_id),
             )
             self._append_event(
                 connection,
@@ -279,29 +344,6 @@ class EnforcementStore:
         conflicts_are_closed: Callable[[tuple[str, ...]], bool] | None = None,
     ) -> ConsumeResult:
         token_digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
-        support_ok: bool | None = None
-        conflicts_ok: bool | None = None
-        preflight = self._connect()
-        try:
-            preflight_row = preflight.execute(
-                "SELECT binding_json,state,expires_at FROM action_decisions WHERE token_digest=?",
-                (token_digest,),
-            ).fetchone()
-        finally:
-            preflight.close()
-        if (
-            preflight_row is not None
-            and str(preflight_row["state"]) == "issued"
-            and isoformat_utc(self.dependencies.clock.now()) < str(preflight_row["expires_at"])
-        ):
-            preflight_binding = _action_binding(json.loads(str(preflight_row["binding_json"])))
-            if _binding_mismatch(preflight_binding, presented) is None:
-                if support_is_active is not None:
-                    support_ok = bool(support_is_active(preflight_binding.supporting_belief_ids))
-                if conflicts_are_closed is not None:
-                    conflicts_ok = bool(
-                        conflicts_are_closed(preflight_binding.blocking_conflict_ids)
-                    )
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -328,6 +370,12 @@ class EnforcementStore:
             approval_reason = self._approval_reason(connection, stored, allow_consumed=True)
             if approval_reason:
                 return self._reject(connection, token_digest, approval_reason)
+            support_ok = self._stored_supports_are_active(connection, stored)
+            conflicts_ok = self._stored_conflicts_are_closed(connection, stored)
+            if support_ok and support_is_active is not None:
+                support_ok = bool(support_is_active(stored.supporting_belief_ids))
+            if conflicts_ok and conflicts_are_closed is not None:
+                conflicts_ok = bool(conflicts_are_closed(stored.blocking_conflict_ids))
             if support_ok is False:
                 connection.execute(
                     "UPDATE action_decisions SET state='revoked' WHERE token_digest=? AND state='issued'",
@@ -376,12 +424,12 @@ class EnforcementStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute(
-                "SELECT token_digest,binding_json FROM action_decisions WHERE state='issued'"
+                "SELECT d.token_digest FROM action_decisions d "
+                "JOIN action_decision_supports s ON s.token_digest=d.token_digest "
+                "WHERE d.state='issued' AND s.belief_id=?",
+                (belief_id,),
             ).fetchall()
             for row in rows:
-                binding = _action_binding(json.loads(str(row["binding_json"])))
-                if belief_id not in binding.supporting_belief_ids:
-                    continue
                 connection.execute(
                     "UPDATE action_decisions SET state='revoked' WHERE token_digest=? AND state='issued'",
                     (str(row["token_digest"]),),
@@ -398,6 +446,38 @@ class EnforcementStore:
                 revoked += 1
             connection.commit()
             return revoked
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def revoke_for_episode(self, episode_id: str) -> int:
+        """Revoke every outstanding permit bound to a finalized episode."""
+
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT d.token_digest FROM action_decisions d "
+                "JOIN action_decision_episodes e ON e.token_digest=d.token_digest "
+                "WHERE d.state='issued' AND e.episode_id=?",
+                (episode_id,),
+            ).fetchall()
+            affected = [str(row["token_digest"]) for row in rows]
+            for token_digest in affected:
+                connection.execute(
+                    "UPDATE action_decisions SET state='revoked' "
+                    "WHERE token_digest=? AND state='issued'",
+                    (token_digest,),
+                )
+                self._append_event(
+                    connection,
+                    "ACTION_DECISION_REVOKED",
+                    {"token_digest": token_digest, "reason_code": "EPISODE_FINALIZED"},
+                )
+            connection.commit()
+            return len(affected)
         except Exception:
             connection.rollback()
             raise
@@ -439,12 +519,7 @@ class EnforcementStore:
     def projection_snapshot(self) -> str:
         connection = self._connect()
         try:
-            state: dict[str, list[dict[str, Any]]] = {}
-            for table in ("approval_receipts", "action_decisions"):
-                rows = [dict(row) for row in connection.execute(f"SELECT * FROM {table}")]
-                rows.sort(key=canonical_json)
-                state[table] = rows
-            return canonical_json(state)
+            return enforcement_projection_snapshot(connection)
         finally:
             connection.close()
 
@@ -455,6 +530,7 @@ class EnforcementStore:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            connection.execute("DELETE FROM action_decision_supports")
             connection.execute("DELETE FROM action_decisions")
             connection.execute("DELETE FROM approval_receipts")
             rows = connection.execute(
@@ -465,7 +541,12 @@ class EnforcementStore:
                     connection, str(row["kind"]), json.loads(str(row["payload_json"]))
                 )
             state: dict[str, list[dict[str, Any]]] = {}
-            for table in ("approval_receipts", "action_decisions"):
+            for table in (
+                "approval_receipts",
+                "action_decisions",
+                "action_decision_episodes",
+                "action_decision_supports",
+            ):
                 projected = [dict(item) for item in connection.execute(f"SELECT * FROM {table}")]
                 projected.sort(key=canonical_json)
                 state[table] = projected
@@ -529,6 +610,17 @@ class EnforcementStore:
                     payload["expires_at"],
                 ),
             )
+            connection.executemany(
+                "INSERT INTO action_decision_supports(token_digest,belief_id) VALUES (?,?)",
+                (
+                    (payload["token_digest"], belief_id)
+                    for belief_id in binding.get("supporting_belief_ids", ())
+                ),
+            )
+            connection.execute(
+                "INSERT INTO action_decision_episodes(token_digest,episode_id) VALUES (?,?)",
+                (payload["token_digest"], binding["episode_id"]),
+            )
         else:
             state = {
                 "ACTION_DECISION_CONSUMED": "consumed",
@@ -582,6 +674,39 @@ class EnforcementStore:
             approval.scope,
         )
         return None if approval == expected else "APPROVAL_BINDING_MISMATCH"
+
+    def _stored_supports_are_active(
+        self, connection: sqlite3.Connection, binding: ActionBinding
+    ) -> bool:
+        if not binding.supporting_belief_ids or not _table_exists(connection, "beliefs"):
+            return True
+        placeholders = ",".join("?" for _ in binding.supporting_belief_ids)
+        count = connection.execute(
+            f"SELECT COUNT(*) FROM beliefs WHERE episode_id=? AND status='in' "
+            f"AND id IN ({placeholders})",
+            (binding.episode_id, *binding.supporting_belief_ids),
+        ).fetchone()[0]
+        return int(count) == len(binding.supporting_belief_ids)
+
+    def _stored_conflicts_are_closed(
+        self, connection: sqlite3.Connection, binding: ActionBinding
+    ) -> bool:
+        if not _table_exists(connection, "conflicts"):
+            return True
+        row = connection.execute(
+            "SELECT 1 FROM conflicts WHERE episode_id=? AND state='open' LIMIT 1",
+            (binding.episode_id,),
+        ).fetchone()
+        if row is not None:
+            return False
+        if not binding.blocking_conflict_ids:
+            return True
+        placeholders = ",".join("?" for _ in binding.blocking_conflict_ids)
+        unresolved = connection.execute(
+            f"SELECT COUNT(*) FROM conflicts WHERE id IN ({placeholders}) AND state!='resolved'",
+            binding.blocking_conflict_ids,
+        ).fetchone()[0]
+        return int(unresolved) == 0
 
     def _reject(
         self,
@@ -640,10 +765,38 @@ class EnforcementStore:
             check_same_thread=False,
         )
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
         connection.execute(f"PRAGMA busy_timeout={int(self.busy_timeout_ms)}")
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=FULL")
         return connection
+
+    def verify_hash_chain(self) -> tuple[bool, str]:
+        """Verify the independent authorization event chain."""
+
+        previous = "0" * 64
+        expected_seq = 1
+        for event in self.events():
+            if event["seq"] != expected_seq or event["previous_hash"] != previous:
+                raise RuntimeError("authorization event chain sequence mismatch")
+            body = {
+                "seq": event["seq"],
+                "id": event["id"],
+                "at": event["at"],
+                "kind": event["kind"],
+                "payload_schema_version": event["payload_schema_version"],
+                "payload": event["payload"],
+                "previous_hash": event["previous_hash"],
+            }
+            calculated = content_hash(previous + "\x00" + canonical_json(body))
+            if calculated != event["event_hash"]:
+                raise RuntimeError("authorization event hash mismatch")
+            previous = calculated
+            expected_seq += 1
+        return True, previous
+
+    def projection_hash(self) -> str:
+        return content_hash(self.projection_snapshot())
 
 
 def _approval_binding(value: dict[str, Any]) -> ApprovalBinding:
@@ -654,6 +807,15 @@ def _action_binding(value: dict[str, Any]) -> ActionBinding:
     value["supporting_belief_ids"] = tuple(value.get("supporting_belief_ids", ()))
     value["blocking_conflict_ids"] = tuple(value.get("blocking_conflict_ids", ()))
     return ActionBinding(**value)
+
+
+def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        is not None
+    )
 
 
 def _binding_mismatch(expected: ActionBinding, actual: ActionBinding) -> str | None:
@@ -684,6 +846,7 @@ def rebuild_enforcement_projection(connection: sqlite3.Connection) -> None:
     """Rebuild authorization state in an existing transaction from enforcement events."""
 
     connection.row_factory = sqlite3.Row
+    connection.execute("DELETE FROM action_decision_supports")
     connection.execute("DELETE FROM action_decisions")
     connection.execute("DELETE FROM approval_receipts")
     rows = connection.execute(
@@ -737,6 +900,17 @@ def rebuild_enforcement_projection(connection: sqlite3.Connection) -> None:
                     payload["expires_at"],
                 ),
             )
+            connection.executemany(
+                "INSERT INTO action_decision_supports(token_digest,belief_id) VALUES (?,?)",
+                (
+                    (payload["token_digest"], belief_id)
+                    for belief_id in payload["binding"].get("supporting_belief_ids", ())
+                ),
+            )
+            connection.execute(
+                "INSERT INTO action_decision_episodes(token_digest,episode_id) VALUES (?,?)",
+                (payload["token_digest"], payload["binding"]["episode_id"]),
+            )
             continue
         action_state = {
             "ACTION_DECISION_CONSUMED": "consumed",
@@ -748,6 +922,93 @@ def rebuild_enforcement_projection(connection: sqlite3.Connection) -> None:
                 "UPDATE action_decisions SET state=? WHERE token_digest=? AND state='issued'",
                 (action_state, payload["token_digest"]),
             )
+
+
+def enforcement_projection_snapshot(connection: sqlite3.Connection) -> str:
+    """Return a deterministic snapshot of every derived authorization table."""
+
+    connection.row_factory = sqlite3.Row
+    state: dict[str, list[dict[str, Any]]] = {}
+    for table in (
+        "approval_receipts",
+        "action_decisions",
+        "action_decision_episodes",
+        "action_decision_supports",
+    ):
+        rows = [dict(row) for row in connection.execute(f"SELECT * FROM {table}")]
+        rows.sort(key=canonical_json)
+        state[table] = rows
+    return canonical_json(state)
+
+
+def compact_enforcement_events(
+    rows: tuple[tuple[Any, ...], ...], excluded_episode_id: str
+) -> tuple[tuple[Any, ...], ...]:
+    """Remove one episode's authorization audit and rebuild the remaining hash chain."""
+
+    approval_episodes: dict[str, str] = {}
+    approval_binding_episodes: dict[str, str] = {}
+    action_episodes: dict[str, str] = {}
+    retained: list[tuple[Any, ...]] = []
+    for row in rows:
+        kind = str(row[3])
+        payload = json.loads(str(row[5]))
+        binding = payload.get("binding")
+        episode_id = str(binding.get("episode_id", "")) if isinstance(binding, dict) else ""
+        if episode_id and kind.startswith("APPROVAL_RECEIPT_"):
+            receipt_digest = str(payload.get("receipt_digest", ""))
+            binding_digest = str(payload.get("binding_digest", ""))
+            if receipt_digest:
+                approval_episodes[receipt_digest] = episode_id
+            if binding_digest:
+                approval_binding_episodes[binding_digest] = episode_id
+        elif kind.startswith("APPROVAL_RECEIPT_"):
+            episode_id = approval_episodes.get(str(payload.get("receipt_digest", "")), "")
+            if not episode_id:
+                episode_id = approval_binding_episodes.get(
+                    str(payload.get("binding_digest", "")), ""
+                )
+        if episode_id and kind.startswith("ACTION_DECISION_"):
+            token_digest = str(payload.get("token_digest", ""))
+            if token_digest:
+                action_episodes[token_digest] = episode_id
+        elif kind.startswith("ACTION_DECISION_"):
+            episode_id = action_episodes.get(str(payload.get("token_digest", "")), "")
+        if episode_id != excluded_episode_id:
+            retained.append(row)
+
+    compacted: list[tuple[Any, ...]] = []
+    previous = "0" * 64
+    for seq, row in enumerate(retained, 1):
+        event_id = str(row[1])
+        at = str(row[2])
+        kind = str(row[3])
+        payload_schema_version = int(row[4])
+        payload_json = str(row[5])
+        body = {
+            "seq": seq,
+            "id": event_id,
+            "at": at,
+            "kind": kind,
+            "payload_schema_version": payload_schema_version,
+            "payload": json.loads(payload_json),
+            "previous_hash": previous,
+        }
+        event_hash = content_hash(previous + "\x00" + canonical_json(body))
+        compacted.append(
+            (
+                seq,
+                event_id,
+                at,
+                kind,
+                payload_schema_version,
+                payload_json,
+                previous,
+                event_hash,
+            )
+        )
+        previous = event_hash
+    return tuple(compacted)
 
 
 _SCHEMA = """
@@ -787,6 +1048,19 @@ CREATE TABLE IF NOT EXISTS action_decisions (
   expires_at TEXT NOT NULL,
   state TEXT NOT NULL CHECK(state IN ('issued','consumed','expired','revoked'))
 );
+CREATE TABLE IF NOT EXISTS action_decision_supports (
+  token_digest TEXT NOT NULL REFERENCES action_decisions(token_digest) ON DELETE CASCADE,
+  belief_id TEXT NOT NULL,
+  PRIMARY KEY(token_digest,belief_id)
+);
+CREATE INDEX IF NOT EXISTS action_decision_supports_belief_idx
+ON action_decision_supports(belief_id,token_digest);
+CREATE TABLE IF NOT EXISTS action_decision_episodes (
+  token_digest TEXT PRIMARY KEY REFERENCES action_decisions(token_digest) ON DELETE CASCADE,
+  episode_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS action_decision_episodes_episode_idx
+ON action_decision_episodes(episode_id,token_digest);
 CREATE TRIGGER IF NOT EXISTS approval_receipts_immutable_fields
 BEFORE UPDATE OF digest,binding_digest,binding_json,issued_at,expires_at ON approval_receipts
 BEGIN SELECT RAISE(ABORT, 'approval binding is immutable'); END;

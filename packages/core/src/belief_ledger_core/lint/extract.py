@@ -62,9 +62,17 @@ def _looks_substantive_declarative(text: str) -> bool:
     clean = _CITATION.sub("", text)
     clean = re.sub(r"^\s*[-*]\s*", "", clean).strip()
     words = re.findall(r"[\w.-]+", clean, flags=re.UNICODE)
-    if len(words) < 3 and not any(char.isdigit() for char in clean):
+    if not words:
         return False
-    return clean.casefold() not in {"thanks", "thank you", "ok", "okay", "done"}
+    return clean.casefold() not in {
+        "thanks",
+        "thank you",
+        "ok",
+        "okay",
+        "done",
+        "hello",
+        "goodbye",
+    }
 
 
 def strip_citations(text: str, pending_marker: str) -> str:

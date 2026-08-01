@@ -47,6 +47,8 @@ def main() -> int:
                 "-m",
                 "mypy",
                 "packages/core/src",
+                "packages/gateway/src",
+                "packages/mcp/src",
                 "packages/reference/src",
                 "belief_ledger_pramana",
             ]
@@ -61,6 +63,8 @@ def main() -> int:
             "-m",
             "not live_llm",
             "--cov=belief_ledger_core",
+            "--cov=belief_ledger_gateway",
+            "--cov=belief_ledger_mcp",
             "--cov=belief_ledger_pramana",
             "--cov=belief_ledger_reference",
             "--cov-branch",
@@ -70,6 +74,7 @@ def main() -> int:
         ]
     )
     run([sys.executable, "scripts/check_dependency_boundaries.py"])
+    run([sys.executable, "scripts/check_workspace_boundaries.py"])
     run([sys.executable, "scripts/check_product_claims.py"])
     run([sys.executable, "examples/deployment_gate/validate_fixtures.py"])
     run(
@@ -84,6 +89,15 @@ def main() -> int:
             "json",
         ]
     )
+    run(
+        [
+            sys.executable,
+            "examples/custom_tool_gate/run.py",
+            "--format",
+            "json",
+        ]
+    )
+    run([sys.executable, "-m", "belief_ledger_gateway.cli", "demo", "--format", "json"])
     run(
         [
             sys.executable,
@@ -122,7 +136,9 @@ def main() -> int:
                 "scripts/build_workspace.py",
                 "--packages",
                 "core",
+                "gateway",
                 "hermes",
+                "mcp",
                 "reference",
                 "--output-manifest",
                 str(manifest),
@@ -138,7 +154,7 @@ def main() -> int:
                 sys.executable,
                 "scripts/smoke_install.py",
                 "--matrix",
-                "core,core+reference,hermes",
+                "core,core+gateway,core+reference,core+gateway+mcp,hermes",
                 "--manifest",
                 str(manifest),
             ]

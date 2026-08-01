@@ -22,3 +22,9 @@ Repeated lifecycle notifications must be idempotent. Unknown identifiers are nor
 not invented from unrelated host state. Adapter-specific diagnostics are allowed, but domain event,
 decision, and projection meanings are shared. Unsupported strict assertions require stable missing-
 capability reasons; they are never silently skipped.
+
+The gateway JSONL adapter is decision-only and demonstrates `observe`; its in-process dispatcher
+demonstrates `action_enforce`. MCP inspection demonstrates `observe`; the complete-inventory proxy
+demonstrates at most `action_enforce` and requires direct-upstream access to be excluded by the
+deployment. `ReferenceRunner` is the strict construction: it starts empty and conformance fixtures
+must inject unrelated tool domains to prove that no deployment assumptions are built in.

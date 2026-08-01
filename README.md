@@ -1,245 +1,152 @@
-# Belief Ledger Pramana
+# Belief Ledger
 
 Evidence-backed policy enforcement for AI agents.
 
-This project is for teams whose agents can deploy software, send messages, make purchases, or
-otherwise change real systems. It checks whether the exact action is supported by current evidence
-and any required approval, blocks when that proof is missing, and records why the decision changed.
+Belief Ledger is the evidence-backed authorization layer between agents and consequential actions.
+It requires current evidence, reviewed policy, and exact approval at the boundary that owns an
+effect. Adapters expose only the guarantees their construction can prove.
 
-Three outcomes define the product:
+## One concrete decision
 
-- **Action gating:** effectful tools require reviewed policy, live preconditions, and exact approval.
-- **Grounded output:** high-stakes responses are checked against admitted evidence before acceptance.
-- **Auditable retraction:** contradictory evidence defeats stale support and changes later decisions.
+```json
+{
+  "outcome": "block",
+  "reason_code": "MISSING_PRECONDITION",
+  "missing": ["Precondition recipient_identity holds for customer-42"],
+  "executed": false
+}
+```
 
-For example, a production deployment request with no current health observation returns
-`BLOCKED [MISSING_PRECONDITION]: production health is green` and recommends the next safe step:
-`Observe current production health with health_probe`. After green health evidence and an approval
-bound to the exact deployment, the action is allowed. A later red health observation retracts that
-support, so a retry is blocked again. The deterministic fixture in
-[`examples/deployment_gate`](examples/deployment_gate) is the source of this example.
+The action has no trusted evidence binding the intended recipient. The safe next step is a
+read-only directory observation, followed—if policy requires it—by an authenticated approval bound
+to the exact namespace, tool, arguments, target, policy revision, and turn.
 
 ## How it works
 
-The host-neutral core keeps an append-only, hash-chained event ledger, classifies evidence by how
-it was obtained or derived,
-maintains a justification/defeat graph, selects bounded context, and returns action/output
-decisions. Beliefs are discrete (`IN`, `OUT`, `PENDING`, `QUARANTINED`); scalar confidence never
-decides defeat. Host adapters enforce those decisions at the boundaries they actually control.
+Belief Ledger follows one neutral sequence: observe evidence → admit a normalized belief → evaluate
+policy → issue a bound permit or block → atomically consume at an adapter-owned boundary → audit
+and retract when support changes. Core never executes an arbitrary callback. A decision service is
+not described as enforcement unless an adapter owns the only dispatch path.
 
-Hermes Agent is the first audited integration and remains available through the backward-compatible
-`belief-ledger-pramana` package. A strict standalone reference runner demonstrates exclusive action
-dispatch and buffered high-stakes delivery without making Hermes the product boundary.
+## Host-neutral quickstart
 
-## Why the name Pramana?
+From a source checkout, synchronize all five local packages and run the offline demo:
 
-*Pramāṇa* is a Sanskrit term from classical Indian epistemology meaning a means or source of
-reliable knowledge. This repository uses it as a provenance scheme: the ledger records not just a
-claim, but whether it came from direct observation, testimony, a derived inference, or another
-defined evidential route. That distinction lets the software check the right admission conditions,
-trace a decision back to its support, and retract conclusions when their support fails.
-
-The `pramana` spelling in package and tool names is the ASCII form of *pramāṇa*. The inference
-tool also recognizes three related forms of reasoning: *anumāna* (a conclusion drawn from stated
-premises and a rule), *arthāpatti* (an explanatory inference made after alternatives are
-considered), and *upamāna* (an analogy based on an explicit similarity). They are useful labels
-for the ledger because each records a different kind of support and can be checked or challenged
-in a different way.
-
-## Compatibility
-
-The audited Hermes adapter targets Hermes Agent `0.19.0` at commit
-`3ef6bbd201263d354fd83ec55b3c306ded2eb72a`, manifest version 1, and Python
-`>=3.11,<3.14`. The per-request guarantee requires Hermes' audited
-`llm_request` middleware. Its maximum profile is `accepted_final`: it has a pre-action gate and
-accepted-response transform, but not atomic action-token consumption, complete tool inventory,
-exact bound approvals, or exclusive buffered delivery. Unsupported hosts are visibly
-diagnostics-only. See [HERMES_COMPATIBILITY.md](HERMES_COMPATIBILITY.md).
-
-| Adapter | Maximum profile | Dispatch/output boundary |
-|---|---|---|
-| Hermes 0.19.0 audited adapter | `accepted_final` | pre-tool denial and accepted-final transform; provisional streaming may remain visible |
-| Standalone reference adapter | `strict` | atomic single-use consume before dispatch and exclusive buffered delivery |
-
-## Install and enable
-
-From Git/directory form:
-
-```bash
-hermes plugins install sergiparpal/belief-ledger-pramana --enable
-hermes belief-ledger doctor
-```
-
-`belief-ledger-pramana` treats Hermes as its host (a peer), not as a Python runtime
-dependency. This avoids silently installing or downgrading the host and its large,
-independently managed dependency graph.
-
-For a project-local checkout:
-
-```bash
-mkdir -p .hermes/plugins
-cp -R /path/to/belief-ledger-pramana .hermes/plugins/belief-ledger-pramana
-export HERMES_ENABLE_PROJECT_PLUGINS=1
-hermes plugins enable belief-ledger-pramana
-```
-
-For a built wheel:
-
-```bash
-python -m pip install dist/belief_ledger_pramana-*.whl
-hermes plugins enable belief-ledger-pramana
-```
-
-Restart the CLI/gateway process after enabling. General plugins are opt-in;
-`plugins.disabled` wins over `plugins.enabled`. `HERMES_SAFE_MODE=1` disables all plugin
-discovery. `doctor` reports the loaded source/module, registered tools, middleware,
-configuration, permissions, FTS5, hash chain, and competing output transformers.
-
-## Runtime flow
-
-For every turn the plugin ingests the original user message. Before every provider call it
-compiles current relevant beliefs, open conflicts, and live structural retractions into an
-ephemeral block appended to the active user item. Tool results remain byte-for-byte unchanged
-in the Hermes transcript; the plugin separately records an immutable evidence object, a
-PRATYAKṢA tool wrapper, and lazily validated content beliefs with the actual source.
-Generic command stdout is only evidence that the command returned; it is never promoted into a
-domain fact. Every terminal command string is treated as effectful because the plugin cannot
-prove equivalent read-only semantics across host-selected shells.
-
-Recognised structured observational APIs can satisfy gate prerequisites without trusting free-form
-output: `stat_file`/`file_stat`/`stat_path` must return a matching JSON path with `exists: true`,
-`list_directory`/`list_dir`/`list_files` must return that directory and an `entries` array, and
-environment-identity APIs must return a non-empty environment identifier. These create
-target-bound direct observations; arbitrary terminal text never does.
-
-Final responses are linted under the episode stakes:
-
-- LOW: deliver and optionally annotate grounding failures.
-- MED: make at most one bounded rewrite, then mark or omit remaining unsupported clauses.
-- HIGH/CRITICAL: replace unsupported output with a safe blocked-response report.
-
-Before an effectful tool runs, a versioned action registry derives effective stakes and
-checks preconditions. Missing support returns a deterministic block with a safe observation;
-when explicit human confirmation is the only missing precondition, the audited Hermes
-approval gate may be requested.
-Textual confirmation is action-and-target-bound, expires quickly, and a negated statement never
-authorizes an action. A qualifying confirmation is an affirmative, fresh user statement that
-names both the action and its target; generic consent such as "yes" is not sufficient. Unknown
-or ambiguous tools block in enforcing mode, and every terminal invocation is treated as
-effectful regardless of the command text.
-
-## Tools and commands
-
-Model tools are deliberately narrow:
-
-- `pramana_record_inference`: records only one of three derived-belief types: a conclusion drawn
-  from stated premises, an explanatory inference that records alternatives, or an analogy with an
-  explicit similarity basis. Every record requires `IN` premises and a warrant.
-- `pramana_query`: concise belief search without full evidence payloads.
-- `pramana_explain`: provenance, validity, support, priority, defeat, and transitions.
-- `pramana_request_verification`: persist/deduplicate a bounded task; scheduling is not confirmation.
-
-In-session commands:
-
-```text
-/ledger status
-/ledger conflicts
-/ledger retractions
-/ledger belief <id>
-/ledger stakes <low|med|high|critical>
-/ledger export [jsonl|markdown]
-```
-
-Operator commands:
-
-```text
-hermes belief-ledger doctor
-hermes belief-ledger config show|path|validate|init
-hermes belief-ledger db status|migrate [--dry-run]|verify-chain|replay
-hermes belief-ledger episode list|show|export
-hermes belief-ledger purge --episode EP_ID --confirm EP_ID
-hermes belief-ledger evaluate --suite all --offline
-hermes belief-ledger policy validate|inventory|scaffold TOOL|explain TOOL
-```
-
-## Configuration and data
-
-On first successful use the packaged enforcing defaults are atomically copied to:
-
-```text
-$HERMES_HOME/belief-ledger-pramana/config.yaml
-$HERMES_HOME/belief-ledger-pramana/ledger.sqlite3
-$HERMES_HOME/belief-ledger-pramana/locks/ledger.integrity.key
-```
-
-Set `BELIEF_LEDGER_PRAMANA_CONFIG` for an explicit private configuration file beneath that
-profile-local state directory. Unknown keys warn only in `observe`; they are errors in `enforce`.
-One turn uses one immutable config snapshot. See [config.example.yaml](config.example.yaml) and
-[docs/configuration.md](docs/configuration.md).
-
-The integrity key is a generated, private 256-bit secret used to authenticate the event history.
-It is not included in episode exports and must be retained with an encrypted database backup; a
-database restored without its matching key cannot authenticate its existing events.
-
-The default evidence mode stores a bounded, additionally redacted excerpt and a hash of the
-redacted post-Hermes result. `hash_only` cannot promote claims needing citation spans; `full`
-is explicit opt-in. Credentials, authorization headers, raw environment dumps, and Hermes auth
-files are never intentionally persisted. Directories use `0700` and files `0600` on POSIX.
-
-## Upgrade and uninstall
-
-Before an upgrade, stop Hermes processes using the profile, run
-`hermes belief-ledger db verify-chain`, and retain a checkpointed copy of the state directory if
-your retention policy allows it. Upgrade a Git-installed plugin with
-`hermes plugins update belief-ledger-pramana`; upgrade a wheel with
-`python -m pip install --upgrade PATH_TO_NEW_WHEEL`. Restart Hermes, then run:
-
-```bash
-hermes belief-ledger doctor
-hermes belief-ledger db replay
-```
-
-Forward schema migration creates a private pre-migration database backup when needed. Include the
-matching `locks/ledger.integrity.key` whenever backing up or restoring the ledger; see
-[docs/operations.md](docs/operations.md). To uninstall, first run `hermes plugins disable
-belief-ledger-pramana`, then use `hermes plugins remove
-belief-ledger-pramana` for a Git/directory install or `python -m pip uninstall
-belief-ledger-pramana` for a wheel. Durable state is intentionally retained. Purging an episode
-or deleting the state directory is a separate destructive retention decision; see
-[docs/operations.md](docs/operations.md).
-Detailed schema-6 backup and code/database rollback steps are in
-[docs/upgrade-and-rollback.md](docs/upgrade-and-rollback.md).
-
-## Honest limitations
-
-- Python plugins run in-process with Hermes privileges. Installation is a code-trust decision,
-  not a sandbox boundary.
-- This is not an anti-prompt-injection layer, probabilistic reasoner, knowledge graph, or
-  long-term-memory backend.
-- Hermes catches callback exceptions. Safety callbacks therefore have an explicit outer
-  fail-closed boundary for HIGH/CRITICAL actions/output.
-- Final transforms cannot restart arbitrary turns or force tools. Unresolved high-stakes output
-  is replaced with a block report.
-- Competing final transformers all see the original output and first non-empty replacement wins.
-  Accepted-final enforcement is effective only when this plugin has precedence; `doctor` checks it.
-- Streaming surfaces may display provisional tokens before transformed-response reconciliation.
-  The hard guarantee applies to the accepted final response.
-- Tool schemas have no universal stakes metadata. Unknown or ambiguous mutation tools block in
-  enforcing mode until an operator adds an anchored policy.
-
-## Development and offline gate
-
-```bash
+```console
 uv sync --frozen --all-packages --group dev
-uv pip install --python .venv "hermes-agent==0.19.0"
-git clone https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent
-git -C /tmp/hermes-agent checkout 3ef6bbd201263d354fd83ec55b3c306ded2eb72a
-uv run --no-sync python scripts/verify_stage.py all --hermes-checkout /tmp/hermes-agent
+uv run --no-sync belief-ledger demo --format json
+uv run --no-sync python examples/custom_tool_gate/run.py --format json
 ```
 
-The audited Hermes host is intentionally installed after the workspace sync: it is a peer host,
-not a project dependency. Omit `--hermes-checkout` only when a source-contract audit is not
-available; the verification script will report the check as allowed missing. Live model tests are
-opt-in and never part of the default gate. Offline suites A-E and the collapse decision write a
-versioned JSON report. No remote publication, signing, or public release is performed by the
-repository scripts.
+Initialize durable local state and inspect it without any agent host:
+
+```console
+uv run --no-sync belief-ledger --state-root .belief-ledger init --format json
+uv run --no-sync belief-ledger --state-root .belief-ledger ledger verify-chain --format json
+```
+
+See [the quickstart](docs/quickstart.md) for a first policy and explanation. These commands operate
+from the source workspace; repository tooling does not publish packages to a public registry.
+
+## Choose an interface
+
+| Interface | Purpose | Honest maximum in this repository |
+|---|---|---|
+| [Python core](docs/python-api.md) | Generic lifecycle, evidence, decisions, permits, output evaluation, query, replay | Selected from caller-owned capabilities; core itself does not execute |
+| [Gateway](docs/gateway-protocol.md) | Neutral CLI, local JSONL decisions, optional owned dispatcher | `observe` JSONL; `action_enforce` owned dispatcher |
+| [MCP](docs/integrations/mcp.md) | Inspection resources or complete-inventory wrapped tools | `observe` inspection; at most `action_enforce` proxy |
+| [Hermes](docs/integrations/hermes.md) | Backward-compatible audited host adapter | `accepted_final` |
+| [Reference](docs/adapter-conformance.md) | Deterministic conformance evidence with a private registry and sink | `strict` |
+
+## Capability profiles
+
+- `observe` produces evidence and decisions but does not own execution or delivery.
+- `action_enforce` owns a pre-action dispatch boundary and blocks before an effect.
+- `accepted_final` also owns transformation of the accepted final response, while provisional
+  streaming or another sink may remain outside its control.
+- `strict` additionally proves complete inventory, exact approvals, atomic single-use consumption,
+  exclusive output gating, and buffered delivery through one owned sink.
+
+Profiles are construction claims, not configuration labels. Missing capabilities fail closed or
+produce an explicit diagnostic downgrade; they are never inferred from a server returning “allow.”
+
+## Python API
+
+```python
+from pathlib import Path
+from belief_ledger_core import (
+    BeliefLedger,
+    EpisodeContext,
+    EvidenceObservation,
+    ToolInvocation,
+)
+
+ledger = BeliefLedger.open(state_root=Path(".belief-ledger"))
+context = EpisodeContext.normalize(session_id="s-1", turn_id="t-1", task_id="notify")
+episode = ledger.start_episode(context)
+ledger.ingest_evidence(
+    episode.id,
+    EvidenceObservation.normalize(
+        "Customer customer-42 is the intended recipient",
+        source_name="customer-directory",
+        source_kind="tool",
+        source_integrity="trusted",
+        target="customer-42",
+    ),
+)
+decision = ledger.evaluate_action(
+    episode.id,
+    ToolInvocation.normalize(
+        context,
+        "send_customer_message",
+        {"recipient": "customer-42", "body": "Your replacement shipped."},
+        namespace="crm",
+    ),
+)
+```
+
+The default manifest intentionally knows only reviewed read-only patterns, so the caller-defined
+message action blocks until an explicit manifest is supplied. `record_approval()` is a trusted
+control-plane operation: the adapter must authenticate the approving actor and channel first. It
+is not exposed through JSONL or MCP model tools.
+
+## Operations and security
+
+Durable state is append-only and hash chained; action authorization uses a separate append-only
+enforcement chain. Raw permits are stored only as digests, expire, bind every action dimension,
+and are single-use. Provider calls, approval waits, handlers, and network requests run outside
+database transactions. Evidence is redacted before persistence under the configured retention
+mode.
+
+Read [operations](docs/operations.md), [configuration](docs/configuration.md), the
+[threat model](docs/threat-model.md), [event compatibility](docs/event-compatibility.md), and
+[upgrade/rollback](docs/upgrade-and-rollback.md). Belief Ledger is not a sandbox.
+It is not a universal compliance system or prompt-injection defense. External effects are
+not exactly-once.
+
+## Integrations
+
+The [MCP integration](docs/integrations/mcp.md) documents inspection and proxy modes next to its
+direct-upstream bypass warning. The [Hermes integration](docs/integrations/hermes.md) retains the
+1.x `belief-ledger-pramana` distribution, import package, plugin entry point, profile-local paths,
+and audited Hermes Agent `0.19.0` contract at commit
+`3ef6bbd201263d354fd83ec55b3c306ded2eb72a`. Hermes remains a peer host, not a core dependency.
+
+## Why Pramana?
+
+*Pramāṇa* is a Sanskrit term for a means or source of reliable knowledge. This repository retains
+the term for its provenance model and its backward-compatible Hermes package: direct observation,
+testimony, derived inference, explanatory inference, analogy, and qualified absence have different
+admission and defeat rules. “Belief Ledger” is the first-use product name; `pramana` remains the
+ASCII compatibility spelling.
+
+## Development and release status
+
+```console
+uv run --no-sync python scripts/verify_stage.py all --skip-build
+uv run --no-sync python scripts/verify_stage.py all
+```
+
+The workspace builds synchronized `1.0.0rc3` local distributions for core, gateway, reference,
+MCP, and the Hermes adapter. Builds, checks, and smoke installs do not publish, sign, tag, push, or
+open a pull request. See [CHANGELOG.md](CHANGELOG.md) and [the product-surface ADR](docs/adr/0007-host-neutral-product-surface.md).

@@ -1,5 +1,12 @@
 # Threat model
 
+## Decision-service and MCP bypass
+
+A JSONL client can receive a decision and execute an action without the gateway. JSONL therefore
+reports `observe`. Only an in-process dispatcher with a private registry can report
+`action_enforce`. Likewise, connecting directly to an MCP upstream bypasses wrapped-tool policy;
+that warning must remain adjacent to MCP setup. MCP does not own final model-output delivery.
+
 Protected invariants are traceable factual support, structural defeat/retraction, bounded
 model-assisted work, conservative tool classification, exact action authorization, append-only
 audit history, and non-retention of common credential forms.

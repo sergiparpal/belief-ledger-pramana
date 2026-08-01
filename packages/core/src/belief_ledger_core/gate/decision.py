@@ -142,7 +142,7 @@ class ActionGate:
                 f"Human confirmation required: {missing_preconditions[0]}",
                 stakes,
                 missing_preconditions,
-                "Confirm or deny through Hermes approval",
+                "Confirm or deny through the host approval surface",
                 f"belief-ledger:{classification.policy.id}",
             )
         else:

@@ -62,7 +62,7 @@ class LedgerQueryService:
                 "pramana": belief.pramana.value,
                 "status": belief.status.value,
                 "source_id": belief.source_id,
-                "qualifiers": belief.qualifiers,
+                "qualifiers": to_primitive(belief.qualifiers),
                 "premises": [
                     premise
                     for justification in belief.justifications

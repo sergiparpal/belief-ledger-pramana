@@ -1,20 +1,39 @@
 # Architecture
 
-The rc2 workspace has three frozen-version distributions:
+The current product surface has five synchronized distributions:
 
 ```text
-belief-ledger-core (host-neutral contracts, manifests, profile negotiation,
-                    action decisions, response buffering)
-        ^                                      ^
-        | exact 1.0.0rc2                       | exact 1.0.0rc2
-belief-ledger-pramana                    belief-ledger-reference
-(Hermes adapter + v1 ledger)             (strict runner + JSONL protocol)
+belief-ledger-core
+    ^             ^                  ^
+    |             |                  |
+gateway       reference          pramana/Hermes
+    ^
+    |
+   MCP
 ```
 
-Core never imports Hermes. Both adapters normalize lifecycle identifiers and injected dependencies
-before calling core. The Hermes package keeps its historical entry point, directory/Git layout,
-state path, events, and v1 projection hash. The reference package owns an in-process tool registry
-and delivery sink so it can prove strict dispatch and output guarantees.
+Core owns domain/persistence/decisions. Gateway owns the neutral CLI, JSONL service, and optional
+in-process dispatch. Reference owns deterministic strict conformance. MCP owns inspection and a
+wrapped upstream boundary. The root distribution owns only Hermes compatibility orchestration.
+Dependencies point upward toward core and never back into an adapter; `scripts/check_workspace_boundaries.py`
+enforces static and literal dynamic imports. See [product surfaces](product-surface.md).
+
+The rc3 dependency graph uses exact same-candidate pins:
+
+```text
+belief-ledger-core
+  ^          ^             ^
+  | rc3      | rc3         | rc3
+gateway   reference     pramana/Hermes
+  ^
+  | rc3
+ MCP
+```
+
+Core never imports an adapter. Every adapter normalizes lifecycle identifiers and injected
+dependencies before calling core. The Hermes package keeps its historical entry point,
+directory/Git layout, state path, events, and v1 projection hash. The reference package owns an
+in-process tool registry and delivery sink so it can prove strict dispatch and output guarantees.
 
 Inside the Hermes adapter, `PluginRuntime` remains a compatibility facade over application use
 cases and small ledger/LLM ports. SQLite infrastructure implements those ports without allowing a
