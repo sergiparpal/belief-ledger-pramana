@@ -1,4 +1,58 @@
-# Belief Ledger Pramana v0.1.3
+# Belief Ledger v0.2.0
+
+This GitHub source release contains all repository changes after `v0.1.3`. It completes the
+host-neutral RC3 product surface while retaining the backward-compatible Hermes 1.x adapter. The
+workspace contains five synchronized `1.0.0rc3` release-candidate distributions:
+`belief-ledger-core`, `belief-ledger-gateway`, `belief-ledger-mcp`,
+`belief-ledger-reference`, and `belief-ledger-pramana`.
+
+## Highlights
+
+- Added the generic `belief_ledger_core.BeliefLedger` API for lifecycle, normalized evidence,
+  exact approvals, opaque single-use permits, output evaluation, query, explanation, chain
+  verification, and replay.
+- Added the host-neutral `belief-ledger` CLI and bounded JSONL decision protocol. JSONL honestly
+  reports `observe`; the optional private in-process dispatcher can prove `action_enforce`.
+- Added MCP inspection and complete-inventory proxy modes with an explicit direct-upstream bypass
+  warning and a maximum `action_enforce` claim.
+- Generalized the deterministic reference runner to caller-defined tools, schemas, policies, and
+  handlers while retaining its strict owned-dispatch and buffered-delivery conformance proof.
+- Preserved the Hermes distribution, imports, plugin entry point, profile-local state paths, and
+  audited Hermes Agent 0.19.0 contract. Hermes remains capped at `accepted_final`, not `strict`.
+- Hardened authorization against binding, policy, configuration, lifecycle, support, conflict,
+  replay, and audit-leakage failures; strengthened malformed-input, state-path, protocol, and
+  immutable-record validation.
+- Expanded the host-neutral quickstart, Python API, policy-review, backup, event-integrity, and
+  upgrade/rollback documentation.
+
+## Compatibility and operations
+
+Frozen v1 event bytes and `projection_hash_v1` remain unchanged. Schema 6 remains the current
+database schema and keeps authorization events in a separate append-only enforcement chain.
+Neutral core/gateway/MCP/reference state uses `.ledger.integrity.key`; the retained Hermes profile
+uses `locks/ledger.integrity.key`. Restore only the key that belongs to the matching database.
+
+The audited Hermes host still pins stale Pillow and cryptography leaves. The tested combination
+keeps Hermes Agent 0.19.0 while overriding those leaves with `Pillow>=12.3,<13` and
+`cryptography>=48.0.1,<50`; the expected metadata incompatibility warning is documented and CI
+tests that secured combination.
+
+## Qualification
+
+The complete local release gate passed on Python 3.13: 323 non-live tests at 88.05% combined branch
+coverage, Ruff formatting/lint, strict mypy across 146 source files, dependency/workspace/product
+boundaries, frozen fixtures, offline Suites A–E, both host-neutral examples, policy and Hermes
+contract checks, five-wheel build and content inspection, Twine metadata validation, and clean
+installs for core, gateway, reference, MCP, and the secured Hermes combination. The eight test
+warnings are the intentional `LedgerRuntime` compatibility deprecations.
+
+## Distribution
+
+GitHub provides the tag and generated source archives. This release does not publish the five
+Python distributions to a package registry, upload built wheels or sdists, sign artifacts, or
+contact a live model provider.
+
+## v0.1.3
 
 This release hardens the repository and its build pipeline. It changes no library code: the
 synchronized `belief-ledger-core`, `belief-ledger-pramana`, and `belief-ledger-reference`
