@@ -3,8 +3,22 @@
 ## Core and gateway
 
 The core accepts an explicit state root plus `CoreConfig`/mapping values. It never searches host
-locations. Gateway selects state with `--state-root`; `belief-ledger init` creates private `0700`
-directories and `0600` files on POSIX. JSONL requests cannot change the process state root.
+locations or automatically reads files from the state root. Gateway selects state with
+`--state-root`; after `belief-ledger init`, it explicitly loads `config.yaml` and `policies.json`
+from that root before calling core. JSONL requests cannot change the process state root.
+
+The neutral state layout is:
+
+| Path | Purpose |
+|---|---|
+| `config.yaml` | Gateway-resolved core overrides |
+| `policies.json` | Gateway-resolved versioned tool-policy manifest |
+| `ledger.sqlite3` plus optional `-wal`/`-shm` | Ledger, projections, and enforcement records |
+| `.ledger.integrity.key` | Private 256-bit event-authentication key |
+
+`belief-ledger init` creates the directory with mode `0700` and regular files with mode `0600` on
+POSIX. State roots, databases, gateway configuration, and gateway policy files may not be symbolic
+links. `storage.database` must resolve under the explicit state root; any escaping path is rejected.
 
 ## Hermes adapter
 
@@ -47,8 +61,9 @@ paths resolve there; escaping that directory, symbolic links, files larger than 
 with group/other POSIX access are rejected. On Windows, the plugin also rejects ACLs granting
 access to broad principals such as `Users`, `Authenticated Users`, or `Everyone`.
 
-The state directory also contains `locks/ledger.integrity.key`. This generated 256-bit key is not
-a configurable setting: it authenticates the event log separately from SQLite and must remain a
-private regular file. Retain its matching value in an encrypted backup with the ledger database;
-restoring the database with a new or different key causes event-authentication verification to
-fail. See [operations.md](operations.md) for the backup procedure.
+The Hermes state directory contains `locks/ledger.integrity.key` rather than the neutral
+`.ledger.integrity.key`. This generated 256-bit key is not a configurable setting: it authenticates
+the event log separately from SQLite and must remain a private regular file. Retain its matching
+value in an encrypted backup with the ledger database; restoring the database with a new or
+different key causes event-authentication verification to fail. See
+[operations.md](operations.md) for the backup procedure.
