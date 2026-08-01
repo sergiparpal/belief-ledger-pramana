@@ -23,4 +23,6 @@ The package targets the official MCP Python SDK 2.x. Proxy clients must return a
 `UpstreamCallResult` containing raw bytes, an explicit error flag, and a bounded status string;
 malformed, failed, or oversized upstream results are never treated as successful tool output.
 
-Repository scripts build local artifacts; they do not publish this distribution.
+See the [MCP integration guide](../../docs/integrations/mcp.md) for inspection/proxy construction,
+inventory requirements, and the direct-upstream bypass warning. Repository scripts build local
+artifacts; they do not publish this distribution.

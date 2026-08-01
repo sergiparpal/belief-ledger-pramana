@@ -26,6 +26,9 @@
   overriding its vulnerable Pillow and cryptography leaf pins in CI and clean-install smoke tests.
 - Added authorization indexes, bounded FTS retrieval, single-pass explanation hydration, exact
   UTF-8 LLM-budget reservation, and focused safety/regression coverage.
+- Expanded the host-neutral quickstart, Python API, state-layout, backup, event-integrity, and
+  upgrade/rollback documentation; distinguished neutral `.ledger.integrity.key` state from the
+  retained Hermes `locks/ledger.integrity.key` layout.
 
 ## v0.1.3 / 1.0.0rc2 - 2026-07-30
 

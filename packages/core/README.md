@@ -17,4 +17,6 @@ episode = ledger.start_episode(EpisodeContext.normalize(session_id="s", turn_id=
 Core produces decisions and can issue/consume opaque in-process permits; it never executes arbitrary
 handlers or claims delivery through a host sink. `record_approval()` requires an authenticated
 adapter/control plane. `LedgerRuntime` remains a 1.x fixture compatibility facade and is not the
-recommended API. Repository scripts build local artifacts but do not publish them.
+recommended API. See the [Python API guide](../../docs/python-api.md) for lifecycle, configuration,
+profile, approval, and permit semantics. Repository scripts build local artifacts but do not
+publish them.

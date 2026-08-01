@@ -19,5 +19,6 @@ uv run --no-sync belief-ledger demo --format json
 uv run --no-sync belief-ledger --state-root .belief-ledger init
 ```
 
-See `docs/gateway-protocol.md` for the wire contract. Repository scripts build local artifacts but
-do not publish this distribution.
+See the [gateway protocol](../../docs/gateway-protocol.md) for the wire contract and the
+[host-neutral quickstart](../../docs/quickstart.md) for state initialization and policy review.
+Repository scripts build local artifacts but do not publish this distribution.

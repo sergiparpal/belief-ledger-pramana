@@ -108,7 +108,9 @@ decision = ledger.evaluate_action(
 The default manifest intentionally knows only reviewed read-only patterns, so the caller-defined
 message action blocks until an explicit manifest is supplied. `record_approval()` is a trusted
 control-plane operation: the adapter must authenticate the approving actor and channel first. It
-is not exposed through JSONL or MCP model tools.
+is not exposed through JSONL or MCP model tools. The snippet is adapter-side code: assign
+`source_integrity="trusted"` only after authenticating and auditing the source, never from a
+model-supplied trust label.
 
 ## Operations and security
 
