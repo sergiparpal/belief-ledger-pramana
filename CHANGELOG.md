@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.2.0 / 1.0.0rc3 - 2026-08-01
+
+GitHub source release for the complete host-neutral RC3 product surface. The five synchronized
+Python distributions remain release candidates and are not published to a package registry.
+
 - Advanced all five synchronized workspace distributions to `1.0.0rc3`.
 - Added the generic `belief_ledger_core.BeliefLedger` API with normalized evidence, exact approvals,
   opaque single-use permits, output evaluation, explanations, verification, and replay.

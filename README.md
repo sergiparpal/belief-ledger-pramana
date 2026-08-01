@@ -151,4 +151,7 @@ uv run --no-sync python scripts/verify_stage.py all
 
 The workspace builds synchronized `1.0.0rc3` local distributions for core, gateway, reference,
 MCP, and the Hermes adapter. Builds, checks, and smoke installs do not publish, sign, tag, push, or
-open a pull request. See [CHANGELOG.md](CHANGELOG.md) and [the product-surface ADR](docs/adr/0007-host-neutral-product-surface.md).
+open a pull request. GitHub release `v0.2.0` records the complete RC3 source state but does not
+publish the distributions to a package registry or upload built wheels or sdists. See
+[CHANGELOG.md](CHANGELOG.md), [RELEASE_NOTES.md](RELEASE_NOTES.md), and
+[the product-surface ADR](docs/adr/0007-host-neutral-product-surface.md).

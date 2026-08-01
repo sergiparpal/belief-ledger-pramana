@@ -125,3 +125,16 @@ publication, signing, push, tag, release, or pull request was performed.
 | `pip-audit` with the two documented Hermes false-positive exceptions | 0 | No known vulnerabilities found; two exceptions ignored; unpublished workspace packages skipped. |
 | Five-wheel build / artifact inspection / Twine check | 0 / 0 / 0 | Core, gateway, Hermes, MCP, and reference wheels built; required contents present; forbidden contents absent; all metadata passes. |
 | Clean-install matrix | 0 | `core`, `core+gateway`, `core+reference`, `core+gateway+mcp`, and secured `hermes` modes all pass. |
+
+## v0.2.0 GitHub release qualification — 2026-08-01
+
+The merged RC3 implementation and documentation were requalified from the release-preparation
+branch before tagging. This release publishes GitHub-generated source archives only; it does not
+upload the locally built wheels, publish to a package registry, sign artifacts, or call a live
+model provider.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `UV_CACHE_DIR=/tmp/belief-ledger-release-v020-uv uv run --no-sync python scripts/verify_stage.py all` | 1 | Every check through the offline Hermes contract passed; the isolated wheel build then stopped because the restricted sandbox could not resolve PyPI for Hatchling. |
+| The same complete gate with dependency-network access | 0 | 323 tests passed at 88.05% branch coverage; Ruff, mypy, boundaries, product claims, frozen fixtures, offline evaluations, examples, policy/contract checks, five-wheel inspection, Twine, and the five-mode clean-install matrix passed. |
+| Release build manifest | 0 | `build/artifacts-20260801T192311840024Z.json` records the five synchronized `1.0.0rc3` wheels used by inspection and smoke qualification; build outputs remain local and ignored. |
