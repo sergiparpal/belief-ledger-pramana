@@ -201,7 +201,10 @@ def test_deterministic_dependency_fakes_cover_time_identity_token_and_model() ->
     monotonic.advance(1.5)
     assert monotonic.now() == 1.5
     identity = SequenceIdentity()
-    assert [identity.new("event"), identity.new("event")] == ["event_0001", "event_0002"]
+    assert [identity.new("event"), identity.new("event")] == [
+        "ev_0000000000000001",
+        "ev_0000000000000002",
+    ]
     tokens = SequenceToken(["queued"])
     assert tokens.issue() == "queued"
     assert tokens.issue() == "deterministic-token-0001"

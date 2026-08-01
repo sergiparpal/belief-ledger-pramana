@@ -132,13 +132,18 @@ def _add_with_premises(
     for premise_id in premise_ids:
         premise = belief_map.get(premise_id)
         if premise and premise.status in {Status.IN, Status.PENDING}:
+            # Preserve one slot for the requested conclusion. Premises may enrich
+            # a selected conclusion, but they must never crowd that conclusion out.
+            premise_limit = limit - 1 if belief.id not in chosen_ids else limit
+            if len(chosen) >= premise_limit:
+                break
             _add_with_premises(
                 premise,
                 belief_map,
                 chosen,
                 chosen_ids,
                 max_depth=max_depth,
-                limit=limit,
+                limit=premise_limit,
                 depth=depth + 1,
                 visiting=current_path,
             )

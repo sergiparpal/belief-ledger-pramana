@@ -34,6 +34,9 @@ class VerificationScheduler:
         k_required: int = 1,
         budget: int = 1,
     ) -> VerificationResult:
+        belief = self.store.get_belief(belief_id)
+        if belief is None or belief.episode_id != episode_id:
+            raise ValueError("verification belief must belong to the requested episode")
         for task in self.store.list_verification_tasks(episode_id, state="open"):
             if task.belief_id == belief_id and task.method is method:
                 return VerificationResult(task, False, ())

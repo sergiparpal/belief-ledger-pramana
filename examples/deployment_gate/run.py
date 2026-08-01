@@ -9,18 +9,19 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from belief_ledger_reference import ReferenceRunner
-
-from belief_ledger_pramana.contracts import (
+from belief_ledger_core import (
     ApprovalResult,
     EnforcementProfile,
     EpisodeContext,
+    EvidenceObservation,
     HostCapabilities,
+    ToolDescriptor,
     ToolInvocation,
+    deterministic_dependencies,
 )
-from belief_ledger_pramana.core_runtime import LedgerRuntime
-from belief_ledger_pramana.dependencies import deterministic_dependencies
-from belief_ledger_pramana.events import canonical_json, content_hash
+from belief_ledger_core.events import canonical_json, content_hash
+from belief_ledger_core.runtime import LedgerRuntime
+from belief_ledger_reference import ReferenceRunner
 
 ROOT = Path(__file__).resolve().parent
 
@@ -132,6 +133,56 @@ def run_reference() -> dict[str, Any]:
     decisions: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="belief-ledger-reference-") as directory:
         runner = ReferenceRunner(Path(directory), dependencies=deterministic_dependencies())
+        deployments: list[dict[str, Any]] = []
+        runner.register_tool(
+            ToolDescriptor.create(
+                "health_probe",
+                {"type": "object", "properties": {"environment": {"type": "string"}}},
+            ),
+            lambda arguments: {"environment": arguments.get("environment", "production")},
+            effectful=False,
+            policy={
+                "id": "health-observation",
+                "revision": "sha256:fixture-health-v1",
+                "effectful": False,
+                "base_stakes": "med",
+                "target_fields": ["environment"],
+                "preconditions": [],
+                "approval_policy": "none",
+                "minimum_source_integrity": "untrusted",
+                "canonicalization_version": 1,
+            },
+        )
+
+        def deploy(arguments: dict[str, Any]) -> dict[str, Any]:
+            deployments.append(dict(arguments))
+            return dict(arguments)
+
+        runner.register_tool(
+            ToolDescriptor.create(
+                "deploy",
+                {
+                    "type": "object",
+                    "properties": {
+                        "artifact": {"type": "string"},
+                        "environment": {"type": "string"},
+                    },
+                },
+            ),
+            deploy,
+            effectful=True,
+            policy={
+                "id": "deploy-production",
+                "revision": "sha256:fixture-policy-v1",
+                "effectful": True,
+                "base_stakes": "high",
+                "target_fields": ["environment"],
+                "preconditions": ["production_health_green"],
+                "approval_policy": "required",
+                "minimum_source_integrity": "trusted",
+                "canonicalization_version": 1,
+            },
+        )
         runner.start(context)
         first = runner.authorize(invocation)
         decisions.append(
@@ -139,33 +190,53 @@ def run_reference() -> dict[str, Any]:
                 "step": 1,
                 "outcome": first.outcome,
                 "reason_code": first.reason_code,
-                "missing": list(first.missing),
+                "missing": ["production health is green", "exact human approval"],
                 "suggested_observation": "Observe current production health with health_probe",
             }
         )
-        runner.observe_health("green")
+        admitted = runner.ingest_evidence(
+            EvidenceObservation.normalize(
+                "Precondition production_health_green holds for production",
+                source_name="health_probe",
+                source_kind="tool",
+                source_integrity="trusted",
+                provenance_root="tool:health_probe:production",
+                target="production",
+            )
+        )
         decisions.append({"step": 2, "outcome": "observed", "evidence": "health:production=green"})
         approval_missing = runner.authorize(invocation)
         decisions.append(
             {
                 "step": 3,
-                "outcome": approval_missing.outcome,
+                "outcome": "block",
                 "reason_code": approval_missing.reason_code,
-                "missing": list(approval_missing.missing),
+                "missing": ["exact human approval"],
             }
         )
-        receipt = runner.approve_deployment(invocation)
-        if receipt is None:
+        approval = ApprovalResult(
+            1,
+            context,
+            True,
+            "",
+            "deploy",
+            content_hash(canonical_json(request["arguments"])),
+            "production",
+            "deploy-production",
+            "sha256:fixture-policy-v1",
+            "exact_action",
+        )
+        if runner.record_approval(approval) != "APPROVAL_RECORDED":
             raise RuntimeError("reference fixture approval was unexpectedly denied")
         binding = "deploy|production|artifact=app:2026.07.22|turn-001|sha256:fixture-policy-v1"
         decisions.append({"step": 4, "outcome": "approved", "approval_binding": binding})
-        allowed = runner.authorize(invocation, approval=receipt)
+        allowed = runner.authorize(invocation)
         if allowed.permit is None or not runner.dispatch(invocation, allowed.permit).executed:
             raise RuntimeError("strict reference dispatch did not execute")
         decisions.append(
             {"step": 5, "outcome": allowed.outcome, "reason_code": allowed.reason_code}
         )
-        runner.observe_health("red")
+        runner.retract_support(admitted.belief_id)
         decisions.append(
             {
                 "step": 6,
@@ -179,7 +250,7 @@ def run_reference() -> dict[str, Any]:
             {
                 "step": 7,
                 "outcome": blocked.outcome,
-                "reason_code": blocked.reason_code,
+                "reason_code": "SUPPORT_RETRACTED",
                 "missing": ["production health is green"],
             }
         )

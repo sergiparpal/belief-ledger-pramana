@@ -17,6 +17,19 @@ a claim of external scientific validity.
 | R7 qualifiers precede contradiction | `engine/qualifiers.py`, `engine/contradiction.py` | `tests/unit/test_qualifiers_contradiction.py` |
 | R8 append-only authenticated event sourcing | `events.py`, `store.py`, immutable SQL triggers, separate event-auth table | store immutability/hash/authentication/replay tests |
 
+## rc3 host-neutral product-surface requirements
+
+| Requirement | Implementation | Automated evidence |
+|---|---|---|
+| Generic core service and immutable values | `belief_ledger_core.api`, `api_types.py` | `tests/core/test_public_api.py` |
+| Five-package one-way boundaries | `scripts/check_workspace_boundaries.py`, ADR 0007 | dependency-boundary tests and CI |
+| Empty generic strict runner and arbitrary registrations | `belief_ledger_reference.runner` | reference/conformance tests, custom-tool fixture |
+| Neutral CLI and bounded deterministic JSONL | `belief_ledger_gateway.cli`, `protocol.py` | `tests/gateway` and docs smoke |
+| Only gateway owns `belief-ledger` | gateway/root package metadata | workspace/artifact/smoke tests |
+| MCP inspection/proxy split and no approval tool | `belief_ledger_mcp.proxy`, `server.py` | fake-upstream tests and tool-list assertions |
+| Neutral first-use narrative and scoped claims | README, integration docs, claim checker | product-claim/docs tests |
+| Five synchronized local artifacts | build/inspect/smoke scripts | full `verify_stage.py all` gate |
+
 ## rc2 architecture and enforcement requirements
 
 | Requirement | Implementation | Automated evidence |

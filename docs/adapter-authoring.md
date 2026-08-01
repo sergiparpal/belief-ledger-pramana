@@ -14,11 +14,16 @@ can retrieve or invoke the handler. Keep the raw token in process and persist on
 digest. Route visible high-stakes bytes through `ResponseGate`; a direct alternate sink invalidates
 the strict capability.
 
-Use `ReferenceRunner` as the minimal skeleton and run:
+Use `BeliefLedger.open()` as the decision service and `ReferenceRunner` as the minimal owned-boundary
+skeleton. Register a `ToolDescriptor`, explicit effect classification, matching versioned policy,
+and private handler before `start()`. Ingest through `EvidenceObservation`/`ToolResult`; never grant
+trusted provenance or approval from a model-facing operation.
+
+Run:
 
 ```bash
-uv run python -m pytest tests/conformance
-uv run python -m pytest tests/adapters/reference tests/adapters/hermes
+uv run --no-sync python -m pytest tests/conformance
+uv run --no-sync python -m pytest tests/adapters/reference tests/adapters/hermes tests/gateway tests/mcp
 ```
 
 Add adapter-specific tests for correlation, repeated callbacks, approval field availability,

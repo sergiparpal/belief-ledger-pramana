@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from .immutable import freeze
+
 
 class EnforcementProfile(StrEnum):
     OBSERVE = "observe"
@@ -175,6 +177,17 @@ class ToolInvocation:
     arguments: tuple[tuple[str, Any], ...]
     description: str = ""
 
+    def __post_init__(self) -> None:
+        if self.schema_version != 1:
+            return
+        if not self.name or any(character in self.name for character in ("\x00", "\n", "\r")):
+            raise ValueError("tool name must be a non-empty single-line string")
+        object.__setattr__(
+            self,
+            "arguments",
+            tuple((key, freeze(value)) for key, value in self.arguments),
+        )
+
     @classmethod
     def normalize(
         cls,
@@ -185,6 +198,14 @@ class ToolInvocation:
         namespace: str = "",
         description: str = "",
     ) -> ToolInvocation:
+        if (
+            not isinstance(name, str)
+            or not isinstance(namespace, str)
+            or not isinstance(description, str)
+        ):
+            raise ValueError("tool name, namespace, and description must be strings")
+        if not isinstance(arguments, Mapping):
+            raise ValueError("tool arguments must be a mapping")
         return cls(
             1,
             context,

@@ -7,6 +7,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from .immutable import freeze
+
 
 class SourceKind(StrEnum):
     TOOL = "tool"
@@ -109,6 +111,9 @@ class Source:
     competence: dict[str, float] = field(default_factory=dict)
     stats: SourceStats = field(default_factory=SourceStats)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "competence", freeze(self.competence))
+
 
 @dataclass(frozen=True, slots=True)
 class EvidenceRef:
@@ -127,6 +132,9 @@ class Evidence:
     metadata: dict[str, Any]
     observed_at: datetime
     redacted: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", freeze(self.metadata))
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +176,10 @@ class Belief:
     confidence: float | None = None
     corroboration: int = 0
     validity: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "qualifiers", freeze(self.qualifiers))
+        object.__setattr__(self, "validity", freeze(self.validity))
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +225,9 @@ class Conflict:
     verification_task_id: str
     state: str = "open"
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "normalized_scope", freeze(self.normalized_scope))
+
 
 @dataclass(frozen=True, slots=True)
 class RetractionNotice:
@@ -245,6 +260,9 @@ class ComponentVerdict:
     outcome: str
     belief_id: str | None
     detail: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "detail", freeze(self.detail))
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,6 +315,10 @@ class Event:
     previous_hash: str
     event_hash: str
     auth_tag: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "correlation", freeze(self.correlation))
+        object.__setattr__(self, "payload", freeze(self.payload))
 
 
 @dataclass(frozen=True, slots=True)

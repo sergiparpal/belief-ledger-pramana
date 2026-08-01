@@ -9,7 +9,8 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any, cast
 
-from .events import canonical_json, content_hash
+from .events import canonical_json, content_hash, to_primitive
+from .immutable import freeze
 
 MANIFEST_SCHEMA_VERSION = 2
 CANONICALIZATION_VERSION = 1
@@ -64,6 +65,14 @@ class ToolDescriptor:
     input_schema: dict[str, Any]
     schema_digest: str
 
+    def __post_init__(self) -> None:
+        if not self.name or any(character in self.name for character in ("\x00", "\n", "\r")):
+            raise ManifestError("tool name must be a non-empty single-line string")
+        schema = freeze(self.input_schema)
+        object.__setattr__(self, "input_schema", schema)
+        if self.schema_digest != schema_digest(schema):
+            raise ManifestError("tool descriptor schema_digest does not match input_schema")
+
     @classmethod
     def create(
         cls,
@@ -83,6 +92,27 @@ class ToolDescriptor:
             schema_digest(schema),
         )
 
+    def validate_arguments(self, arguments: Mapping[str, Any]) -> None:
+        """Validate an invocation against the exact inventoried JSON Schema."""
+
+        from jsonschema.exceptions import (  # type: ignore[import-untyped]
+            SchemaError,
+            ValidationError,
+        )
+        from jsonschema.validators import validator_for  # type: ignore[import-untyped]
+
+        try:
+            schema = cast(dict[str, Any], to_primitive(self.input_schema))
+            instance = cast(dict[str, Any], to_primitive(arguments))
+            validator_type = validator_for(schema)
+            validator_type.check_schema(schema)
+            validator_type(schema).validate(instance)
+        except SchemaError as exc:
+            raise ManifestError("tool input schema is invalid") from exc
+        except ValidationError as exc:
+            path = ".".join(str(item) for item in exc.absolute_path) or "$"
+            raise ManifestError(f"tool arguments do not match input schema at {path}") from exc
+
 
 @dataclass(frozen=True, slots=True)
 class InventoryItem:
@@ -94,11 +124,23 @@ class InventoryItem:
 
 
 class ToolPolicyManifest:
+    schema_version: int
+    source_schema_version: int
+    rules: tuple[ToolPolicy, ...]
+    _sealed: bool
+    __slots__ = ("_sealed", "rules", "schema_version", "source_schema_version")
+
     def __init__(self, rules: tuple[ToolPolicy, ...], *, source_schema_version: int) -> None:
-        self.schema_version = MANIFEST_SCHEMA_VERSION
-        self.source_schema_version = source_schema_version
-        self.rules = rules
+        object.__setattr__(self, "schema_version", MANIFEST_SCHEMA_VERSION)
+        object.__setattr__(self, "source_schema_version", source_schema_version)
+        object.__setattr__(self, "rules", rules)
         self._validate()
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_sealed", False):
+            raise AttributeError("tool policy manifests are immutable")
+        object.__setattr__(self, name, value)
 
     @classmethod
     def load(cls, value: Mapping[str, Any], *, mode: str = "enforce") -> ToolPolicyManifest:

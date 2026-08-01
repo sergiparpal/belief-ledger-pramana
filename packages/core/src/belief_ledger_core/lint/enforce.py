@@ -26,7 +26,7 @@ def enforce_report(
     if action in {"allow", "annotate"}:
         warning = f"Grounding warning: {len(unsupported)} unsupported factual claim(s)."
         replacement = f"{response}\n\n{warning}" if action == "annotate" else None
-        return LintReport(report.claims, False, replacement, (warning,))
+        return LintReport(report.claims, True, replacement, (warning,))
     if (
         action == "rewrite_once"
         and max_rewrite_attempts > 0

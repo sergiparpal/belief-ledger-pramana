@@ -1,5 +1,19 @@
 # Operations
 
+Start with the host-neutral local surface:
+
+```console
+uv run --no-sync belief-ledger --state-root .belief-ledger init --format json
+uv run --no-sync belief-ledger --state-root .belief-ledger ledger status --format json
+uv run --no-sync belief-ledger --state-root .belief-ledger ledger verify-chain --format json
+uv run --no-sync belief-ledger --state-root .belief-ledger ledger replay --format json
+uv run --no-sync belief-ledger --state-root .belief-ledger episode list --format json
+```
+
+The JSONL gateway is local and unauthenticated; do not expose it as a remote multi-tenant service.
+Adapter-specific operations, including the retained Hermes commands below, use their adapter-owned
+state paths and boundaries.
+
 Start with `hermes belief-ledger doctor`. A healthy audited-adapter report requires
 Hermes/Python capabilities, enablement, `llm_request`, transform precedence, valid config,
 schema/hash integrity, private permissions, and registered tools. It separately reports maximum,

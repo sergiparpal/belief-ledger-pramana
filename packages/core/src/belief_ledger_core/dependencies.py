@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+from .ids import id_prefix, new_id
+
 
 class ClockPort(Protocol):
     def now(self) -> datetime: ...
@@ -93,7 +95,7 @@ class SystemMonotonicClock:
 
 class SecureIdentity:
     def new(self, kind: str) -> str:
-        return f"{kind}_{secrets.token_urlsafe(18)}"
+        return new_id(kind)
 
 
 class SecureToken:
@@ -132,7 +134,7 @@ class SequenceIdentity:
     def new(self, kind: str) -> str:
         count = self._counts.get(kind, 0) + 1
         self._counts[kind] = count
-        return f"{kind}_{count:04d}"
+        return f"{id_prefix(kind)}{count:016d}"
 
 
 class SequenceToken:
@@ -178,5 +180,17 @@ def deterministic_dependencies() -> RuntimeDependencies:
         FixedMonotonicClock(),
         SequenceIdentity(),
         SequenceToken(),
+        FakeStructuredModel(),
+    )
+
+
+def system_dependencies() -> RuntimeDependencies:
+    """Offline-safe production defaults with secure identities and permit tokens."""
+
+    return RuntimeDependencies(
+        SystemClock(),
+        SystemMonotonicClock(),
+        SecureIdentity(),
+        SecureToken(),
         FakeStructuredModel(),
     )

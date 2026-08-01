@@ -1,5 +1,16 @@
 # Configuration
 
+## Core and gateway
+
+The core accepts an explicit state root plus `CoreConfig`/mapping values. It never searches host
+locations. Gateway selects state with `--state-root`; `belief-ledger init` creates private `0700`
+directories and `0600` files on POSIX. JSONL requests cannot change the process state root.
+
+## Hermes adapter
+
+The compatibility rules below apply only to the Hermes-owned profile path and retain their existing
+precedence.
+
 Precedence is explicit `BELIEF_LEDGER_PRAMANA_CONFIG`, profile-local config, then packaged
 defaults. First use atomically initializes the profile-local file. Mid-turn edits do not change
 the active immutable snapshot; reload occurs at a safe turn boundary. Changing the database

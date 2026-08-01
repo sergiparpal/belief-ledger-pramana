@@ -27,6 +27,8 @@ class ResponseGate:
             raise ValueError("max_bytes must be positive")
         self.max_bytes = max_bytes
         self.block_report = block_report.encode("utf-8")
+        if len(self.block_report) > 4_096:
+            raise ValueError("block_report exceeds 4096 bytes")
         self._buffer = bytearray()
         self._next_index = 0
         self._failed_reason: str | None = None

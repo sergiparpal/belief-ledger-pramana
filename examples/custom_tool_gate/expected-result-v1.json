@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scenario": "custom_tool_gate",
+  "steps": [
+    {"outcome": "block", "reason_code": "MISSING_PRECONDITION"},
+    {"outcome": "observed", "reason_code": "EVIDENCE_ADMITTED"},
+    {"outcome": "approve", "reason_code": "APPROVAL_REQUIRED"},
+    {"outcome": "allow", "reason_code": "PRECONDITIONS_SATISFIED", "executed": true},
+    {"outcome": "retracted", "reason_code": "SUPPORT_RETRACTED"},
+    {"outcome": "block", "reason_code": "MISSING_PRECONDITION"}
+  ],
+  "effects": 1
+}

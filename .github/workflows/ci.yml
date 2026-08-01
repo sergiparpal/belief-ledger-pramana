@@ -20,7 +20,7 @@ concurrency:
 # SHA corresponds to so Dependabot can still propose bumps and a human can still read it.
 
 jobs:
-  core-no-hermes:
+  core-no-adapters:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -35,8 +35,25 @@ jobs:
       - run: uv venv .core-venv
       - run: uv pip install --python .core-venv/bin/python ./packages/core pytest
       - run: .core-venv/bin/python -m pytest --confcutdir=tests/core tests/core tests/conformance/test_enforcement_profiles.py
-      - run: .core-venv/bin/python -c "import belief_ledger_core; assert belief_ledger_core.__version__ == '1.0.0rc2'"
+      - run: .core-venv/bin/python -c "import belief_ledger_core; assert belief_ledger_core.__version__ == '1.0.0rc3'"
       - run: uvx ruff check packages/core/src tests/core
+
+  gateway-no-hermes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --frozen --all-packages --group dev
+      - run: uv run --no-sync python -m pytest tests/gateway
+      - run: uv run --no-sync belief-ledger demo --format json
+      - run: uv run --no-sync python -c "import importlib.util; assert importlib.util.find_spec('hermes_agent') is None"
 
   hermes-adapter:
     runs-on: ubuntu-latest
@@ -55,10 +72,15 @@ jobs:
       # Hermes is the host, not a project dependency. Install the audited host
       # only for contract jobs and avoid a subsequent project re-sync.
       - run: uv pip install --python .venv "hermes-agent==0.19.0"
+      # Hermes 0.19.0 pins vulnerable Pillow 12.2.0 and cryptography 46.0.7.
+      # Keep the tested host release but override those leaves until Hermes
+      # relaxes its metadata.
+      - run: uv pip install --python .venv "Pillow>=12.3,<13"
+      - run: uv pip install --python .venv "cryptography>=48.0.1,<50"
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync ruff check .
-      - run: uv run --no-sync mypy packages/core/src packages/reference/src belief_ledger_pramana
-      - run: uv run --no-sync python -m pytest -m "not live_llm" --cov=belief_ledger_core --cov=belief_ledger_pramana --cov=belief_ledger_reference --cov-branch --cov-report=xml
+      - run: uv run --no-sync mypy packages/core/src packages/gateway/src packages/reference/src packages/mcp/src belief_ledger_pramana
+      - run: uv run --no-sync python -m pytest -m "not live_llm" --cov=belief_ledger_core --cov=belief_ledger_gateway --cov=belief_ledger_mcp --cov=belief_ledger_pramana --cov=belief_ledger_reference --cov-branch --cov-report=xml
       - if: matrix.python == '3.13'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -78,6 +100,8 @@ jobs:
           python-version: "3.13"
       - run: uv sync --frozen --all-packages --group dev
       - run: uv pip install --python .venv "hermes-agent==${{ matrix.hermes }}"
+      - run: uv pip install --python .venv "Pillow>=12.3,<13"
+      - run: uv pip install --python .venv "cryptography>=48.0.1,<50"
       - run: uv run --no-sync python -c "import importlib.metadata; assert importlib.metadata.version('hermes-agent') == '${{ matrix.hermes }}'"
       - run: uv run --no-sync python -m pytest tests/adapters/hermes tests/integration tests/contract/test_plugin_contract.py
 
@@ -105,6 +129,19 @@ jobs:
       - run: uv sync --frozen --all-packages --group dev
       - run: uv run python -m pytest tests/conformance tests/adapters/reference tests/adapters/hermes
       - run: uv run python examples/deployment_gate/run.py --adapter reference --profile strict --format json
+      - run: uv run python examples/custom_tool_gate/run.py --format json
+
+  mcp-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.13"
+      - run: uv sync --frozen --all-packages --group dev
+      - run: uv run --no-sync python -m pytest tests/mcp tests/conformance
+      - run: uv run --no-sync python -c "from belief_ledger_mcp import BeliefLedgerMcp; assert 'record_approval' not in BeliefLedgerMcp.SAFE_TOOL_NAMES"
 
   replay-claims-evaluations:
     runs-on: ubuntu-latest
@@ -118,6 +155,7 @@ jobs:
       - run: uv run python -m pytest tests/contract/test_v1_replay.py tests/unit/test_product_claims.py tests/unit/test_dependency_boundaries.py
       - run: uv run python scripts/check_product_claims.py
       - run: uv run python scripts/check_dependency_boundaries.py
+      - run: uv run python scripts/check_workspace_boundaries.py
       - run: uv run python -m evaluations.report --suite all --offline
 
   all-wheel-artifacts:
@@ -129,12 +167,13 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --frozen --all-packages --group dev
-      - run: uv run python scripts/build_workspace.py --packages core hermes reference --output-manifest build/artifacts.json
+      - run: uv run python scripts/build_workspace.py --packages core gateway hermes mcp reference --output-manifest build/artifacts.json
       - run: uv run python scripts/inspect_artifacts.py --manifest build/artifacts.json
-      - run: uv run python scripts/smoke_install.py --matrix core,core+reference,hermes --manifest build/artifacts.json
+      - run: uv run python -m twine check build/workspace-*/*.whl
+      - run: uv run python scripts/smoke_install.py --matrix core,core+gateway,core+reference,core+gateway+mcp,hermes --manifest build/artifacts.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rc2-wheels
+          name: rc3-wheels
           path: build/workspace-*/*.whl
 
   dependency-audit:
@@ -146,7 +185,13 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --frozen --all-packages --group dev
-      - run: uv run --with pip-audit pip-audit
+      - run: uv pip install --python .venv "hermes-agent==0.19.0"
+      - run: uv pip install --python .venv "Pillow>=12.3,<13"
+      - run: uv pip install --python .venv "cryptography>=48.0.1,<50"
+      # These Hermes advisories currently flag 0.19.0 although their published
+      # affected ranges end at 0.12.0/2026.4.30. Keep explicit, reviewable
+      # exceptions while auditing every installed host dependency.
+      - run: uv run --no-sync --with pip-audit pip-audit --ignore-vuln CVE-2026-10221 --ignore-vuln CVE-2026-10224
 
   path-config-smoke:
     strategy:
@@ -162,7 +207,10 @@ jobs:
           python-version: "3.13"
       - run: uv sync --frozen --all-packages --group dev
       - run: uv pip install --python .venv "hermes-agent==0.19.0"
+      - run: uv pip install --python .venv "Pillow>=12.3,<13"
+      - run: uv pip install --python .venv "cryptography>=48.0.1,<50"
       - run: uv run --no-sync python -m pytest tests/unit/test_config.py tests/unit/test_store.py tests/contract/test_plugin_contract.py tests/contract/test_real_hermes_manager.py
+      - run: uv run --no-sync belief-ledger demo --format json
 
   hermes-main-canary:
     continue-on-error: true
@@ -184,7 +232,7 @@ jobs:
     # This job depends on the ones that must pass and fails unless all of them succeeded.
     # hermes-main-canary is continue-on-error, so it stays out by its author's intent.
     if: always()
-    needs: [core-no-hermes, hermes-adapter, hermes-supported, exact-hermes-contract, reference-conformance, replay-claims-evaluations, all-wheel-artifacts, dependency-audit, path-config-smoke]
+    needs: [core-no-adapters, gateway-no-hermes, hermes-adapter, hermes-supported, exact-hermes-contract, reference-conformance, mcp-conformance, replay-claims-evaluations, all-wheel-artifacts, dependency-audit, path-config-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

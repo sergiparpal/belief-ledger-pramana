@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import os
 import sqlite3
@@ -14,7 +15,12 @@ import yaml
 from belief_ledger_core.manifest import ToolDescriptor, ToolPolicyManifest
 
 from ..atomic import write_private_text_atomically
-from ..compatibility import competing_transformers, transformer_has_precedence
+from ..compatibility import (
+    AUDITED_HERMES_COMMIT,
+    AUDITED_HERMES_VERSION,
+    competing_transformers,
+    transformer_has_precedence,
+)
 from ..config import (
     ConfigError,
     load_config,
@@ -303,6 +309,14 @@ def doctor(runtime: PluginRuntime) -> dict[str, Any]:
     errors: list[str] = list(runtime.compatibility.errors)
     warnings: list[str] = list(runtime.compatibility.warnings)
     checks["python"] = runtime.compatibility.python_version
+    checks["versions"] = {
+        "product_core": _distribution_version("belief-ledger-core"),
+        "gateway": _distribution_version("belief-ledger-gateway"),
+        "adapter": _distribution_version("belief-ledger-pramana"),
+        "host": runtime.compatibility.hermes_version,
+        "audited_host_version": AUDITED_HERMES_VERSION,
+        "audited_host_commit": AUDITED_HERMES_COMMIT,
+    }
     checks["hermes_version"] = runtime.compatibility.hermes_version
     checks["compatibility_mode"] = runtime.compatibility.mode.value
     checks["capabilities"] = runtime.compatibility.capabilities
@@ -478,6 +492,13 @@ def _permission_issues(runtime: PluginRuntime) -> list[str]:
             except ConfigError as exc:
                 issues.append(str(exc))
     return issues
+
+
+def _distribution_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "not-installed"
 
 
 def _json(value: Any) -> str:

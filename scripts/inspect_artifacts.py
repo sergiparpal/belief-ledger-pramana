@@ -30,6 +30,17 @@ def _metadata(path: Path) -> str:
         return archive.read(member).decode("utf-8")
 
 
+def _entry_points(path: Path) -> str:
+    if path.suffix != ".whl":
+        return ""
+    with zipfile.ZipFile(path) as archive:
+        member = next(
+            (name for name in archive.namelist() if name.endswith(".dist-info/entry_points.txt")),
+            None,
+        )
+        return archive.read(member).decode("utf-8") if member else ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("artifacts", nargs="*", type=Path)
@@ -38,7 +49,19 @@ def main() -> int:
     args = parser.parse_args()
     reports = []
     failures: list[str] = []
-    forbidden = ("__pycache__/", ".pyc", ".sqlite3", ".coverage", ".venv/")
+    forbidden = (
+        "__pycache__/",
+        ".pyc",
+        ".pyo",
+        ".sqlite",
+        ".sqlite3",
+        ".db",
+        ".coverage",
+        ".venv/",
+        "integrity.key",
+        ".pem",
+        ".key",
+    )
     manifest_entries: dict[Path, dict[str, str]] = {}
     if args.manifest:
         manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -57,6 +80,8 @@ def main() -> int:
         if distribution == "belief-ledger-core":
             required = [
                 "belief_ledger_core/__init__.py",
+                "belief_ledger_core/api.py",
+                "belief_ledger_core/api_types.py",
                 "belief_ledger_core/contracts.py",
                 "belief_ledger_core/runtime.py",
                 "belief_ledger_core/models.py",
@@ -76,11 +101,28 @@ def main() -> int:
                 "belief_ledger_core/data/action-policies.yaml",
                 "belief_ledger_core/data/migrations/0003_performance_indexes.sql",
                 "belief_ledger_core/data/migrations/0006_enforcement.sql",
+                "belief_ledger_core/py.typed",
             ]
         elif distribution == "belief-ledger-reference":
             required = [
                 "belief_ledger_reference/__init__.py",
                 "belief_ledger_reference/runner.py",
+                "belief_ledger_reference/py.typed",
+            ]
+        elif distribution == "belief-ledger-gateway":
+            required = [
+                "belief_ledger_gateway/__init__.py",
+                "belief_ledger_gateway/cli.py",
+                "belief_ledger_gateway/protocol.py",
+                "belief_ledger_gateway/dispatcher.py",
+                "belief_ledger_gateway/py.typed",
+            ]
+        elif distribution == "belief-ledger-mcp":
+            required = [
+                "belief_ledger_mcp/__init__.py",
+                "belief_ledger_mcp/proxy.py",
+                "belief_ledger_mcp/server.py",
+                "belief_ledger_mcp/py.typed",
             ]
         else:
             required = [
@@ -102,20 +144,43 @@ def main() -> int:
         missing = [item for item in required if not _contains(members, item)]
         unsafe = [member for member in members if any(token in member for token in forbidden)]
         metadata = _metadata(path)
+        entry_points = _entry_points(path)
         if "file://" in metadata or " @ " in metadata:
             failures.append(f"{path.name}: local workspace source leaked into metadata")
         if distribution == "belief-ledger-pramana" and (
-            "Requires-Dist: belief-ledger-core==1.0.0rc2" not in metadata
+            "Requires-Dist: belief-ledger-core==1.0.0rc3" not in metadata
+            or "Requires-Dist: belief-ledger-gateway==1.0.0rc3" not in metadata
+        ):
+            failures.append(f"{path.name}: missing frozen core/gateway dependencies")
+        if distribution == "belief-ledger-gateway" and (
+            "Requires-Dist: belief-ledger-core==1.0.0rc3" not in metadata
         ):
             failures.append(f"{path.name}: missing frozen core dependency")
         if distribution == "belief-ledger-reference" and (
-            "Requires-Dist: belief-ledger-core==1.0.0rc2" not in metadata
+            "Requires-Dist: belief-ledger-core==1.0.0rc3" not in metadata
+            or "Requires-Dist: belief-ledger-gateway==1.0.0rc3" not in metadata
         ):
-            failures.append(f"{path.name}: missing frozen core dependency")
-        if distribution == "belief-ledger-core" and any(
+            failures.append(f"{path.name}: missing frozen core/gateway dependencies")
+        if distribution == "belief-ledger-mcp" and (
+            "Requires-Dist: belief-ledger-core==1.0.0rc3" not in metadata
+            or "Requires-Dist: belief-ledger-gateway==1.0.0rc3" not in metadata
+        ):
+            failures.append(f"{path.name}: missing frozen core/gateway dependencies")
+        if distribution in {
+            "belief-ledger-core",
+            "belief-ledger-gateway",
+            "belief-ledger-mcp",
+        } and any(
             line.casefold().startswith("requires-dist: hermes") for line in metadata.splitlines()
         ):
-            failures.append(f"{path.name}: core metadata depends on Hermes")
+            failures.append(f"{path.name}: neutral metadata depends on Hermes")
+        owns_primary_command = any(
+            line.strip().startswith("belief-ledger =") for line in entry_points.splitlines()
+        )
+        if distribution == "belief-ledger-gateway" and not owns_primary_command:
+            failures.append(f"{path.name}: gateway does not own belief-ledger")
+        if distribution != "belief-ledger-gateway" and owns_primary_command:
+            failures.append(f"{path.name}: duplicate belief-ledger console owner")
         if missing:
             failures.append(f"{path.name}: missing {', '.join(missing)}")
         if unsafe:

@@ -14,7 +14,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOTS = {
     "core": ROOT / "packages" / "core",
+    "gateway": ROOT / "packages" / "gateway",
     "hermes": ROOT,
+    "mcp": ROOT / "packages" / "mcp",
     "reference": ROOT / "packages" / "reference",
 }
 

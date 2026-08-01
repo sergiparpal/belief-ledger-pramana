@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from .events import canonical_json, content_hash
@@ -16,6 +16,8 @@ ProjectionHandler = Callable[[sqlite3.Connection, Event], None]
 def apply_event(connection: sqlite3.Connection, event: Event) -> None:
     """Apply one event to projections. The caller owns the transaction."""
 
+    if event.kind != "EPISODE_CREATED":
+        _require_episode_exists(connection, event.episode_id)
     handler = _EVENT_HANDLERS.get(event.kind)
     if handler is not None:
         handler(connection, event)
@@ -31,7 +33,10 @@ def _advance_event_head(connection: sqlite3.Connection, event: Event) -> None:
 
 
 def _apply_episode_created(connection: sqlite3.Connection, event: Event) -> None:
-    _episode_created(connection, _record(event.payload.get("record")))
+    record = _record(event.payload.get("record"))
+    if str(record.get("id", "")) != event.episode_id:
+        raise ValueError("episode record id does not match event episode")
+    _episode_created(connection, record)
 
 
 def _apply_episode_turn_started(connection: sqlite3.Connection, event: Event) -> None:
@@ -62,10 +67,11 @@ def _apply_episode_state_changed(connection: sqlite3.Connection, event: Event) -
 
 
 def _apply_source_registered(connection: sqlite3.Connection, event: Event) -> None:
-    _source_registered(connection, _record(event.payload.get("record")))
+    _source_registered(connection, _record_for_event(event))
 
 
 def _apply_source_stats_updated(connection: sqlite3.Connection, event: Event) -> None:
+    _require_entity_episode(connection, "sources", event.aggregate_id, event.episode_id)
     payload = event.payload
     connection.execute(
         "UPDATE sources SET stats_json=?, competence_json=? WHERE id=?",
@@ -78,6 +84,7 @@ def _apply_source_stats_updated(connection: sqlite3.Connection, event: Event) ->
 
 
 def _apply_source_stats_delta(connection: sqlite3.Connection, event: Event) -> None:
+    _require_entity_episode(connection, "sources", event.aggregate_id, event.episode_id)
     row = connection.execute(
         "SELECT stats_json FROM sources WHERE id=?", (event.aggregate_id,)
     ).fetchone()
@@ -95,18 +102,19 @@ def _apply_source_stats_delta(connection: sqlite3.Connection, event: Event) -> N
 
 
 def _apply_evidence_ingested(connection: sqlite3.Connection, event: Event) -> None:
-    _evidence_ingested(connection, _record(event.payload.get("record")))
+    _evidence_ingested(connection, _record_for_event(event))
 
 
 def _apply_belief_admitted(connection: sqlite3.Connection, event: Event) -> None:
-    _belief_admitted(connection, _record(event.payload.get("record")))
+    _belief_admitted(connection, _record_for_event(event))
 
 
 def _apply_support_added(connection: sqlite3.Connection, event: Event) -> None:
-    _support_added(connection, _record(event.payload.get("record")))
+    _support_added(connection, _record_for_event(event))
 
 
 def _apply_support_activity_changed(connection: sqlite3.Connection, event: Event) -> None:
+    _require_entity_episode(connection, "ingestion_supports", event.aggregate_id, event.episode_id)
     connection.execute(
         "UPDATE ingestion_supports SET active=? WHERE id=?",
         (int(bool(event.payload["active"])), event.aggregate_id),
@@ -118,6 +126,7 @@ def _apply_justification_added(connection: sqlite3.Connection, event: Event) -> 
 
 
 def _apply_justification_audited(connection: sqlite3.Connection, event: Event) -> None:
+    _require_entity_episode(connection, "justifications", event.aggregate_id, event.episode_id)
     connection.execute(
         "UPDATE justifications SET audit_json=? WHERE id=?",
         (canonical_json(event.payload["audit"]), event.aggregate_id),
@@ -125,10 +134,11 @@ def _apply_justification_audited(connection: sqlite3.Connection, event: Event) -
 
 
 def _apply_defeat_added(connection: sqlite3.Connection, event: Event) -> None:
-    _defeat_added(connection, _record(event.payload.get("record")))
+    _defeat_added(connection, _record_for_event(event))
 
 
 def _apply_defeat_activity_changed(connection: sqlite3.Connection, event: Event) -> None:
+    _require_entity_episode(connection, "defeats", event.aggregate_id, event.episode_id)
     connection.execute(
         "UPDATE defeats SET active=? WHERE id=?",
         (int(bool(event.payload["active"])), event.aggregate_id),
@@ -136,10 +146,12 @@ def _apply_defeat_activity_changed(connection: sqlite3.Connection, event: Event)
 
 
 def _apply_belief_status_changed(connection: sqlite3.Connection, event: Event) -> None:
+    _require_entity_episode(connection, "beliefs", event.aggregate_id, event.episode_id)
     _belief_status_changed(connection, event.aggregate_id, str(event.payload["to"]))
 
 
 def _apply_belief_admission_changed(connection: sqlite3.Connection, event: Event) -> None:
+    _require_entity_episode(connection, "beliefs", event.aggregate_id, event.episode_id)
     connection.execute(
         "UPDATE beliefs SET admission_status=? WHERE id=?",
         (str(event.payload["to"]), event.aggregate_id),
@@ -148,6 +160,8 @@ def _apply_belief_admission_changed(connection: sqlite3.Connection, event: Event
 
 def _apply_belief_observation_refreshed(connection: sqlite3.Connection, event: Event) -> None:
     payload = event.payload
+    _require_entity_episode(connection, "beliefs", event.aggregate_id, event.episode_id)
+    _require_entity_episode(connection, "evidence", str(payload["evidence_id"]), event.episode_id)
     connection.execute(
         "UPDATE beliefs SET observed_at=? WHERE id=?",
         (str(payload["observed_at"]), event.aggregate_id),
@@ -163,6 +177,7 @@ def _apply_belief_observation_refreshed(connection: sqlite3.Connection, event: E
 
 
 def _apply_belief_corroboration_changed(connection: sqlite3.Connection, event: Event) -> None:
+    _require_entity_episode(connection, "beliefs", event.aggregate_id, event.episode_id)
     connection.execute(
         "UPDATE beliefs SET corroboration=? WHERE id=?",
         (int(event.payload["to"]), event.aggregate_id),
@@ -170,10 +185,11 @@ def _apply_belief_corroboration_changed(connection: sqlite3.Connection, event: E
 
 
 def _apply_verification_created(connection: sqlite3.Connection, event: Event) -> None:
-    _verification_created(connection, _record(event.payload.get("record")))
+    _verification_created(connection, _record_for_event(event))
 
 
 def _apply_verification_completed(connection: sqlite3.Connection, event: Event) -> None:
+    _require_entity_episode(connection, "verification_tasks", event.aggregate_id, event.episode_id)
     connection.execute(
         "UPDATE verification_tasks SET result=?, state=? WHERE id=?",
         (
@@ -185,18 +201,20 @@ def _apply_verification_completed(connection: sqlite3.Connection, event: Event) 
 
 
 def _apply_conflict_opened(connection: sqlite3.Connection, event: Event) -> None:
-    _conflict_opened(connection, _record(event.payload.get("record")))
+    _conflict_opened(connection, _record_for_event(event))
 
 
 def _apply_conflict_resolved(connection: sqlite3.Connection, event: Event) -> None:
+    _require_entity_episode(connection, "conflicts", event.aggregate_id, event.episode_id)
     connection.execute("UPDATE conflicts SET state='resolved' WHERE id=?", (event.aggregate_id,))
 
 
 def _apply_retraction_created(connection: sqlite3.Connection, event: Event) -> None:
-    _retraction_created(connection, _record(event.payload.get("record")))
+    _retraction_created(connection, _record_for_event(event))
 
 
 def _apply_retraction_state_changed(connection: sqlite3.Connection, event: Event) -> None:
+    _require_entity_episode(connection, "retraction_notices", event.aggregate_id, event.episode_id)
     state = "acknowledged" if event.kind.endswith("ACKNOWLEDGED") else "expired"
     connection.execute(
         "UPDATE retraction_notices SET state=? WHERE id=?", (state, event.aggregate_id)
@@ -208,15 +226,16 @@ def _apply_context_compiled(connection: sqlite3.Connection, event: Event) -> Non
 
 
 def _apply_component_verdict_recorded(connection: sqlite3.Connection, event: Event) -> None:
-    _component_verdict(connection, _record(event.payload.get("record")))
+    _component_verdict(connection, _record_for_event(event))
 
 
 def _apply_llm_usage_recorded(connection: sqlite3.Connection, event: Event) -> None:
-    _llm_usage(connection, _record(event.payload.get("record")))
+    _llm_usage(connection, _record_for_event(event))
 
 
 def _apply_unpromoted_evidence_added(connection: sqlite3.Connection, event: Event) -> None:
     payload = event.payload
+    _require_entity_episode(connection, "evidence", str(payload["evidence_id"]), event.episode_id)
     connection.execute(
         "INSERT OR REPLACE INTO unpromoted_evidence(episode_id,evidence_id,source_profile,state,reason) VALUES (?,?,?,?,?)",
         (
@@ -363,6 +382,9 @@ def _source_registered(connection: sqlite3.Connection, record: dict[str, Any]) -
 
 
 def _evidence_ingested(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+    _require_entity_episode(
+        connection, "sources", str(record["source_id"]), str(record["episode_id"])
+    )
     connection.execute(
         "INSERT INTO evidence(id,episode_id,kind,source_id,payload,content_hash,meta_json,observed_at,redacted) VALUES (?,?,?,?,?,?,?,?,?)",
         (
@@ -380,6 +402,12 @@ def _evidence_ingested(connection: sqlite3.Connection, record: dict[str, Any]) -
 
 
 def _belief_admitted(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+    episode_id = str(record["episode_id"])
+    _require_entity_episode(connection, "sources", str(record["source_id"]), episode_id)
+    for evidence_ref in record.get("evidence", []):
+        _require_entity_episode(
+            connection, "evidence", str(evidence_ref["evidence_id"]), episode_id
+        )
     fingerprint = content_hash(str(record["normalized_content"]))
     connection.execute(
         "INSERT INTO beliefs(id,episode_id,content,normalized_content,content_fingerprint,pramana,source_id,qualifiers_json,perishability,observed_at,stakes,status,admission_status,domain,confidence,corroboration,validity_json) "
@@ -435,6 +463,9 @@ def _belief_admitted(connection: sqlite3.Connection, record: dict[str, Any]) -> 
 
 
 def _support_added(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+    episode_id = str(record["episode_id"])
+    _require_entity_episode(connection, "beliefs", str(record["belief_id"]), episode_id)
+    _require_entity_episode(connection, "evidence", str(record["evidence_id"]), episode_id)
     connection.execute(
         "INSERT INTO ingestion_supports(id,episode_id,belief_id,evidence_id,validity_json,active) VALUES (?,?,?,?,?,?)",
         (
@@ -451,6 +482,9 @@ def _support_added(connection: sqlite3.Connection, record: dict[str, Any]) -> No
 def _justification_added(
     connection: sqlite3.Connection, episode_id: str, record: dict[str, Any]
 ) -> None:
+    _require_entity_episode(connection, "beliefs", str(record["belief_id"]), episode_id)
+    for premise in record.get("premises", []):
+        _require_entity_episode(connection, "beliefs", str(premise), episode_id)
     connection.execute(
         "INSERT INTO justifications(id,episode_id,belief_id,warrant,audit_json,alternatives_json) VALUES (?,?,?,?,?,?)",
         (
@@ -470,6 +504,13 @@ def _justification_added(
 
 
 def _defeat_added(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+    episode_id = str(record["episode_id"])
+    _require_entity_episode(connection, "beliefs", str(record["attacker"]), episode_id)
+    target = str(record["target"])
+    if not _entity_in_episode(connection, "beliefs", target, episode_id) and not _entity_in_episode(
+        connection, "justifications", target, episode_id
+    ):
+        raise ValueError("defeat target does not belong to event episode")
     connection.execute(
         "INSERT INTO defeats(id,episode_id,attacker,target,kind,basis,active) VALUES (?,?,?,?,?,?,?)",
         (
@@ -494,6 +535,12 @@ def _belief_status_changed(connection: sqlite3.Connection, belief_id: str, statu
 
 
 def _verification_created(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+    _require_entity_episode(
+        connection,
+        "beliefs",
+        str(record["belief_id"]),
+        str(record["episode_id"]),
+    )
     connection.execute(
         "INSERT INTO verification_tasks(id,episode_id,belief_id,method,k_required,budget,result,state) VALUES (?,?,?,?,?,?,?,?)",
         (
@@ -510,6 +557,15 @@ def _verification_created(connection: sqlite3.Connection, record: dict[str, Any]
 
 
 def _conflict_opened(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+    episode_id = str(record["episode_id"])
+    _require_entity_episode(connection, "beliefs", str(record["left_belief_id"]), episode_id)
+    _require_entity_episode(connection, "beliefs", str(record["right_belief_id"]), episode_id)
+    _require_entity_episode(
+        connection,
+        "verification_tasks",
+        str(record["verification_task_id"]),
+        episode_id,
+    )
     connection.execute(
         "INSERT INTO conflicts(id,episode_id,left_belief_id,right_belief_id,normalized_scope_json,verification_task_id,state) VALUES (?,?,?,?,?,?,?)",
         (
@@ -525,6 +581,10 @@ def _conflict_opened(connection: sqlite3.Connection, record: dict[str, Any]) -> 
 
 
 def _retraction_created(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+    episode_id = str(record["episode_id"])
+    _require_entity_episode(connection, "beliefs", str(record["defeated_belief_id"]), episode_id)
+    for descendant in record.get("descendants", []):
+        _require_entity_episode(connection, "beliefs", str(descendant), episode_id)
     connection.execute(
         "INSERT INTO retraction_notices(id,episode_id,defeated_belief_id,cause,descendants_json,created_turn,ttl_turns,state) VALUES (?,?,?,?,?,?,?,?)",
         (
@@ -542,6 +602,7 @@ def _retraction_created(connection: sqlite3.Connection, record: dict[str, Any]) 
 
 def _context_compiled(connection: sqlite3.Connection, event: Event) -> None:
     for rendered in event.payload.get("rendered", []):
+        _require_entity_episode(connection, "beliefs", str(rendered["belief_id"]), event.episode_id)
         connection.execute(
             "INSERT OR IGNORE INTO rendered_beliefs(episode_id,belief_id,request_id,turn_number,rendered_at) VALUES (?,?,?,?,?)",
             (
@@ -555,6 +616,13 @@ def _context_compiled(connection: sqlite3.Connection, event: Event) -> None:
 
 
 def _component_verdict(connection: sqlite3.Connection, record: dict[str, Any]) -> None:
+    if record.get("belief_id") is not None:
+        _require_entity_episode(
+            connection,
+            "beliefs",
+            str(record["belief_id"]),
+            str(record["episode_id"]),
+        )
     connection.execute(
         "INSERT INTO component_verdicts(id,episode_id,component,purpose,input_hash,outcome,belief_id,detail_json) VALUES (?,?,?,?,?,?,?,?)",
         (
@@ -609,6 +677,34 @@ def _fts_replace(
 
 
 def _record(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
+    if not isinstance(value, Mapping):
         raise ValueError("event record payload must be a mapping")
-    return value
+    return dict(value)
+
+
+def _record_for_event(event: Event) -> dict[str, Any]:
+    record = _record(event.payload.get("record"))
+    if str(record.get("episode_id", "")) != event.episode_id:
+        raise ValueError("event record does not belong to event episode")
+    return record
+
+
+def _require_episode_exists(connection: sqlite3.Connection, episode_id: str) -> None:
+    if connection.execute("SELECT 1 FROM episodes WHERE id=?", (episode_id,)).fetchone() is None:
+        raise ValueError("event episode does not exist")
+
+
+def _entity_in_episode(
+    connection: sqlite3.Connection, table: str, identifier: str, episode_id: str
+) -> bool:
+    row = connection.execute(
+        f'SELECT episode_id FROM "{table}" WHERE id=?', (identifier,)
+    ).fetchone()
+    return row is not None and str(row[0]) == episode_id
+
+
+def _require_entity_episode(
+    connection: sqlite3.Connection, table: str, identifier: str, episode_id: str
+) -> None:
+    if not _entity_in_episode(connection, table, identifier, episode_id):
+        raise ValueError(f"{table} entity does not belong to event episode")

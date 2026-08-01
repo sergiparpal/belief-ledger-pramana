@@ -1,8 +1,19 @@
 # Hermes compatibility
 
+This supported compatibility path retains the canonical audited matrix. New adopters should start
+with the adapter landing page at [docs/integrations/hermes.md](docs/integrations/hermes.md); the
+host-neutral product quickstart is in [docs/quickstart.md](docs/quickstart.md).
+
 The audited adapter contract is pinned to Hermes Agent `0.19.0`, audited at commit
 `3ef6bbd201263d354fd83ec55b3c306ded2eb72a` on 2026-07-23, with Python
 `>=3.11,<3.14` and manifest version 1.
+
+Hermes `0.19.0` pins Pillow `12.2.0` and cryptography `46.0.7`, versions with published security
+advisories. The tested install contract therefore installs the exact Hermes host and then overrides
+those leaves with `Pillow>=12.3,<13` and `cryptography>=48.0.1,<50`. CI, clean-install smoke tests,
+and dependency audit all use that same sequence until Hermes relaxes its metadata. Pip may report
+the host's exact metadata pins as incompatible; do not downgrade the remediated leaves to silence
+that warning.
 
 Full mode requires all audited hooks plus `ctx.register_middleware("llm_request", ...)`.
 Older or contract-incompatible hosts enter an explicitly reported diagnostics-only mode;

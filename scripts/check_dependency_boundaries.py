@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject Hermes imports and dynamic loads from the host-neutral core."""
+"""Reject host dependencies and host-specific user-facing prose from core."""
 
 from __future__ import annotations
 
@@ -9,6 +9,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "packages" / "core" / "src" / "belief_ledger_core"
 FORBIDDEN = ("hermes", "hermes_agent", "hermes_cli", "hermes_constants")
+NEUTRALITY_EXCEPTIONS = {
+    # Released source-profile identifier retained for replay/config compatibility.
+    "packages/core/src/belief_ledger_core/data/source-profiles.yaml",
+}
 
 
 def violations(path: Path) -> list[str]:
@@ -45,6 +49,15 @@ def violations(path: Path) -> list[str]:
 
 def main() -> int:
     failures = [item for path in sorted(CORE.rglob("*.py")) for item in violations(path)]
+    for path in sorted(CORE.rglob("*")):
+        if not path.is_file() or path.suffix not in {".py", ".json", ".yaml", ".yml"}:
+            continue
+        label = str(path.relative_to(ROOT))
+        if label in NEUTRALITY_EXCEPTIONS:
+            continue
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "hermes" in line.casefold():
+                failures.append(f"{label}:{number}: host-specific core text")
     if failures:
         print("\n".join(failures))
         return 1

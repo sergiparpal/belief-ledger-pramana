@@ -20,6 +20,9 @@ _PREFIXES = {
     "verdict": "cv_",
     "usage": "lu_",
     "reservation": "lr_",
+    "approval": "apr_",
+    "decision": "dec_",
+    "lint": "lint_",
 }
 _ID_RE = re.compile(r"^[a-z][a-z0-9]*_[A-Za-z0-9_-]{16,}$")
 
@@ -32,6 +35,15 @@ def new_id(kind: str) -> str:
     except KeyError as exc:
         raise ValueError(f"unknown id kind: {kind}") from exc
     return prefix + secrets.token_urlsafe(18)
+
+
+def id_prefix(kind: str) -> str:
+    """Return the canonical visible prefix for an identifier kind."""
+
+    try:
+        return _PREFIXES[kind]
+    except KeyError as exc:
+        raise ValueError(f"unknown id kind: {kind}") from exc
 
 
 def is_typed_id(value: str, kind: str | None = None) -> bool:

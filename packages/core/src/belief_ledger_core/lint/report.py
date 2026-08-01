@@ -27,4 +27,6 @@ def lint_response(
         claim.disposition in {LintDisposition.GROUNDED, LintDisposition.PENDING_MARKED}
         for claim in claims
     )
+    if require_coverage and response.strip() and not claims:
+        passed = False
     return LintReport(claims=claims, passed=passed)

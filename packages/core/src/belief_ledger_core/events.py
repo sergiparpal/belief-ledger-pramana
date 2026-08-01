@@ -6,6 +6,7 @@ import dataclasses
 import hashlib
 import hmac
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -64,7 +65,9 @@ def to_primitive(value: Any) -> Any:
         return [to_primitive(item) for item in value]
     if isinstance(value, list):
         return [to_primitive(item) for item in value]
-    if isinstance(value, dict):
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [to_primitive(item) for item in value]
+    if isinstance(value, Mapping):
         return {str(key): to_primitive(item) for key, item in value.items()}
     if value is None or isinstance(value, (str, int, float, bool)):
         return value

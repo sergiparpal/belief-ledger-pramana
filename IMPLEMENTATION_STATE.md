@@ -2,8 +2,9 @@
 
 This file is the completed, frozen `1.0.0rc1` baseline. Its entries intentionally retain the
 then-current Hermes 0.18.2 contract, package version, and local-gate evidence. For the current
-`1.0.0rc2` workspace architecture and release qualification, see
-[`RELEASE_NOTES.md`](RELEASE_NOTES.md), [`docs/architecture.md`](docs/architecture.md), and
+`1.0.0rc3` workspace architecture and release qualification, see
+[`docs/current-state-rc3.md`](docs/current-state-rc3.md),
+[`docs/architecture.md`](docs/architecture.md), and
 [`HERMES_COMPATIBILITY.md`](HERMES_COMPATIBILITY.md). Those documents do not revise the historical
 baseline evidence below.
 
@@ -98,3 +99,29 @@ priority, or output-enforcement semantics. SQLite durability remains WAL with `s
 | `mypy belief_ledger_pramana` | 0 | No issues in 59 source files. |
 | `python -m build --outdir dist-performance` / `twine check ...` | 0 / 0 | Wheel and sdist built; metadata checks pass. |
 | `python scripts/inspect_artifacts.py <wheel> <sdist>` | 0 | Both distributions contain `0003_performance_indexes.sql`; no forbidden contents. |
+
+## RC3 exhaustive hardening — 2026-08-01
+
+The complete five-package workspace was reviewed and hardened locally. The historical RC1 entries
+above remain unchanged; this section records current RC3 evidence. No live-provider call,
+publication, signing, push, tag, release, or pull request was performed.
+
+| Area | Applied remediation |
+|---|---|
+| Authorization and lifecycle | Revalidates the complete binding plus live policy/config digests at consume time; support/conflict checks and consumption share one SQLite immediate transaction; finalized episodes revoke permits and rotate keys; purges remove and rehash episode authorization audit. |
+| Event and projection integrity | Rejects missing or cross-episode relational references, verifies both ledger and authorization projections on replay, preserves canonical public IDs, detects idempotency fingerprint conflicts, and schedules only valid verification relationships. |
+| Public and host boundaries | Validates generic evidence, inferred premises, configuration keys/ranges, source identity, output schemas/content/stakes, gateway JSONL scalar types, MCP inventory/results, and private non-symlink state/config/policy paths. |
+| Protocol and compatibility | Migrated MCP to SDK 2.x, added injective wrapper names and explicit bounded `UpstreamCallResult`, bounded gateway idempotency state, included request IDs in errors, and marked `LedgerRuntime` as a deprecated compatibility facade. |
+| Security and dependencies | Updated the lock/toolchain; added direct JSON Schema ownership; overrides Hermes 0.19.0's vulnerable Pillow/cryptography leaves in CI and smoke installs; dependency audit reports no known vulnerabilities after two documented false-positive Hermes exceptions. |
+| Performance and maintainability | Added permit support/episode indexes, bounded FTS queries, single-pass explanation reads, UTF-8 byte-aware LLM reservation, recursively immutable public records, stricter types, and focused regression tests. |
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest -m 'not live_llm' --cov ... --cov-branch --cov-fail-under=88` | 0 | 323 passed; 88.05% combined coverage. The eight warnings are intentional `LedgerRuntime` deprecation notices. |
+| `ruff check .` / `ruff format --check .` | 0 / 0 | 254 files checked; no findings or formatting drift. |
+| `mypy packages/core/src packages/gateway/src packages/reference/src packages/mcp/src belief_ledger_pramana` | 0 | Strict typing passes for 146 source files. |
+| Product claims / dependency boundary / workspace boundary | 0 / 0 / 0 | 10 public metadata files, 58 core files, and all package dependency directions pass. |
+| `uv lock --check` | 0 | Frozen resolution succeeds with 80 packages. |
+| `pip-audit` with the two documented Hermes false-positive exceptions | 0 | No known vulnerabilities found; two exceptions ignored; unpublished workspace packages skipped. |
+| Five-wheel build / artifact inspection / Twine check | 0 / 0 / 0 | Core, gateway, Hermes, MCP, and reference wheels built; required contents present; forbidden contents absent; all metadata passes. |
+| Clean-install matrix | 0 | `core`, `core+gateway`, `core+reference`, `core+gateway+mcp`, and secured `hermes` modes all pass. |

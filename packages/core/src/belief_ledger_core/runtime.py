@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,11 @@ class LedgerRuntime:
         requested_profile: EnforcementProfile = EnforcementProfile.OBSERVE,
         allow_diagnostic_downgrade: bool = False,
     ) -> None:
+        warnings.warn(
+            "LedgerRuntime is deprecated; use BeliefLedger instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.state_root = state_root.expanduser().resolve()
         self.dependencies = dependencies
         self.capabilities = capabilities

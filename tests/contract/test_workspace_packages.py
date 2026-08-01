@@ -25,7 +25,7 @@ def test_core_imports_when_all_hermes_imports_are_rejected(monkeypatch) -> None:
 
     monkeypatch.setattr(builtins, "__import__", guarded)
     core = importlib.import_module("belief_ledger_core")
-    assert core.__version__ == "1.0.0rc2"
+    assert core.__version__ == "1.0.0rc3"
     assert core.HostCapabilities().maximum_profile().value == "observe"
 
 
@@ -35,9 +35,32 @@ def test_workspace_versions_and_built_constraints_are_synchronized() -> None:
     core = tomllib.loads((root / "packages/core/pyproject.toml").read_text(encoding="utf-8"))[
         "project"
     ]
+    gateway = tomllib.loads((root / "packages/gateway/pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+    mcp = tomllib.loads((root / "packages/mcp/pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
     reference = tomllib.loads(
         (root / "packages/reference/pyproject.toml").read_text(encoding="utf-8")
     )["project"]
-    assert hermes["version"] == core["version"] == reference["version"] == "1.0.0rc2"
-    assert "belief-ledger-core==1.0.0rc2" in hermes["dependencies"]
-    assert "belief-ledger-core==1.0.0rc2" in reference["dependencies"]
+    assert {
+        hermes["version"],
+        core["version"],
+        gateway["version"],
+        mcp["version"],
+        reference["version"],
+    } == {"1.0.0rc3"}
+    assert "belief-ledger-core==1.0.0rc3" in hermes["dependencies"]
+    assert "belief-ledger-gateway==1.0.0rc3" in hermes["dependencies"]
+    assert "belief-ledger-core==1.0.0rc3" in reference["dependencies"]
+    assert "belief-ledger-core==1.0.0rc3" in gateway["dependencies"]
+    assert "belief-ledger-core==1.0.0rc3" in mcp["dependencies"]
+    root_metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    gateway_metadata = tomllib.loads(
+        (root / "packages/gateway/pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert "scripts" not in root_metadata["project"]
+    assert gateway_metadata["project"]["scripts"] == {
+        "belief-ledger": "belief_ledger_gateway.cli:main"
+    }

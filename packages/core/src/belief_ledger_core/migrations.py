@@ -384,6 +384,19 @@ CREATE TABLE IF NOT EXISTS action_decisions (
   expires_at TEXT NOT NULL,
   state TEXT NOT NULL CHECK(state IN ('issued','consumed','expired','revoked'))
 );
+CREATE TABLE IF NOT EXISTS action_decision_supports (
+  token_digest TEXT NOT NULL REFERENCES action_decisions(token_digest) ON DELETE CASCADE,
+  belief_id TEXT NOT NULL,
+  PRIMARY KEY(token_digest,belief_id)
+);
+CREATE INDEX IF NOT EXISTS action_decision_supports_belief_idx
+ON action_decision_supports(belief_id,token_digest);
+CREATE TABLE IF NOT EXISTS action_decision_episodes (
+  token_digest TEXT PRIMARY KEY REFERENCES action_decisions(token_digest) ON DELETE CASCADE,
+  episode_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS action_decision_episodes_episode_idx
+ON action_decision_episodes(episode_id,token_digest);
 CREATE TRIGGER IF NOT EXISTS approval_receipts_immutable_fields
 BEFORE UPDATE OF digest,binding_digest,binding_json,issued_at,expires_at ON approval_receipts
 BEGIN SELECT RAISE(ABORT, 'approval binding is immutable'); END;
