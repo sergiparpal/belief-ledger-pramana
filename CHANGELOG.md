@@ -9,6 +9,16 @@
   bounded busy-retry policy the ledger store already used.
 - Bounded the gateway JSONL reader: an oversized line is rejected without ever buffering past
   `max_line_bytes`, its remainder is drained to the next newline, and the stream resynchronizes.
+- Backed gateway idempotency with the ledger's durable layer, so a replayed `evidence.ingest`
+  cannot double-ingest after cache eviction or a process restart.
+- Excluded `request_id` from the gateway idempotency fingerprint: a retry under the same key is
+  served the cached response instead of `IDEMPOTENCY_KEY_REUSED`. A different payload still fails.
+- Scoped the permit conflict check to the binding's episode in both queries and unified them on
+  `state='open'`; the check remains deliberately episode-wide and is now documented and pinned.
+- Stopped `to_primitive` from serializing underscore-prefixed dataclass fields, which structurally
+  keeps `ActionPermit._raw_token` out of every derived representation.
+- Version-guarded the authorization decision-index backfill instead of full-scanning on every open.
+- Untracked the stray `.kg-ground-audit.jsonl.ckpt` runtime checkpoint and ignored `.kg-*`.
 
 ## v0.2.0 / 1.0.0rc3 - 2026-08-01
 

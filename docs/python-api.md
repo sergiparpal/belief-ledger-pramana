@@ -76,6 +76,19 @@ Effectful adapters call `consume_permission()` atomically immediately before pri
 Argument, target, turn, namespace, policy, configuration, expiry, support, conflict, or approval
 drift fails closed. A consumed permit is not restored after handler failure.
 
+Consumption re-reads episode, support, and conflict state inside the authorization transaction.
+Three rules follow from that, and each refuses the permit and revokes it permanently:
+
+- the episode must still be `active`; a permit bound to a finalized episode is refused with
+  `EPISODE_FINALIZED` whether or not finalization's revocation ran
+- every supporting belief named by the binding must still be `in`, otherwise `SUPPORT_RETRACTED`
+- the episode must have **no** open conflict, otherwise `OPEN_CONFLICT`
+
+The conflict rule is deliberately episode-wide rather than limited to the permit's own
+`blocking_conflict_ids`. A conflict opened after the permit was issued is exactly the case the
+binding could not have named, so an unrelated open conflict in the same episode blocks consumption.
+Resolve or close conflicts before consuming.
+
 `record_approval()` is trusted adapter/control-plane input, not authentication and not a model tool.
 The caller authenticates the approving actor and channel before constructing `ApprovalResult`; core
 persists and validates the exact binding. Denial or mismatch cannot authorize.

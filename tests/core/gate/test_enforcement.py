@@ -13,6 +13,7 @@ from belief_ledger_core.enforcement import (
     ApprovalBinding,
     EnforcementStore,
 )
+from belief_ledger_core.migrations import migrate
 
 
 def _action(receipt: str | None = None) -> ActionBinding:
@@ -116,7 +117,8 @@ def test_state_projections_allow_only_one_way_transitions(tmp_path: Path) -> Non
         ).fetchone()
     finally:
         connection.close()
-    assert version == (1,)
+    # 2 records that the derived decision indexes have been backfilled.
+    assert version == (2,)
 
 
 @pytest.mark.parametrize(
@@ -212,3 +214,90 @@ def test_concurrent_consumers_cannot_both_succeed(tmp_path: Path) -> None:
         results = list(executor.map(consume, range(16)))
     assert sum(result.consumed for result in results) == 1
     assert {result.reason_code for result in results} == {"CONSUMED", "TOKEN_CONSUMED"}
+
+
+def test_decision_index_backfill_runs_once_and_is_version_guarded(tmp_path: Path) -> None:
+    store, dependencies = _store(tmp_path)
+    store.issue_action(_action(), ttl_seconds=30)
+
+    def open_and_count_backfill_scans() -> int:
+        scans = 0
+        original = EnforcementStore._backfill_decision_indexes
+
+        def counting(connection: sqlite3.Connection) -> None:
+            nonlocal scans
+            scans += 1
+            original(connection)
+
+        EnforcementStore._backfill_decision_indexes = staticmethod(counting)  # type: ignore[method-assign]
+        try:
+            EnforcementStore(store.database, dependencies)
+        finally:
+            EnforcementStore._backfill_decision_indexes = original  # type: ignore[method-assign]
+        return scans
+
+    # The first store already recorded the migration, so reopening must not full-scan again.
+    assert open_and_count_backfill_scans() == 0
+
+    connection = sqlite3.connect(store.database)
+    try:
+        connection.execute("DELETE FROM enforcement_schema_migrations WHERE version=2")
+        connection.execute("DELETE FROM action_decision_episodes")
+        connection.commit()
+    finally:
+        connection.close()
+
+    # A database that predates the derived indexes is backfilled exactly once.
+    assert open_and_count_backfill_scans() == 1
+    assert open_and_count_backfill_scans() == 0
+
+    connection = sqlite3.connect(store.database)
+    try:
+        restored = connection.execute("SELECT COUNT(*) FROM action_decision_episodes").fetchone()[0]
+        versions = [
+            int(row[0])
+            for row in connection.execute(
+                "SELECT version FROM enforcement_schema_migrations ORDER BY version"
+            )
+        ]
+    finally:
+        connection.close()
+    assert restored == 1
+    assert versions == [1, 2]
+
+
+def test_enforcement_schema_is_identical_through_both_creation_paths(tmp_path: Path) -> None:
+    """`migrations.py` and `enforcement.py::_SCHEMA` define the enforcement tables twice.
+
+    `LedgerStore.purge_episode` rebuilds a database through `LedgerStore` alone and never
+    constructs an `EnforcementStore`, so a divergence between the two copies would be silent
+    and would break purge. They are not deduplicated; this pins that they agree.
+    """
+
+    tables = (
+        "enforcement_events",
+        "action_decisions",
+        "action_decision_supports",
+        "action_decision_episodes",
+    )
+
+    def objects(database: Path) -> dict[str, str | None]:
+        connection = sqlite3.connect(database)
+        try:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT name,type,tbl_name,sql FROM sqlite_master "
+                "WHERE tbl_name IN (?,?,?,?) ORDER BY name",
+                tables,
+            ).fetchall()
+        finally:
+            connection.close()
+        return {f"{row['type']}:{row['name']}": row["sql"] for row in rows}
+
+    migrated = tmp_path / "migrated.sqlite3"
+    migrate(migrated)
+
+    store, _ = _store(tmp_path)
+
+    assert objects(migrated) == objects(store.database)
+    assert set(objects(migrated)) >= {f"table:{table}" for table in tables}

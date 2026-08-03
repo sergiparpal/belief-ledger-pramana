@@ -57,7 +57,10 @@ class GatewayService:
         idem = request.get("idempotency_key")
         if idem is not None and (not isinstance(idem, str) or not idem):
             raise ProtocolError("INVALID_IDEMPOTENCY_KEY", "idempotency_key must be non-empty")
-        fingerprint = canonical_json(request)
+        # request_id is excluded so that a retry under the same key, which a client is
+        # expected to correlate with a fresh request_id, is served the cached response
+        # rather than rejected as a different request.
+        fingerprint = canonical_json({k: v for k, v in request.items() if k != "request_id"})
         if idem in self._idempotency:
             previous_fingerprint, response = self._idempotency[str(idem)]
             if previous_fingerprint != fingerprint:
@@ -66,7 +69,7 @@ class GatewayService:
                 )
             self._idempotency.move_to_end(str(idem))
             return copy.deepcopy(response)
-        result = self._dispatch(operation, request)
+        result = self._dispatch(operation, request, idem)
         response = {
             "schema_version": PROTOCOL_VERSION,
             "request_id": request_id,
@@ -80,7 +83,9 @@ class GatewayService:
                 self._idempotency.popitem(last=False)
         return response
 
-    def _dispatch(self, operation: str, request: dict[str, Any]) -> dict[str, Any]:
+    def _dispatch(
+        self, operation: str, request: dict[str, Any], idem: str | None = None
+    ) -> dict[str, Any]:
         if operation == "capabilities":
             return {
                 "profile": "observe",
@@ -120,6 +125,14 @@ class GatewayService:
         if operation == "evidence.ingest":
             value = _object(request.get("observation"), "observation")
             _validate_observation(value)
+            if idem is not None:
+                # The in-memory cache is evictable and does not survive restart. Passing the
+                # key down to the store's durable idempotency layer keeps a replay from
+                # ingesting twice in either case. The prefix cannot collide with a
+                # caller-supplied key in the same episode.
+                correlation = dict(value.get("correlation") or {})
+                correlation["idempotency_key"] = f"gateway:{idem}"
+                value = {**value, "correlation": correlation}
             observation = EvidenceObservation.normalize(**value)
             return asdict(self.ledger.ingest_evidence(episode_id, observation))
         if operation == "action.evaluate":
