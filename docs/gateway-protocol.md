@@ -21,10 +21,20 @@ resynchronizes on the following line and continues.
 {"schema_version":1,"request_id":"r1","ok":true,"result":{"schema_version":1,"id":"episode_0001","state":"active"}}
 ```
 
-`schema_version` must be `1`. `request_id` is reflected. An optional non-empty idempotency key
-returns the identical cached response for the identical request; reuse for different content fails
-with `IDEMPOTENCY_KEY_REUSED`. The state root is selected by the process command, not by individual
-requests. A stream owns one episode and serializes its calls.
+`schema_version` must be `1`. `request_id` is reflected. The state root is selected by the process
+command, not by individual requests. A stream owns one episode and serializes its calls.
+
+An optional non-empty idempotency key returns the cached response for the same request; reuse for
+different content fails with `IDEMPOTENCY_KEY_REUSED`. `request_id` is excluded from that
+comparison, so a retry may correlate itself with a fresh `request_id` and still be served the
+original response — including the original `request_id`, since the cached response is returned
+verbatim. Every other field is compared.
+
+`evidence.ingest` additionally passes the key to the ledger's durable idempotency layer as
+`gateway:<key>`, scoped to the episode. The in-memory cache is bounded and does not survive a
+restart; the durable layer is what prevents a replay from ingesting the same evidence twice after
+eviction or restart. A `gateway:`-prefixed key cannot collide with one a caller supplies in
+`observation.correlation`.
 
 Errors use:
 

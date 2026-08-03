@@ -27,3 +27,18 @@ enforced only by revocation.
 
 The gateway JSONL reader now enforces `max_line_bytes` while reading rather than after the whole
 line is in memory. See `docs/gateway-protocol.md` for the resynchronization behaviour.
+
+Gateway idempotency no longer rests on an in-memory cache alone. `evidence.ingest` passes its key
+down to the ledger's durable idempotency layer, so a replay after LRU eviction or a process restart
+no longer ingests twice. `request_id` is excluded from the fingerprint, so a retry correlated with a
+fresh `request_id` is served the cached response rather than `IDEMPOTENCY_KEY_REUSED`; a genuinely
+different payload under the same key still fails. This is the one caller-visible behaviour change in
+this set.
+
+Smaller corrections: the permit conflict check is episode-scoped in both of its queries and uses one
+state predicate, with its deliberately episode-wide scope documented in `docs/python-api.md` and
+pinned by a test; `to_primitive` cannot emit underscore-prefixed dataclass fields, which closes the
+latent `ActionPermit._raw_token` path structurally rather than by convention; the authorization
+decision-index backfill is guarded by `enforcement_schema_migrations` version 2 instead of running
+on every open; and a test pins that the enforcement schema is identical whether a database is
+created through `migrations.py` or `enforcement.py`, which `LedgerStore.purge_episode` depends on.
