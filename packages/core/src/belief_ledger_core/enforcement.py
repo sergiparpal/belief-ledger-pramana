@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import sqlite3
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from .dependencies import RuntimeDependencies
 from .events import canonical_json, content_hash, isoformat_utc
+from .store import _is_busy
+
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,6 +375,15 @@ class EnforcementStore:
             approval_reason = self._approval_reason(connection, stored, allow_consumed=True)
             if approval_reason:
                 return self._reject(connection, token_digest, approval_reason)
+            if not self._stored_episode_is_active(connection, stored):
+                connection.execute(
+                    "UPDATE action_decisions SET state='revoked' "
+                    "WHERE token_digest=? AND state='issued'",
+                    (token_digest,),
+                )
+                return self._reject(
+                    connection, token_digest, "EPISODE_FINALIZED", event="ACTION_DECISION_REVOKED"
+                )
             support_ok = self._stored_supports_are_active(connection, stored)
             conflicts_ok = self._stored_conflicts_are_closed(connection, stored)
             if support_ok and support_is_active is not None:
@@ -455,9 +469,7 @@ class EnforcementStore:
     def revoke_for_episode(self, episode_id: str) -> int:
         """Revoke every outstanding permit bound to a finalized episode."""
 
-        connection = self._connect()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        def revoke(connection: sqlite3.Connection) -> int:
             rows = connection.execute(
                 "SELECT d.token_digest FROM action_decisions d "
                 "JOIN action_decision_episodes e ON e.token_digest=d.token_digest "
@@ -476,13 +488,37 @@ class EnforcementStore:
                     "ACTION_DECISION_REVOKED",
                     {"token_digest": token_digest, "reason_code": "EPISODE_FINALIZED"},
                 )
-            connection.commit()
             return len(affected)
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+
+        return self._run_immediate_transaction(revoke)
+
+    def _run_immediate_transaction(self, operation: Callable[[sqlite3.Connection], _T]) -> _T:
+        """Run one transaction under the bounded busy-retry policy `LedgerStore` uses.
+
+        Finalization revokes permits in a second transaction, so ordinary contention here
+        would otherwise surface as a caller-visible failure on an already-finalized episode.
+        """
+
+        deadline = time.monotonic() + self.busy_timeout_ms / 1_000
+        attempt = 0
+        while True:
+            connection = self._connect()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                result = operation(connection)
+                connection.commit()
+                return result
+            except sqlite3.OperationalError as exc:
+                connection.rollback()
+                if not _is_busy(exc) or time.monotonic() >= deadline:
+                    raise
+                attempt += 1
+                time.sleep(min(0.05, 0.002 * (2 ** min(attempt, 5))) + random.random() * 0.003)
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
 
     def events(self) -> tuple[dict[str, Any], ...]:
         connection = self._connect()
@@ -687,6 +723,16 @@ class EnforcementStore:
             (binding.episode_id, *binding.supporting_belief_ids),
         ).fetchone()[0]
         return int(count) == len(binding.supporting_belief_ids)
+
+    def _stored_episode_is_active(
+        self, connection: sqlite3.Connection, binding: ActionBinding
+    ) -> bool:
+        if not _table_exists(connection, "episodes"):
+            return True
+        row = connection.execute(
+            "SELECT state FROM episodes WHERE id=?", (binding.episode_id,)
+        ).fetchone()
+        return row is not None and str(row["state"]) == "active"
 
     def _stored_conflicts_are_closed(
         self, connection: sqlite3.Connection, binding: ActionBinding

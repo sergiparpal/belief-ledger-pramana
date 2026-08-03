@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from collections import OrderedDict
+from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, BinaryIO, TextIO, cast
@@ -23,6 +24,7 @@ from belief_ledger_core.ingestion.tool import redact_secrets
 MAX_LINE_BYTES = 1_048_576
 PROTOCOL_VERSION = 1
 MAX_IDEMPOTENCY_ENTRIES = 1_024
+_READ_CHUNK = 65_536
 
 
 class ProtocolError(ValueError):
@@ -178,6 +180,48 @@ class GatewayService:
         return self.episode_id, self.context
 
 
+def _bounded_lines(
+    source: TextIO | BinaryIO, max_line_bytes: int
+) -> Iterator[tuple[str | bytes, bool]]:
+    """Yield (line, oversized) without ever buffering more than the limit.
+
+    An oversized line is drained to the next newline and discarded rather than truncated,
+    so its remainder cannot be read back as further requests.
+    """
+
+    while True:
+        text_pieces: list[str] = []
+        byte_pieces: list[bytes] = []
+        total = 0
+        oversized = False
+        saw_data = False
+        binary = False
+        while True:
+            chunk = source.readline(_READ_CHUNK)
+            if not chunk:
+                break
+            saw_data = True
+            total += len(chunk)
+            keep = total <= max_line_bytes
+            if not keep:
+                oversized = True
+            if isinstance(chunk, bytes):
+                binary = True
+                if keep:
+                    byte_pieces.append(chunk)
+                if chunk.endswith(b"\n"):
+                    break
+            elif keep:
+                text_pieces.append(chunk)
+                if chunk.endswith("\n"):
+                    break
+            elif chunk.endswith("\n"):
+                break
+        if not saw_data:
+            return
+        yield (b"".join(byte_pieces) if binary else "".join(text_pieces)), oversized
+
+
 def serve_jsonl(
     source: TextIO | BinaryIO,
     destination: TextIO,
@@ -188,9 +232,11 @@ def serve_jsonl(
     """Serve one serialized client until clean EOF or an explicit shutdown request."""
 
     service = GatewayService(state_root)
-    for line_number, raw in enumerate(source, 1):
+    for line_number, (raw, oversized) in enumerate(_bounded_lines(source, max_line_bytes), 1):
         request_id = ""
         try:
+            if oversized:
+                raise ProtocolError("LINE_TOO_LARGE", f"maximum is {max_line_bytes} bytes")
             if isinstance(raw, bytes):
                 try:
                     encoded = raw
@@ -198,7 +244,7 @@ def serve_jsonl(
                 except UnicodeDecodeError as exc:
                     raise ProtocolError("INVALID_UTF8", "line is not UTF-8") from exc
             else:
-                line = cast(str, raw)
+                line = raw
                 encoded = line.encode("utf-8")
             if len(encoded) > max_line_bytes:
                 raise ProtocolError("LINE_TOO_LARGE", f"maximum is {max_line_bytes} bytes")

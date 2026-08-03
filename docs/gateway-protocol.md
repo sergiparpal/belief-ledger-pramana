@@ -10,6 +10,12 @@ One request and one response occupy one line. Lines are bounded to 1,048,576 enc
 lines are ignored; malformed JSON and invalid UTF-8 produce errors. Keys are serialized in sorted
 order with compact separators for deterministic output.
 
+The limit is enforced while reading, not after. The reader never buffers more than the limit for a
+single line: once a line passes it, further content is discarded rather than accumulated. A line
+that exceeds the limit is answered with one `LINE_TOO_LARGE` error and its remainder is drained up
+to the next newline, so the discarded tail is never interpreted as further requests. The stream
+resynchronizes on the following line and continues.
+
 ```json
 {"schema_version":1,"request_id":"r1","idempotency_key":"start-1","operation":"episode.start","context":{"session_id":"s","turn_id":"t","task_id":"task","platform":"local","model":"caller"}}
 {"schema_version":1,"request_id":"r1","ok":true,"result":{"schema_version":1,"id":"episode_0001","state":"active"}}

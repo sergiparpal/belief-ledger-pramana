@@ -268,7 +268,10 @@ class BeliefLedger:
                     )
                 ],
             )
-            self.enforcement.revoke_for_episode(episode_id)
+        # Always revoke. revoke_for_episode only touches state='issued' rows, so it is
+        # idempotent, and running it unconditionally lets a retry repair a finalize that
+        # committed the lifecycle event and then failed before revocation.
+        self.enforcement.revoke_for_episode(episode_id)
         return EpisodeHandle(1, episode_id, "finalized")
 
     def ingest_evidence(
