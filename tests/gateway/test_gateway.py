@@ -83,6 +83,7 @@ def test_jsonl_is_bounded_deterministic_idempotent_and_observe_only(tmp_path: Pa
             json.dumps(start),
             json.dumps(start),
             json.dumps({**start, "request_id": "other"}),
+            json.dumps({**start, "context": {"session_id": "different", "turn_id": "t"}}),
             "{broken",
             json.dumps({"schema_version": 1, "request_id": "x", "operation": "shutdown"}),
         )
@@ -92,8 +93,12 @@ def test_jsonl_is_bounded_deterministic_idempotent_and_observe_only(tmp_path: Pa
     responses = [json.loads(line) for line in output.getvalue().splitlines()]
     assert responses[0]["result"]["profile"] == "observe"
     assert responses[1] == responses[2]
-    assert responses[3]["error"]["reason_code"] == "IDEMPOTENCY_KEY_REUSED"
-    assert responses[4]["error"]["reason_code"] == "MALFORMED_JSON"
+    # A retry under the same key is served the cached response even though the client
+    # correlated it with a fresh request_id.
+    assert responses[3] == responses[1]
+    # A genuinely different payload under the same key is still refused.
+    assert responses[4]["error"]["reason_code"] == "IDEMPOTENCY_KEY_REUSED"
+    assert responses[5]["error"]["reason_code"] == "MALFORMED_JSON"
     assert "token" not in output.getvalue().casefold()
 
     oversized = io.StringIO("x" * 20 + "\n")
@@ -160,6 +165,56 @@ def test_reader_does_not_buffer_beyond_the_limit() -> None:
     payload, oversized = lines[0]
     assert oversized
     assert len(payload) == max_line_bytes
+
+
+def _ingest_request(idempotency_key: str, request_id: str = "i") -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "request_id": request_id,
+        "idempotency_key": idempotency_key,
+        "operation": "evidence.ingest",
+        "observation": {"content": "A current fact", "source_name": "probe"},
+    }
+
+
+def _start_episode(service: GatewayService, session: str = "s") -> str:
+    started = service.handle(
+        {
+            "schema_version": 1,
+            "operation": "episode.start",
+            "context": {"session_id": session, "turn_id": "t"},
+        }
+    )
+    return str(started["result"]["id"])
+
+
+def test_evidence_ingest_is_idempotent_across_cache_eviction(tmp_path: Path) -> None:
+    service = GatewayService(tmp_path)
+    episode_id = _start_episode(service)
+    first = service.handle(_ingest_request("ingest-1"))
+
+    # Evict the in-memory fast path the way the LRU bound would under load.
+    service._idempotency.clear()
+
+    replayed = service.handle(_ingest_request("ingest-1", request_id="retry"))
+    assert replayed["result"]["belief_id"] == first["result"]["belief_id"]
+    assert len(service.ledger.store.list_beliefs(episode_id)) == 1
+
+
+def test_evidence_ingest_is_idempotent_across_service_restart(tmp_path: Path) -> None:
+    service = GatewayService(tmp_path)
+    episode_id = _start_episode(service)
+    first = service.handle(_ingest_request("ingest-1"))
+
+    # A restarted process keeps no cache. The protocol has no resume operation, so the
+    # episode is re-attached directly to represent a client resuming the same episode.
+    restarted = GatewayService(tmp_path)
+    restarted.episode_id = episode_id
+    restarted.context = service.context
+
+    replayed = restarted.handle(_ingest_request("ingest-1", request_id="retry"))
+    assert replayed["result"]["belief_id"] == first["result"]["belief_id"]
+    assert len(restarted.ledger.store.list_beliefs(episode_id)) == 1
 
 
 def test_stateful_call_before_start_and_unsupported_operation_fail_closed(tmp_path: Path) -> None:
