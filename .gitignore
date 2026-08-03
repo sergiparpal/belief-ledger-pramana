@@ -16,4 +16,5 @@ htmlcov/
 *.sqlite3-wal
 artifacts/
 IMPLEMENTATION_PLAN.md
+REMEDIATION_PLAN_RC3.md
 .kg-*
