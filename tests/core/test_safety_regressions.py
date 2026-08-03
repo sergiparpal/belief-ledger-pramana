@@ -414,6 +414,75 @@ def test_finalize_is_idempotent_and_repairs_missing_revocation(tmp_path: Path) -
     assert ledger.verify_chain().valid
 
 
+def test_to_primitive_never_serializes_the_raw_permit_token(tmp_path: Path) -> None:
+    ledger = _action_ledger(tmp_path)
+    context = _context()
+    episode = ledger.start_episode(context)
+    ledger.ingest_evidence(
+        episode.id, EvidenceObservation.normalize("A current fact", source_name="probe")
+    )
+    invocation = ToolInvocation.normalize(context, "mutate", {"recipient": "42"})
+    authorization = ledger.evaluate_action(episode.id, invocation)
+    permit = authorization.permit
+    assert permit is not None
+    raw_token = permit._raw_token
+    assert raw_token
+
+    for serialized in (
+        canonical_json(to_primitive(authorization)),
+        canonical_json(to_primitive(permit)),
+        repr(permit),
+    ):
+        assert raw_token not in serialized
+        assert "_raw_token" not in serialized
+
+
+def test_unrelated_open_conflict_in_the_episode_blocks_permit_consumption(tmp_path: Path) -> None:
+    """The conflict check is episode-wide on purpose, not scoped to blocking_conflict_ids.
+
+    A conflict opened after the permit was issued is exactly the case the binding could not
+    have named, so this pins the intent rather than leaving it incidental.
+    """
+
+    ledger = _action_ledger(tmp_path)
+    episode_id, permit, invocation = _permit_on_a_fresh_episode(ledger)
+    assert permit.binding.blocking_conflict_ids == ()
+
+    left = ledger.ingest_direct_observation(
+        episode_id, EvidenceObservation.normalize("An unrelated left claim", source_name="left")
+    )
+    right = ledger.ingest_direct_observation(
+        episode_id, EvidenceObservation.normalize("An unrelated right claim", source_name="right")
+    )
+    scheduler = VerificationScheduler(ledger.store, dict(ledger.config.data))
+    task = scheduler.request(episode_id, left.belief_id, VerificationMethod.CROSS_SOURCE).task
+    ledger.store.append_events(
+        episode_id,
+        [
+            EventDraft(
+                "CONFLICT_OPENED",
+                "conflict",
+                "cf_unrelated_0001",
+                {
+                    "record": {
+                        "id": "cf_unrelated_0001",
+                        "episode_id": episode_id,
+                        "left_belief_id": left.belief_id,
+                        "right_belief_id": right.belief_id,
+                        "normalized_scope": {},
+                        "verification_task_id": task.id,
+                        "state": "open",
+                    }
+                },
+            )
+        ],
+    )
+
+    consumed = ledger.consume_permission(permit, invocation)
+    assert not consumed.consumed and consumed.reason_code == "OPEN_CONFLICT"
+    assert ledger.enforcement.action_state(permit.decision_id) == "revoked"
+
+
 def test_config_paths_and_recursive_values_fail_closed(tmp_path: Path) -> None:
     for config in (
         {"unknown": True},

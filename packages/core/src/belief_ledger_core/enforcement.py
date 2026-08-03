@@ -20,6 +20,12 @@ from .store import _is_busy
 
 _T = TypeVar("_T")
 
+# Version 2 records that the derived decision indexes have been backfilled. It is written by
+# the migration rather than by _SCHEMA: a pre-RC3 database must be seen at version 1 first,
+# or the backfill it still needs would be skipped.
+_DECISION_INDEX_SCHEMA_VERSION = 2
+_DECISION_INDEX_SCHEMA_APPLIED_AT = "2026-08-03T00:00:00.000000Z"
+
 
 @dataclass(frozen=True, slots=True)
 class ApprovalBinding:
@@ -111,12 +117,33 @@ class EnforcementStore:
         connection = self._connect()
         try:
             connection.executescript(_SCHEMA)
-            self._backfill_decision_indexes(connection)
+            self._migrate_decision_indexes(connection)
             connection.commit()
         finally:
             connection.close()
         with suppress(OSError):
             self.database.chmod(0o600)
+
+    @classmethod
+    def _migrate_decision_indexes(cls, connection: sqlite3.Connection) -> None:
+        """Run the derived-index backfill once, not on every open.
+
+        The backfill full-scans `action_decisions`. Gating it on the schema version keeps
+        that cost on databases that predate the derived tables; `_SCHEMA` still creates
+        those tables conditionally, so a fresh database is unaffected either way.
+        """
+
+        row = connection.execute(
+            "SELECT MAX(version) AS version FROM enforcement_schema_migrations"
+        ).fetchone()
+        version = int(row["version"]) if row is not None and row["version"] is not None else 0
+        if version >= _DECISION_INDEX_SCHEMA_VERSION:
+            return
+        cls._backfill_decision_indexes(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO enforcement_schema_migrations(version,applied_at) VALUES (?,?)",
+            (_DECISION_INDEX_SCHEMA_VERSION, _DECISION_INDEX_SCHEMA_APPLIED_AT),
+        )
 
     @staticmethod
     def _backfill_decision_indexes(connection: sqlite3.Connection) -> None:
@@ -739,6 +766,11 @@ class EnforcementStore:
     ) -> bool:
         if not _table_exists(connection, "conflicts"):
             return True
+        # Deliberately episode-wide, and therefore stricter than the permit's own
+        # blocking_conflict_ids: any open conflict anywhere in the episode blocks
+        # consumption. A conflict opened after the permit was issued is precisely the case
+        # the binding could not have named, so scoping this to the binding would let it
+        # through.
         row = connection.execute(
             "SELECT 1 FROM conflicts WHERE episode_id=? AND state='open' LIMIT 1",
             (binding.episode_id,),
@@ -747,10 +779,16 @@ class EnforcementStore:
             return False
         if not binding.blocking_conflict_ids:
             return True
+        # Subsumed by the episode-wide check above while that check stands: reaching here
+        # means the episode has no open conflict at all. It is kept as a scoped backstop so
+        # narrowing the rule above cannot silently drop the named conflicts, and it uses the
+        # same state='open' predicate rather than state!='resolved' so the two cannot
+        # disagree if a third conflict state is ever introduced.
         placeholders = ",".join("?" for _ in binding.blocking_conflict_ids)
         unresolved = connection.execute(
-            f"SELECT COUNT(*) FROM conflicts WHERE id IN ({placeholders}) AND state!='resolved'",
-            binding.blocking_conflict_ids,
+            f"SELECT COUNT(*) FROM conflicts "
+            f"WHERE episode_id=? AND id IN ({placeholders}) AND state='open'",
+            (binding.episode_id, *binding.blocking_conflict_ids),
         ).fetchone()[0]
         return int(unresolved) == 0
 
