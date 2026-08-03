@@ -53,9 +53,14 @@ def to_primitive(value: Any) -> Any:
     """Convert supported records into canonical JSON-shaped values."""
 
     if dataclasses.is_dataclass(value):
+        # Underscore-prefixed fields are private to the record and never serialized. This is
+        # what keeps ActionPermit._raw_token out of anything derived from to_primitive,
+        # including canonical_json and therefore event hashes. No hashed record carries such
+        # a field; if one ever does, replace this with a narrower opt-out on ActionPermit.
         return {
             field.name: to_primitive(getattr(value, field.name))
             for field in dataclasses.fields(value)
+            if not field.name.startswith("_")
         }
     if isinstance(value, Enum):
         return value.value
