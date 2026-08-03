@@ -29,6 +29,7 @@ a claim of external scientific validity.
 | MCP inspection/proxy split and no approval tool | `belief_ledger_mcp.proxy`, `server.py` | fake-upstream tests and tool-list assertions |
 | Neutral first-use narrative and scoped claims | README, integration docs, claim checker | product-claim/docs tests |
 | Five synchronized local artifacts | build/inspect/smoke scripts | full `verify_stage.py all` gate |
+| Episode lifecycle is an in-transaction permit precondition | `enforcement.py:_stored_episode_is_active`, `api.py:finalize_episode`, ADR 0008 | `tests/core/test_safety_regressions.py::test_permit_is_rejected_when_finalize_revocation_did_not_run`, `::test_finalize_is_idempotent_and_repairs_missing_revocation` |
 
 ## rc2 architecture and enforcement requirements
 

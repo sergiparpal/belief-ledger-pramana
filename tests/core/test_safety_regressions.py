@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from belief_ledger_core import (
+    ActionPermit,
     ApprovalResult,
     BeliefLedger,
     BeliefLedgerError,
@@ -63,6 +64,41 @@ def _action_ledger(tmp_path: Path, *, manifest: dict | None = None) -> BeliefLed
 
 def _context(label: str = "s") -> EpisodeContext:
     return EpisodeContext.normalize(session_id=label, turn_id="t", task_id=label)
+
+
+def _simulate_partial_finalize(ledger: BeliefLedger, episode_id: str) -> None:
+    """Commit the lifecycle event without the revocation that normally follows it.
+
+    This is the state a crash between `finalize_episode`'s two transactions leaves behind.
+    """
+
+    ledger.store.append_events(
+        episode_id,
+        [
+            EventDraft(
+                "EPISODE_FINALIZED",
+                "episode",
+                episode_id,
+                {
+                    "state": "finalized",
+                    "episode_key": f"closed:{episode_id}",
+                    "updated_at": ledger.dependencies.clock.now(),
+                },
+            )
+        ],
+    )
+
+
+def _permit_on_a_fresh_episode(ledger: BeliefLedger) -> tuple[str, ActionPermit, ToolInvocation]:
+    context = _context()
+    episode = ledger.start_episode(context)
+    ledger.ingest_evidence(
+        episode.id, EvidenceObservation.normalize("A current fact", source_name="probe")
+    )
+    invocation = ToolInvocation.normalize(context, "mutate", {"recipient": "42"})
+    permit = ledger.evaluate_action(episode.id, invocation).permit
+    assert permit is not None
+    return episode.id, permit, invocation
 
 
 def test_effectful_permissions_fail_closed_in_observe_and_on_policy_or_config_drift(
@@ -336,6 +372,46 @@ def test_finalization_revokes_permissions_rejects_mutation_and_rotates_episode_k
         assert finalized.value.reason_code == "EPISODE_FINALIZED"
     replacement = ledger.start_episode(context)
     assert replacement.id != episode.id and replacement.state == "active"
+
+
+def test_permit_is_rejected_after_episode_finalization(tmp_path: Path) -> None:
+    ledger = _action_ledger(tmp_path)
+    episode_id, permit, invocation = _permit_on_a_fresh_episode(ledger)
+    ledger.finalize_episode(episode_id)
+
+    # A completed finalize already revoked the permit, so consumption is refused by the
+    # decision-state check before the in-transaction episode check is reached. The episode
+    # check is what covers a finalize whose revocation never ran.
+    consumed = ledger.consume_permission(permit, invocation)
+    assert not consumed.consumed and consumed.reason_code == "TOKEN_REVOKED"
+    assert ledger.enforcement.action_state(permit.decision_id) == "revoked"
+
+
+def test_permit_is_rejected_when_finalize_revocation_did_not_run(tmp_path: Path) -> None:
+    ledger = _action_ledger(tmp_path)
+    episode_id, permit, invocation = _permit_on_a_fresh_episode(ledger)
+    _simulate_partial_finalize(ledger, episode_id)
+    assert ledger.enforcement.action_state(permit.decision_id) == "issued"
+
+    consumed = ledger.consume_permission(permit, invocation)
+    assert not consumed.consumed and consumed.reason_code == "EPISODE_FINALIZED"
+    assert ledger.enforcement.action_state(permit.decision_id) == "revoked"
+
+
+def test_finalize_is_idempotent_and_repairs_missing_revocation(tmp_path: Path) -> None:
+    ledger = _action_ledger(tmp_path)
+    episode_id, permit, invocation = _permit_on_a_fresh_episode(ledger)
+    _simulate_partial_finalize(ledger, episode_id)
+    assert ledger.enforcement.action_state(permit.decision_id) == "issued"
+
+    repaired = ledger.finalize_episode(episode_id)
+    assert repaired.state == "finalized"
+    assert ledger.enforcement.action_state(permit.decision_id) == "revoked"
+
+    assert ledger.finalize_episode(episode_id).state == "finalized"
+    assert ledger.enforcement.action_state(permit.decision_id) == "revoked"
+    assert ledger.consume_permission(permit, invocation).reason_code == "TOKEN_REVOKED"
+    assert ledger.verify_chain().valid
 
 
 def test_config_paths_and_recursive_values_fail_closed(tmp_path: Path) -> None:
