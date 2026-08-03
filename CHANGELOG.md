@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Made episode lifecycle an in-transaction precondition of permit consumption: a permit bound to a
+  finalized episode is refused with `EPISODE_FINALIZED` and revoked, including when finalization's
+  revocation never ran.
+- Made `finalize_episode` repair a partial finalize on retry, and gave `revoke_for_episode` the
+  bounded busy-retry policy the ledger store already used.
+- Bounded the gateway JSONL reader: an oversized line is rejected without ever buffering past
+  `max_line_bytes`, its remainder is drained to the next newline, and the stream resynchronizes.
+
 ## v0.2.0 / 1.0.0rc3 - 2026-08-01
 
 GitHub source release for the complete host-neutral RC3 product surface. The five synchronized
