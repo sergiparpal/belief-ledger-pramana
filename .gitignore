@@ -16,3 +16,4 @@ htmlcov/
 *.sqlite3-wal
 artifacts/
 IMPLEMENTATION_PLAN.md
+.kg-*
