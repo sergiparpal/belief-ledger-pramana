@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+from typing import cast
 
 import belief_ledger_gateway.cli as gateway_cli
 import pytest
@@ -19,9 +20,11 @@ from belief_ledger_core.events import canonical_json, content_hash
 from belief_ledger_gateway.cli import main
 from belief_ledger_gateway.dispatcher import GatewayDispatcher
 from belief_ledger_gateway.protocol import (
+    _READ_CHUNK,
     MAX_IDEMPOTENCY_ENTRIES,
     GatewayService,
     ProtocolError,
+    _bounded_lines,
     open_gateway_ledger,
     serve_jsonl,
 )
@@ -97,6 +100,66 @@ def test_jsonl_is_bounded_deterministic_idempotent_and_observe_only(tmp_path: Pa
     bounded = io.StringIO()
     serve_jsonl(oversized, bounded, state_root=tmp_path / "other", max_line_bytes=10)
     assert json.loads(bounded.getvalue())["error"]["reason_code"] == "LINE_TOO_LARGE"
+
+
+def test_oversized_line_is_rejected_and_the_stream_resynchronizes(tmp_path: Path) -> None:
+    valid = json.dumps({"schema_version": 1, "request_id": "c", "operation": "capabilities"})
+    source = io.StringIO("x" * 5_000 + "\n" + valid + "\n")
+    output = io.StringIO()
+    assert serve_jsonl(source, output, state_root=tmp_path, max_line_bytes=256) == 0
+    responses = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert len(responses) == 2
+    assert responses[0]["error"]["reason_code"] == "LINE_TOO_LARGE"
+    assert responses[0]["error"]["line"] == 1
+    assert responses[1]["ok"] and responses[1]["request_id"] == "c"
+    assert responses[1]["result"]["profile"] == "observe"
+
+
+def test_oversized_binary_line_is_rejected_and_the_stream_resynchronizes(tmp_path: Path) -> None:
+    valid = json.dumps({"schema_version": 1, "request_id": "c", "operation": "capabilities"})
+    source = io.BytesIO(b"x" * 5_000 + b"\n" + valid.encode("utf-8") + b"\n")
+    output = io.StringIO()
+    assert serve_jsonl(source, output, state_root=tmp_path, max_line_bytes=256) == 0
+    responses = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [response.get("error", {}).get("reason_code") for response in responses] == [
+        "LINE_TOO_LARGE",
+        None,
+    ]
+    assert responses[1]["result"]["profile"] == "observe"
+
+
+def test_reader_does_not_buffer_beyond_the_limit() -> None:
+    class _RecordingSource:
+        """Keeps serving one long line so the reader's own bound is what stops accumulation."""
+
+        def __init__(self, chunk_size: int, chunks: int) -> None:
+            self.chunk_size = chunk_size
+            self.remaining = chunks
+            self.served = 0
+            self.largest_request = 0
+
+        def readline(self, size: int = -1) -> str:
+            self.largest_request = max(self.largest_request, size)
+            if self.remaining <= 0:
+                return ""
+            self.remaining -= 1
+            filler = "x" * (self.chunk_size - 1)
+            chunk = filler + ("\n" if not self.remaining else "x")
+            self.served += len(chunk)
+            return chunk
+
+    max_line_bytes = 1_000
+    source = _RecordingSource(chunk_size=100, chunks=40)
+    lines = list(_bounded_lines(cast(io.StringIO, source), max_line_bytes))
+
+    # The source served four times the limit and the reader drained all of it to the
+    # newline, but never held more than the limit.
+    assert source.served == 4_000
+    assert source.largest_request == _READ_CHUNK
+    assert len(lines) == 1
+    payload, oversized = lines[0]
+    assert oversized
+    assert len(payload) == max_line_bytes
 
 
 def test_stateful_call_before_start_and_unsupported_operation_fail_closed(tmp_path: Path) -> None:
