@@ -8,9 +8,11 @@ contract is Hermes Agent `0.19.0` at commit
 versions remain diagnostics-only. Hermes is a peer host rather than a Python project dependency.
 
 For a secure supported-host install, install Hermes `0.19.0`, then override its vulnerable exact
-leaf pins with `Pillow>=12.3,<13` and `cryptography>=48.0.1,<50`. The repository's CI and
-clean-install smoke gate test that combination; an incompatibility warning against Hermes's stale
-exact metadata is expected until upstream relaxes those pins.
+leaf pins with `Pillow>=12.3,<13` and `cryptography>=50.0.0,<51`; the 49 series carries its own
+advisory, so 50 is the lower bound. The repository's CI installs and tests that combination on every
+job that installs the host. An incompatibility warning against Hermes's stale exact metadata is
+expected until upstream relaxes those pins. [HERMES_COMPATIBILITY.md](../../HERMES_COMPATIBILITY.md)
+records the current state of the repository's own install paths.
 
 | Profile | Effective | Boundary |
 |---|---:|---|

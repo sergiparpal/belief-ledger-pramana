@@ -42,3 +42,29 @@ latent `ActionPermit._raw_token` path structurally rather than by convention; th
 decision-index backfill is guarded by `enforcement_schema_migrations` version 2 instead of running
 on every open; and a test pins that the enforcement schema is identical whether a database is
 created through `migrations.py` or `enforcement.py`, which `LedgerStore.purge_episode` depends on.
+
+An exhaustive review of the five-package workspace on 2026-08-05 corrected a further set, each with
+regression coverage that fails against the previous code. The one operators must know about is
+schema 7. Idempotency keys became episode-scoped after schema 6, but existing rows kept the unscoped
+form while only new rows were written scoped; because replay always rebuilds that projection scoped,
+a database holding legacy rows failed its projection check and could no longer be opened at all.
+Schema 7 normalizes the stored form once on first open, behind the usual pre-migration backup, and
+changes no event bytes and no `projection_hash_v1`.
+
+The remainder are contained: the action gate fails closed instead of raising when an argument cannot
+be encoded; unguarded source lookups no longer raise `KeyError` on fail-closed paths;
+`negotiate_profile` no longer reports a profile the host cannot perform; permit revalidation
+callbacks are wired; two writers that stored `+00:00` rather than the trailing-`Z` form no longer
+reverse text ordering; extension paths are validated where they are read; and `_directories_within`
+terminates for a target outside its root. Implementations that had been duplicated and had begun to
+diverge — the adapter's parallel `ActionGate`, two `HostLlmClient` copies, the enforcement DDL and
+projection applier, two config validators, three packaged YAML files — are reconciled and pinned.
+The lock now resolves cryptography `50.0.0`, matching the override CI installs against the audited
+Hermes host.
+
+Per-ingestion cost is now measured rather than assumed, and the measurement is recorded in
+[ADR 0009](adr/0009-incremental-relabeling.md). Contradiction detection, not relabeling, is the term
+that grows with episode length; relabeling stays whole-episode because reinstatement, defeat cycles,
+the iteration ceiling, time-driven staleness, and equal-priority conflicts are properties of the
+complete graph. The record is proposed and no code has changed for it, so what ships today is three
+whole-episode passes per ingestion, costing roughly 96 ms at around 500 beliefs.

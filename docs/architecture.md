@@ -44,7 +44,9 @@ batch and applies projections atomically. Explicit manifests, hash verification,
 compatibility. A private HMAC integrity key authenticates event hashes separately from the public
 chain. Authorization uses a second append-only enforcement chain and rebuildable
 `approval_receipts`/`action_decisions`; schema v6 installs them without changing v1 projection
-material.
+material. Schema v7 adds no table: it rewrites legacy unscoped `idempotency` keys into the
+episode-scoped form that replay rebuilds, so a database written before that scoping can be opened
+again.
 
 ```text
 normalize invocation -> policy/preconditions -> exact approval receipt
@@ -61,3 +63,12 @@ The justification graph is acyclic on write while REBUT/UNDERCUT edges may cycle
 live supports, justification premises, visible lexicographic priority, structural retraction, and
 fixed-point reinstatement. No lock or transaction spans a provider call, approval wait, or external
 handler.
+
+Admitting beliefs runs three whole-episode passes: deterministic contradiction detection,
+relabeling, and passive-task completion. Relabeling is whole-episode by decision rather than by
+accident — reinstatement, defeat-cycle detection, the iteration ceiling, time-driven staleness, and
+equal-priority conflicts are all properties of the complete graph, so no dirty set derived from
+appended events would be sound. Contradiction detection is the term that grows with episode length,
+because its pairwise scan restarts from nothing on every ingestion. Measured costs, the operational
+threshold they imply, and the conditions under which detection may become incremental are in
+[ADR 0009](adr/0009-incremental-relabeling.md), which is proposed and has changed no code.

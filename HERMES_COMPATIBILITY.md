@@ -10,10 +10,17 @@ The audited adapter contract is pinned to Hermes Agent `0.19.0`, audited at comm
 
 Hermes `0.19.0` pins Pillow `12.2.0` and cryptography `46.0.7`, versions with published security
 advisories. The tested install contract therefore installs the exact Hermes host and then overrides
-those leaves with `Pillow>=12.3,<13` and `cryptography>=48.0.1,<50`. CI, clean-install smoke tests,
-and dependency audit all use that same sequence until Hermes relaxes its metadata. Pip may report
-the host's exact metadata pins as incompatible; do not downgrade the remediated leaves to silence
-that warning.
+those leaves with `Pillow>=12.3,<13` and `cryptography>=50.0.0,<51`. The lower bound is 50 because
+PYSEC-2026-3552 affects the 49 series; the ceiling exists only to keep the override deliberate, so
+raise both bounds together. All four CI jobs that install the host apply that sequence, including
+the dependency audit, and the frozen lock resolves cryptography `50.0.0` so the pinned resolution
+agrees with what CI installs.
+Pip may report the host's exact metadata pins as incompatible; do not downgrade the remediated
+leaves to silence that warning.
+
+One path has not caught up: `scripts/smoke_install.py` still applies `cryptography>=48.0.1,<50` to
+its clean-install environments, so the packaged smoke matrix tests the host against a 49 release
+rather than the remediated one. Raise that constant to match CI.
 
 Full mode requires all audited hooks plus `ctx.register_middleware("llm_request", ...)`.
 Older or contract-incompatible hosts enter an explicitly reported diagnostics-only mode;

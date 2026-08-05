@@ -138,3 +138,27 @@ model provider.
 | `UV_CACHE_DIR=/tmp/belief-ledger-release-v020-uv uv run --no-sync python scripts/verify_stage.py all` | 1 | Every check through the offline Hermes contract passed; the isolated wheel build then stopped because the restricted sandbox could not resolve PyPI for Hatchling. |
 | The same complete gate with dependency-network access | 0 | 323 tests passed at 88.05% branch coverage; Ruff, mypy, boundaries, product claims, frozen fixtures, offline evaluations, examples, policy/contract checks, five-wheel inspection, Twine, and the five-mode clean-install matrix passed. |
 | Release build manifest | 0 | `build/artifacts-20260801T192311840024Z.json` records the five synchronized `1.0.0rc3` wheels used by inspection and smoke qualification; build outputs remain local and ignored. |
+
+## Documentation reconciliation — 2026-08-05
+
+Pull requests #14, #15, #16, #18, #19, #20, #21, and #22 merged to `main` after the v0.2.0
+qualification above, each through the `ci-complete` gate. #18 and #21 changed behaviour and
+dependencies without updating any document, so the documentation set had drifted from the code in
+three places. This pass corrects the drift; it changes no source, schema, or test.
+
+| Document | Correction |
+|---|---|
+| `docs/upgrade-and-rollback.md`, `docs/operations.md`, `docs/architecture.md` | Described schema 6 as the current schema. `LATEST_SCHEMA_VERSION` is 7. Schema 7 is a data migration that rewrites legacy unscoped `idempotency` rows into the episode-scoped form replay rebuilds; the forward-upgrade, backup-naming, and rollback text now covers it. |
+| `HERMES_COMPATIBILITY.md`, `docs/integrations/hermes.md` | Documented the Hermes leaf override as `cryptography>=48.0.1,<50`. Every CI job that installs the host now installs `>=50.0.0,<51` because PYSEC-2026-3552 affects the 49 series, and #21 moved the lock to `50.0.0` to match. |
+| `CHANGELOG.md`, `docs/current-state-rc3.md` | `## Unreleased` and the post-v0.2.0 narrative stopped at #16; both now cover the #18 review remediation, the dependency moves, and ADR 0009. |
+| `docs/adr/README.md`, `README.md`, `docs/requirements-traceability.md` | ADR 0009 was reachable only by listing the directory, and no ADR index existed. Added one, linked it from the README, and traced the whole-episode read invariant and the schema 7 normalization to the tests that pin them. |
+
+| Command | Exit | Result |
+|---|---:|---|
+| `uv run --no-sync python scripts/check_product_claims.py` | 0 | Product claims valid across the 10 public metadata files after the README and Hermes-integration edits. |
+| `uv run --no-sync python -m pytest tests/unit/test_product_claims.py tests/contract/test_workspace_packages.py -q` | 0 | 4 passed. These are the checks that read the edited public documents; no other gate observes Markdown. |
+
+Open item, not fixed here because it is a code change: `scripts/smoke_install.py` still applies
+`cryptography>=48.0.1,<50` to its clean-install environments, so the packaged smoke matrix installs
+a 49 release against the audited host while CI installs `>=50.0.0,<51` everywhere else. The
+divergence is recorded in `HERMES_COMPATIBILITY.md` until the constant is raised.

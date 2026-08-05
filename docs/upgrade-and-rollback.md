@@ -27,10 +27,16 @@ normally contain `.ledger.integrity.key`; the backward-compatible Hermes profile
 
 ## Forward upgrade
 
-Databases older than rc2 move forward to schema 6 on first open. The migration creates
-`ledger.sqlite3.pre-vN.<timestamp>.bak` before DDL, where `N` is the first pending migration. RC3
-retains schema 6; it adds no replacement event format. Schema 6 adds enforcement events and
-decision projections while v1 event bytes and `projection_hash_v1` remain unchanged.
+Databases behind the current schema move forward on first open. The migration creates
+`ledger.sqlite3.pre-vN.<timestamp>.bak` before DDL, where `N` is the first pending migration, so a
+database at schema 6 is backed up as `pre-v7`.
+
+The current schema is 7. No migration since rc2 introduces a replacement event format: v1 event
+bytes and `projection_hash_v1` remain unchanged throughout. Schema 6 adds enforcement events and
+decision projections. Schema 7 adds no table — it rewrites stored `idempotency` rows from the older
+unscoped key form into the episode-scoped form, because replay always rebuilds that projection
+scoped and a database still holding legacy rows would fail its projection check and refuse to open.
+The rewrite drops a legacy row only where the scoped row it maps to already exists.
 
 After upgrading a neutral root, run `ledger status`, `ledger verify-chain`, and `ledger replay` with
 the explicit `--state-root`. After upgrading Hermes, run `doctor`, `db verify-chain`, and
@@ -42,7 +48,9 @@ reported effective profile, then validate the active policy again.
 Rollback is code rollback plus database restore. Stop all processes, preserve the failed-upgrade
 files for investigation, restore the checkpoint or pre-migration database together with its
 matching integrity key and configuration, and remove stale `-wal`/`-shm` only while every process
-is stopped. Install the prior code and verify the chain before restart.
+is stopped. Install the prior code and verify the chain before restart. Older code refuses a
+database whose recorded schema is newer than the schema it supports instead of opening it, so
+restoring the matching `pre-vN` backup is the only supported way back.
 
 Do not point older code at a database after schema-6 enforcement events have been written; it may
 not understand the authorization event family. A decision consumed before a crash remains

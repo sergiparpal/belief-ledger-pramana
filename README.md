@@ -154,4 +154,5 @@ MCP, and the Hermes adapter. Builds, checks, and smoke installs do not publish, 
 open a pull request. GitHub release `v0.2.0` records the complete RC3 source state but does not
 publish the distributions to a package registry or upload built wheels or sdists. See
 [CHANGELOG.md](CHANGELOG.md), [RELEASE_NOTES.md](RELEASE_NOTES.md), and
-[the product-surface ADR](docs/adr/0007-host-neutral-product-surface.md).
+[the product-surface ADR](docs/adr/0007-host-neutral-product-surface.md). The
+[decision records](docs/adr/README.md) index every decision that constrains the implementation.
