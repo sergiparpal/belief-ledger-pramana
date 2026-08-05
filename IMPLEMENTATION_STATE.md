@@ -2,8 +2,8 @@
 
 This file is the completed, frozen `1.0.0rc1` baseline. Its entries intentionally retain the
 then-current Hermes 0.18.2 contract, package version, and local-gate evidence. For the current
-`1.0.0rc3` workspace architecture and release qualification, see
-[`docs/current-state-rc3.md`](docs/current-state-rc3.md),
+`1.0.0rc4` workspace architecture and release qualification, see
+[`docs/current-state-rc4.md`](docs/current-state-rc4.md),
 [`docs/architecture.md`](docs/architecture.md), and
 [`HERMES_COMPATIBILITY.md`](HERMES_COMPATIBILITY.md). Those documents do not revise the historical
 baseline evidence below.
@@ -150,7 +150,7 @@ three places. This pass corrects the drift; it changes no source, schema, or tes
 |---|---|
 | `docs/upgrade-and-rollback.md`, `docs/operations.md`, `docs/architecture.md` | Described schema 6 as the current schema. `LATEST_SCHEMA_VERSION` is 7. Schema 7 is a data migration that rewrites legacy unscoped `idempotency` rows into the episode-scoped form replay rebuilds; the forward-upgrade, backup-naming, and rollback text now covers it. |
 | `HERMES_COMPATIBILITY.md`, `docs/integrations/hermes.md` | Documented the Hermes leaf override as `cryptography>=48.0.1,<50`. Every CI job that installs the host now installs `>=50.0.0,<51` because PYSEC-2026-3552 affects the 49 series, and #21 moved the lock to `50.0.0` to match. |
-| `CHANGELOG.md`, `docs/current-state-rc3.md` | `## Unreleased` and the post-v0.2.0 narrative stopped at #16; both now cover the #18 review remediation, the dependency moves, and ADR 0009. |
+| `CHANGELOG.md`, `docs/current-state-rc4.md` (then `-rc3`) | `## Unreleased` and the post-v0.2.0 narrative stopped at #16; both now cover the #18 review remediation, the dependency moves, and ADR 0009. |
 | `docs/adr/README.md`, `README.md`, `docs/requirements-traceability.md` | ADR 0009 was reachable only by listing the directory, and no ADR index existed. Added one, linked it from the README, and traced the whole-episode read invariant and the schema 7 normalization to the tests that pin them. |
 
 | Command | Exit | Result |
@@ -177,3 +177,40 @@ was still exercising a release covered by PYSEC-2026-3552.
 
 The override itself is exercised by the packaging job's `--matrix ... ,hermes` run, which needs
 built wheels and network access to install the host; CI performs that check on this change.
+
+## v0.2.1 GitHub release qualification — 2026-08-05
+
+The five synchronized workspace distributions advanced from `1.0.0rc3` to `1.0.0rc4` because their
+code changed after v0.2.0; the product surface itself is unchanged. `docs/current-state-rc3.md` was
+renamed to `docs/current-state-rc4.md` and rewritten from "unreleased corrections on `main`" into
+the released state. This release publishes GitHub-generated source archives only; it does not upload
+the locally built wheels, publish to a package registry, sign artifacts, or call a live model
+provider.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `uv lock --check` | 0 | Frozen resolution succeeds with 80 packages at the bumped versions. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | 257 files formatted; no lint findings. |
+| `mypy packages/core/src packages/gateway/src packages/mcp/src packages/reference/src belief_ledger_pramana` | 0 | Strict typing passes for 146 source files. |
+| `pytest -m "not live_llm" --cov ... --cov-branch` | 0 | 353 passed; 88.18% combined coverage against the 88% floor. Ten warnings: the intentional `LedgerRuntime` deprecations and two SQLite `ResourceWarning`s. |
+| Dependency boundary / workspace boundary / product claims | 0 / 0 / 0 | All pass after the version bump and the release-document edits. |
+| Examples, gateway demo, offline Suites A–E, policy validate | 0 | Evaluation report passes; policy validates at normalized schema 2. |
+| `scripts/check_hermes_contract.py --allow-missing` | 0 | Installed host reports 0.19.0 with every audited capability present. CI's `exact-hermes-contract` job pins the commit against a checkout. |
+| Five-wheel build / artifact inspection | 0 / 0 | `build/artifacts-20260805T215737968413Z.json` records the five `1.0.0rc4` wheels; required contents present, forbidden contents absent. |
+| `twine check` on the five wheels | 0 | All five PASSED. Run through `uvx --from twine==7.0.0`, see below. |
+| `scripts/smoke_install.py --matrix core,core+gateway,core+reference,core+gateway+mcp,hermes` | 0 | All five clean-install modes pass and report `1.0.0rc4`. |
+| `pip-audit --ignore-vuln CVE-2026-10221 --ignore-vuln CVE-2026-10224` | 0 | No known vulnerabilities; the five unpublished workspace packages are skipped. |
+
+One gate run failed before this one and neither failure was a defect in the release:
+
+- `test_corrupted_unicode_tool_results_remain_bounded_and_replayable` raised `FlakyFailure`: the
+  first call took 345.69 ms against Hypothesis' 200 ms default deadline and 166.45 ms on retry. The
+  property held; only the timing gate failed. Both ledger-backed property tests now set
+  `deadline=None`, since each example drives real SQLite work and the gate runs them under coverage
+  instrumentation. No assertion was weakened.
+- `python -m twine check` could not import: `hermes-agent` downgrades `packaging` to 26.0 in the
+  shared local venv and twine 7 needs `packaging.errors` from 26.2, which the lock pins. CI never
+  hits this because `all-wheel-artifacts` does not install the host. Re-run in isolation with
+  `uvx --from twine==7.0.0 twine check build/workspace-*/*.whl`, which passed. `scripts/verify_stage.py`
+  still invokes the venv's twine, so the complete local gate cannot finish in a venv that also has
+  Hermes installed.

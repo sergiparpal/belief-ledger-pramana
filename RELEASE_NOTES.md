@@ -1,4 +1,107 @@
-# Belief Ledger v0.2.0
+# Belief Ledger v0.2.1
+
+This GitHub source release contains all repository changes after `v0.2.0`. It is a correctness
+release over the `v0.2.0` product surface: no feature is added and none is removed, and the package
+layout, public API, CLI, protocol, plugin entry point, and audited Hermes contract are unchanged.
+The five synchronized distributions advance to `1.0.0rc4` because their code changed:
+`belief-ledger-core`, `belief-ledger-gateway`, `belief-ledger-mcp`, `belief-ledger-reference`, and
+`belief-ledger-pramana`.
+
+## Operators running v0.2.0 should read this
+
+**The finalized-episode permit boundary was enforced only by revocation.** `v0.2.0` claimed permits
+were hardened against finalized-episode reuse, but that claim rested on out-of-transaction
+bookkeeping: `finalize_episode` revoked permits in a second transaction and `consume_permission`
+never re-read episode state. A finalize whose revocation did not run left the episode `finalized`
+with live permits, and a retry skipped the revoke entirely because the episode was already
+`finalized`, so the condition could not be repaired. Episode lifecycle is now a precondition checked
+inside the authorization transaction alongside support and conflict state ([ADR
+0008](docs/adr/0008-permit-lifecycle-fails-closed-on-finalized-episodes.md)); the revoke runs
+unconditionally so a retry repairs a partial finalize; and `revoke_for_episode` retries on ordinary
+SQLite contention.
+
+**Schema 7 can rescue a database that `v0.2.0` could no longer open.** Idempotency keys became
+episode-scoped after schema 6, but existing rows kept the unscoped form while only new rows were
+written scoped. Because replay always rebuilds that projection scoped, a database holding legacy
+rows failed its projection check and refused to open at all. Schema 7 normalizes the stored form
+once on first open, behind the usual pre-migration backup. It changes no event bytes and no
+`projection_hash_v1`.
+
+**One caller-visible behaviour change.** `request_id` is excluded from the gateway idempotency
+fingerprint, so a retry correlated with a fresh `request_id` under the same idempotency key is now
+served the cached response instead of `IDEMPOTENCY_KEY_REUSED`. A genuinely different payload under
+the same key still fails.
+
+## Highlights
+
+- Backed gateway idempotency with the ledger's durable layer, so a replayed `evidence.ingest`
+  cannot double-ingest after cache eviction or a process restart. Bounded the JSONL reader so an
+  oversized line is rejected without ever buffering past `max_line_bytes`, its remainder is drained
+  to the next newline, and the stream resynchronizes.
+- Made the action gate fail closed rather than raise when an argument cannot be encoded, and guarded
+  the unchecked source lookups that raised `KeyError` on other fail-closed paths.
+- Fixed `negotiate_profile` reporting a profile the host cannot actually perform, and wired the
+  permit revalidation callbacks that were never connected to anything.
+- Scoped the permit conflict check to the binding's episode in both queries and unified them on
+  `state='open'`; stopped `to_primitive` from serializing underscore-prefixed dataclass fields,
+  which structurally keeps `ActionPermit._raw_token` out of every derived representation.
+- Wrote every timestamp in the trailing-`Z` form. Two writers stored `+00:00`, which sorts before
+  digits and silently reversed text ordering for the rows they wrote.
+- Replaced the Hermes adapter's parallel `ActionGate`, which had already diverged from core on the
+  audited `args_hash` encoding, with a re-export; reconciled and pinned the two `HostLlmClient`
+  copies, the enforcement DDL and projection applier, the two config validators, and the three
+  packaged YAML files.
+- Bumped cryptography to `50.0.0` in the lock and raised the clean-install smoke matrix's override
+  to `>=50.0.0,<51`; `49.0.0` is affected by PYSEC-2026-3552 and the smoke matrix was the one path
+  still installing it against the audited host.
+- Recorded [ADR 0009](docs/adr/0009-incremental-relabeling.md): measurement attributes per-ingestion
+  cost to contradiction detection, not relabeling, so the relabel fixed point stays whole-episode
+  and only detection becomes incremental. Proposed; no code has changed for it.
+
+The behavioural corrections in this release ship with regression coverage that fails against the
+previous code. See [CHANGELOG.md](CHANGELOG.md) for the complete list and
+[docs/current-state-rc4.md](docs/current-state-rc4.md) for the narrative.
+
+## Compatibility and operations
+
+Frozen v1 event bytes and `projection_hash_v1` remain unchanged. The current database schema is 7;
+it adds no table and rewrites stored `idempotency` rows into the episode-scoped form, backed up as
+`ledger.sqlite3.pre-v7.<timestamp>.bak` before the migration runs. Rollback remains code rollback
+plus database restore from that backup, since older code refuses a database whose recorded schema is
+newer than the schema it supports. Neutral core/gateway/MCP/reference state uses
+`.ledger.integrity.key`; the retained Hermes profile uses `locks/ledger.integrity.key`. Restore only
+the key that belongs to the matching database.
+
+The audited Hermes host still pins stale Pillow and cryptography leaves. The tested combination
+keeps Hermes Agent 0.19.0 while overriding those leaves with `Pillow>=12.3,<13` and
+`cryptography>=50.0.0,<51`; the expected metadata incompatibility warning is documented, and CI and
+the clean-install smoke matrix now both test that secured combination.
+
+## Qualification
+
+The complete local release gate passed on Python 3.13 against the audited Hermes Agent 0.19.0 host:
+353 non-live tests at 88.18% combined branch coverage, Ruff formatting and lint over 257 files,
+strict mypy across 146 source files, a frozen 80-package lock, dependency/workspace/product-claim
+boundaries, the deployment-gate and custom-tool examples, the neutral gateway demo, offline
+evaluation Suites A–E, policy and Hermes contract checks, a five-wheel build with content
+inspection, Twine metadata validation, `pip-audit` with the two documented Hermes false-positive
+exceptions, and clean installs for `core`, `core+gateway`, `core+reference`, `core+gateway+mcp`, and
+the secured `hermes` combination — all five reporting `1.0.0rc4`. The ten test warnings are the
+intentional `LedgerRuntime` compatibility deprecations and two SQLite `ResourceWarning`s from
+garbage-collected test connections.
+
+Two property tests lost their Hypothesis deadline in this release. Both drive real SQLite work per
+example, so under the gate's coverage instrumentation the 200 ms default measured machine load
+rather than the property, and it failed a gate run while the property itself held. No assertion
+changed.
+
+## Distribution
+
+GitHub provides the tag and generated source archives. This release does not publish the five
+Python distributions to a package registry, upload built wheels or sdists, sign artifacts, or
+contact a live model provider.
+
+## v0.2.0
 
 This GitHub source release contains all repository changes after `v0.1.3`. It completes the
 host-neutral RC3 product surface while retaining the backward-compatible Hermes 1.x adapter. The
@@ -6,7 +109,7 @@ workspace contains five synchronized `1.0.0rc3` release-candidate distributions:
 `belief-ledger-core`, `belief-ledger-gateway`, `belief-ledger-mcp`,
 `belief-ledger-reference`, and `belief-ledger-pramana`.
 
-## Highlights
+### Highlights
 
 - Added the generic `belief_ledger_core.BeliefLedger` API for lifecycle, normalized evidence,
   exact approvals, opaque single-use permits, output evaluation, query, explanation, chain
@@ -25,7 +128,7 @@ workspace contains five synchronized `1.0.0rc3` release-candidate distributions:
 - Expanded the host-neutral quickstart, Python API, policy-review, backup, event-integrity, and
   upgrade/rollback documentation.
 
-## Compatibility and operations
+### Compatibility and operations
 
 Frozen v1 event bytes and `projection_hash_v1` remain unchanged. Schema 6 remains the current
 database schema and keeps authorization events in a separate append-only enforcement chain.
@@ -37,7 +140,7 @@ keeps Hermes Agent 0.19.0 while overriding those leaves with `Pillow>=12.3,<13` 
 `cryptography>=48.0.1,<50`; the expected metadata incompatibility warning is documented and CI
 tests that secured combination.
 
-## Qualification
+### Qualification
 
 The complete local release gate passed on Python 3.13: 323 non-live tests at 88.05% combined branch
 coverage, Ruff formatting/lint, strict mypy across 146 source files, dependency/workspace/product
@@ -46,7 +149,7 @@ contract checks, five-wheel build and content inspection, Twine metadata validat
 installs for core, gateway, reference, MCP, and the secured Hermes combination. The eight test
 warnings are the intentional `LedgerRuntime` compatibility deprecations.
 
-## Distribution
+### Distribution
 
 GitHub provides the tag and generated source archives. This release does not publish the five
 Python distributions to a package registry, upload built wheels or sdists, sign artifacts, or

@@ -1,4 +1,4 @@
-# Release state: v0.2.0 / 1.0.0rc3
+# Release state: v0.2.1 / 1.0.0rc4
 
 The workspace contains five synchronized local release-candidate distributions: core, gateway,
 reference, MCP, and the backward-compatible Hermes adapter. Core is the canonical Python API;
@@ -7,13 +7,15 @@ inspection and an action proxy; Hermes retains its 1.x public surfaces.
 
 Frozen v1 event fixtures and released historical documents remain unchanged. Current verification
 is defined by `scripts/verify_stage.py all`, including workspace boundaries, product claims, generic
-examples, five-wheel inspection, Twine metadata, and clean-install modes. GitHub release `v0.2.0`
+examples, five-wheel inspection, Twine metadata, and clean-install modes. GitHub release `v0.2.1`
 publishes this repository state as generated source archives. The five Python distributions remain
 unpublished to package registries; no built distribution is uploaded or signed by the release.
 
-## Post-v0.2.0 corrections on `main`
+`v0.2.1` is a correctness release over the `v0.2.0` product surface. It adds no feature and removes
+none: the package layout, public API, CLI, protocol, plugin entry point, and audited Hermes contract
+are those of `v0.2.0`. The five distributions advance to `1.0.0rc4` because their code changed.
 
-These changes are merged and unreleased. They are listed under `## Unreleased` in `CHANGELOG.md`.
+## What v0.2.1 corrects
 
 `v0.2.0` claimed permits were hardened against finalized-episode reuse. That claim rested on
 out-of-transaction bookkeeping: `finalize_episode` revoked permits in a second transaction, and

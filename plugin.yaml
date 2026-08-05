@@ -1,6 +1,6 @@
 manifest_version: 1
 name: belief-ledger-pramana
-version: 1.0.0rc3
+version: 1.0.0rc4
 kind: standalone
 description: Evidence-backed policy enforcement for AI agents
 provides_tools:
