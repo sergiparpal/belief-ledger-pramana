@@ -270,7 +270,11 @@ class HermesHooks:
             service = self.runtime.service(**parent_kwargs)
             summary = str(kwargs.get("child_summary") or "")
             if summary:
-                parent_kwargs.pop("duration_ms", None)
+                # Drop every name passed explicitly below before splatting. A host that adds
+                # any of them to its subagent_stop payload would otherwise raise a
+                # duplicate-keyword TypeError and silently lose the summary.
+                for reserved in ("duration_ms", "tool_call_id", "status"):
+                    parent_kwargs.pop(reserved, None)
                 service.ingest_tool_result(
                     "delegate_task",
                     {

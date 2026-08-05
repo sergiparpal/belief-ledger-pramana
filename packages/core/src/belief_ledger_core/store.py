@@ -214,10 +214,13 @@ class LedgerStore:
                 if task is None or str(task["state"]) != "open":
                     return []
             if idempotency_key:
+                # Schema v7 normalized every stored key to the episode-scoped form, so a
+                # single lookup is exhaustive. Matching the unscoped form as well would
+                # reintroduce cross-episode collisions on a caller-chosen key.
                 existing = connection.execute(
                     "SELECT event_ids_json FROM idempotency "
-                    "WHERE episode_id=? AND idempotency_key IN (?,?)",
-                    (episode_id, storage_idempotency_key, idempotency_key),
+                    "WHERE episode_id=? AND idempotency_key=?",
+                    (episode_id, storage_idempotency_key),
                 ).fetchone()
                 if existing:
                     existing_events = self._events_by_ids(connection, json.loads(str(existing[0])))
@@ -712,7 +715,9 @@ class LedgerStore:
         tokens = re.findall(r"[\w.-]+", query, re.UNICODE)[:20]
         if not tokens:
             return ()
-        expression = " OR ".join('"' + token.replace('"', '""') + '"' for token in tokens)
+        # The tokenizer above cannot emit a double quote, so each token is quoted as an FTS5
+        # string literal without needing to be escaped.
+        expression = " OR ".join(f'"{token}"' for token in tokens)
         try:
             with self.connect() as connection:
                 rows = connection.execute(
@@ -776,7 +781,10 @@ class LedgerStore:
 
     def verify_hash_chain(self) -> tuple[bool, str]:
         expected_heads: dict[str, tuple[int, str]] = {}
-        for event in self.events():
+        # Stream rather than materialize: this runs on every open through
+        # `verify_or_replay`, and a long-lived ledger should not require the whole event
+        # history to be resident at once.
+        for event in self._iter_authenticated_events():
             previous = expected_heads.get(event.episode_id, (0, ZERO_HASH))[1]
             if event.previous_hash != previous:
                 raise HashChainError(
@@ -813,6 +821,17 @@ class LedgerStore:
             raise HashChainError("event head projection does not match event history")
         digest = canonical_json(expected_heads)
         return True, digest
+
+    def _iter_authenticated_events(self, batch_size: int = 1_000) -> Iterable[Event]:
+        """Yield every authenticated event in sequence order without buffering all of them."""
+
+        with self.connect() as connection:
+            cursor = connection.execute("SELECT * FROM events ORDER BY seq")
+            while True:
+                rows = cursor.fetchmany(batch_size)
+                if not rows:
+                    return
+                yield from self._authenticated_events(connection, rows)
 
     def _authenticated_events(
         self, connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]
@@ -1353,38 +1372,6 @@ def _hydrate_justifications(
 def _chunks(values: Sequence[str], size: int = 900) -> Iterable[list[str]]:
     for offset in range(0, len(values), size):
         yield list(values[offset : offset + size])
-
-
-def _belief_evidence(connection: sqlite3.Connection, belief_id: str) -> tuple[EvidenceRef, ...]:
-    rows = connection.execute(
-        "SELECT evidence_id,span_json FROM belief_evidence WHERE belief_id=? ORDER BY evidence_id,span_json",
-        (belief_id,),
-    ).fetchall()
-    return tuple(
-        EvidenceRef(
-            evidence_id=str(row["evidence_id"]),
-            span=tuple(json.loads(str(row["span_json"]))) if row["span_json"] else None,
-        )
-        for row in rows
-    )
-
-
-def _belief_justifications(
-    connection: sqlite3.Connection, belief_id: str
-) -> tuple[Justification, ...]:
-    rows = connection.execute(
-        "SELECT id,belief_id,warrant,audit_json,alternatives_json FROM justifications WHERE belief_id=? ORDER BY id",
-        (belief_id,),
-    ).fetchall()
-    return tuple(_justification_from_row(connection, row) for row in rows)
-
-
-def _justification_from_row(connection: sqlite3.Connection, row: sqlite3.Row) -> Justification:
-    premise_rows = connection.execute(
-        "SELECT premise_belief_id FROM justification_premises WHERE justification_id=? ORDER BY ordinal",
-        (str(row["id"]),),
-    ).fetchall()
-    return _justification_from_parts(row, [str(item[0]) for item in premise_rows])
 
 
 def _justification_from_parts(row: sqlite3.Row, premises: Sequence[str]) -> Justification:

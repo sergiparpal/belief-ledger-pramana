@@ -10,7 +10,8 @@ from typing import Any
 
 from ..dependencies import RuntimeDependencies, StructuredModelPort, StructuredModelRequest
 from ..errors import LlmReservationError
-from ..events import EventDraft, content_hash
+from ..events import EventDraft
+from ..ingestion.tool import redacted_content_hash
 from ..models import ComponentVerdict, LlmUsage
 from ..store import LedgerStore
 
@@ -154,7 +155,9 @@ class HostLlmClient:
             episode_id=episode_id,
             component=purpose.split(".")[-1],
             purpose=purpose,
-            input_hash=content_hash(text),
+            # Redact before hashing so this digest matches the one adapters compare against
+            # via `component_verdict_input_hashes`, and so it never commits to a credential.
+            input_hash=redacted_content_hash(text),
             outcome=outcome,
             belief_id=None,
             detail={"schema_name": schema_name},

@@ -7,7 +7,7 @@ import sqlite3
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from .events import canonical_json, content_hash
+from .events import canonical_json, content_hash, isoformat_utc
 from .models import Event
 
 ProjectionHandler = Callable[[sqlite3.Connection, Event], None]
@@ -47,9 +47,12 @@ def _apply_episode_turn_started(connection: sqlite3.Connection, event: Event) ->
 
 
 def _apply_episode_stakes_changed(connection: sqlite3.Connection, event: Event) -> None:
+    # `isoformat_utc`, not `datetime.isoformat`: every other writer stores the trailing-Z
+    # form, and these columns are compared and ordered as text. A `+00:00` suffix sorts
+    # before `Z`, so a mixed encoding silently reverses `ORDER BY updated_at`.
     connection.execute(
         "UPDATE episodes SET default_stakes=?,updated_at=? WHERE id=?",
-        (str(event.payload["to"]), event.timestamp.isoformat(), event.episode_id),
+        (str(event.payload["to"]), isoformat_utc(event.timestamp), event.episode_id),
     )
 
 
@@ -166,12 +169,22 @@ def _apply_belief_observation_refreshed(connection: sqlite3.Connection, event: E
         "UPDATE beliefs SET observed_at=? WHERE id=?",
         (str(payload["observed_at"]), event.aggregate_id),
     )
+    # SQLite permits repeated NULLs in a non-INTEGER primary key, so `INSERT OR IGNORE` alone
+    # would not deduplicate a NULL span and the same reference would accumulate a new row on
+    # every refresh. `IS` is the NULL-safe comparison that makes the guard cover both cases.
+    span_json = canonical_json(payload["span"]) if payload.get("span") is not None else None
     connection.execute(
-        "INSERT INTO belief_evidence(belief_id,evidence_id,span_json) VALUES (?,?,?)",
+        "INSERT INTO belief_evidence(belief_id,evidence_id,span_json) "
+        "SELECT ?,?,? WHERE NOT EXISTS ("
+        " SELECT 1 FROM belief_evidence WHERE belief_id=? AND evidence_id=? AND span_json IS ?"
+        ")",
         (
             event.aggregate_id,
             str(payload["evidence_id"]),
-            canonical_json(payload["span"]) if payload.get("span") is not None else None,
+            span_json,
+            event.aggregate_id,
+            str(payload["evidence_id"]),
+            span_json,
         ),
     )
 

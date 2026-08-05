@@ -227,28 +227,50 @@ def test_lint_enforcement_has_bounded_behavior_for_every_stakes_policy() -> None
         relint=lambda value: passed if value == "good" else failed,
     )
     assert rewritten.passed and rewritten.replacement == "good"
-    fallback = enforce_report(
+    # Marking is only a usable outcome when the marked text actually re-lints clean.
+    marked_passes = enforce_report(
         "The moon is green.",
         failed,
         stakes=Stakes.MED,
         policy=policies,
         rewrite_once=lambda value: (_ for _ in ()).throw(RuntimeError()),
-        relint=lambda value: failed,
+        relint=lambda value: passed if "speculation:" in value else failed,
     )
-    assert fallback.replacement and fallback.replacement.count("speculation:") == 1
-    second_failure = enforce_report(
-        "The moon is green.",
-        failed,
-        stakes=Stakes.MED,
-        policy=policies,
-        rewrite_once=lambda value: value,
-        relint=lambda value: failed,
-    )
-    assert second_failure.replacement and "speculation:" in second_failure.replacement
-    no_callbacks = enforce_report("The moon is green.", failed, stakes=Stakes.MED, policy=policies)
-    assert no_callbacks.replacement and "speculation:" in no_callbacks.replacement
-    blocked = enforce_report("bad", failed, stakes=Stakes.HIGH, policy=policies)
-    assert blocked.replacement and blocked.replacement.startswith("Response blocked")
+    assert marked_passes.passed
+    assert marked_passes.replacement and marked_passes.replacement.count("speculation:") == 1
+
+    # Every remaining rewrite_once path fails to produce an acceptable response. A report that
+    # did not pass must never carry the candidate's own text as its replacement: the
+    # replacement is what a caller delivers, so returning it would defeat the block.
+    unacceptable = {
+        "rewrite_raises": enforce_report(
+            "The moon is green.",
+            failed,
+            stakes=Stakes.MED,
+            policy=policies,
+            rewrite_once=lambda value: (_ for _ in ()).throw(RuntimeError()),
+            relint=lambda value: failed,
+        ),
+        "rewrite_no_better": enforce_report(
+            "The moon is green.",
+            failed,
+            stakes=Stakes.MED,
+            policy=policies,
+            rewrite_once=lambda value: value,
+            relint=lambda value: failed,
+        ),
+        # rewrite_once with no callbacks cannot verify that marking helped, so it degrades to
+        # the blocking branch rather than returning unverified text.
+        "no_callbacks": enforce_report(
+            "The moon is green.", failed, stakes=Stakes.MED, policy=policies
+        ),
+        "block_policy": enforce_report("bad", failed, stakes=Stakes.HIGH, policy=policies),
+    }
+    for label, result in unacceptable.items():
+        assert not result.passed, label
+        assert result.replacement, label
+        assert result.replacement.startswith("Response blocked"), label
+        assert "speculation:" not in result.replacement, label
     assert "blocked" in linter_failure_response(Stakes.CRITICAL, "x")
     assert "warning" in linter_failure_response(Stakes.MED, "x").casefold()
 

@@ -60,11 +60,11 @@ def test_operator_cli_and_slash_command_cover_normal_workflow(runtime) -> None:
     assert json.loads(preflight) == {
         "backup_required": False,
         "config_digest": runtime.config.digest,
-        "current_schema": 6,
+        "current_schema": 7,
         "database": str(runtime.store.database),
         "dry_run": True,
         "migration_required": False,
-        "target_schema": 6,
+        "target_schema": 7,
         "writes_performed": False,
     }
 

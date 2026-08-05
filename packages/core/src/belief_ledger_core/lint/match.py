@@ -91,8 +91,7 @@ def deterministic_entailment(claim: str, belief: str) -> bool:
     # A deterministic shortcut must preserve predicate/argument order.  Any
     # paraphrase or reordered proposition is left to the bounded semantic
     # component instead of being accepted by an unordered bag of words.
-    return left_tokens == right_tokens and _negation_parity(left) == _negation_parity(right)
-
-
-def _negation_parity(text: str) -> bool:
-    return bool(re.search(r"\b(?:not|no|never|without|doesn't|isn't|cannot)\b", text))
+    #
+    # Negation parity needs no separate check: negation words are themselves tokens, so an
+    # identical token sequence already implies identical negation.
+    return left_tokens == right_tokens

@@ -77,10 +77,17 @@ class HostLlmClient:
         # Reserve before invoking the host model.  Checking counters alone is
         # racy when multiple hooks run at once or another process shares the
         # ledger database.
-        # Reserve a deliberately conservative byte-level estimate before the
-        # call. This remains safe for Unicode payloads without assuming a
-        # provider-specific tokenizer.
-        estimated_input = max(1, len((instructions + text + str(schema)).encode("utf-8")))
+        # A tokenizer cannot emit more ordinary tokens than the UTF-8 bytes it
+        # consumes. Include fixed framing headroom for provider request wrappers.
+        # Keep this identical to `belief_ledger_core.llm.client`: a divergent
+        # estimate would reserve a different budget for the same payload.
+        estimated_input = max(
+            1,
+            len(instructions.encode("utf-8"))
+            + len(text.encode("utf-8"))
+            + len(str(schema).encode("utf-8"))
+            + 1_024,
+        )
         try:
             reservation_id = self._store.reserve_llm_budget(
                 episode_id,

@@ -347,7 +347,10 @@ CREATE INDEX IF NOT EXISTS component_verdicts_episode_component_input_idx
 """
 
 
-SCHEMA_V6 = r"""
+# Shared with `belief_ledger_core.enforcement`, which creates the same tables when it opens a
+# database directly. Defining the DDL once keeps the migrated and directly-created shapes from
+# drifting apart.
+ENFORCEMENT_SCHEMA = r"""
 CREATE TABLE IF NOT EXISTS enforcement_schema_migrations (
   version INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL
@@ -412,6 +415,27 @@ BEFORE UPDATE OF state ON action_decisions
 WHEN OLD.state != 'issued' OR NEW.state NOT IN ('consumed','expired','revoked')
 BEGIN SELECT RAISE(ABORT, 'invalid action state transition'); END;
 """
+
+SCHEMA_V6 = ENFORCEMENT_SCHEMA
+
+
+# Idempotency keys became episode-scoped after v6, but existing rows kept the unscoped form
+# while only new rows were written scoped. `idempotency` is part of the frozen v1 projection
+# manifest and replay always rebuilds it scoped, so a database holding legacy rows produced a
+# projection mismatch and could no longer be opened. Normalize the stored form once.
+SCHEMA_V7 = r"""
+DELETE FROM idempotency
+WHERE substr(idempotency_key, 1, length(episode_id) + 1) <> episode_id || ':'
+  AND EXISTS (
+    SELECT 1 FROM idempotency AS scoped
+    WHERE scoped.idempotency_key = idempotency.episode_id || ':' || idempotency.idempotency_key
+  );
+UPDATE idempotency
+SET idempotency_key = episode_id || ':' || idempotency_key
+WHERE substr(idempotency_key, 1, length(episode_id) + 1) <> episode_id || ':';
+"""
+
+LATEST_SCHEMA_VERSION = 7
 
 
 PROJECTION_HASH_ALGORITHM = "sha256-canonical-json"
@@ -627,9 +651,12 @@ def migrate(
         from_version = versions[-1] if versions else 0
         if versions != list(range(1, from_version + 1)):
             raise RuntimeError(f"database has a non-contiguous migration history: {versions}")
-        if from_version > 6:
-            raise RuntimeError(f"database schema {from_version} is newer than supported schema 6")
-        if existed and from_version < 6:
+        if from_version > LATEST_SCHEMA_VERSION:
+            raise RuntimeError(
+                f"database schema {from_version} is newer than supported schema "
+                f"{LATEST_SCHEMA_VERSION}"
+            )
+        if existed and from_version < LATEST_SCHEMA_VERSION:
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
             backup = database.with_name(f"{database.name}.pre-v{from_version + 1}.{stamp}.bak")
             _online_backup(database, backup, busy_timeout_ms)
@@ -640,8 +667,9 @@ def migrate(
             4: SCHEMA_V4,
             5: SCHEMA_V5,
             6: SCHEMA_V6,
+            7: SCHEMA_V7,
         }
-        for version in range(from_version + 1, 7):
+        for version in range(from_version + 1, LATEST_SCHEMA_VERSION + 1):
             _execute_script(connection, schemas[version])
             if version == 3:
                 event_count = int(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0])
@@ -681,7 +709,10 @@ def migrate(
     except OSError:
         pass
     return MigrationResult(
-        from_version=from_version, to_version=6, backup=backup, fts5_available=fts5
+        from_version=from_version,
+        to_version=LATEST_SCHEMA_VERSION,
+        backup=backup,
+        fts5_available=fts5,
     )
 
 

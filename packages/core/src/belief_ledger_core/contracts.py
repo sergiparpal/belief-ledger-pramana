@@ -149,13 +149,17 @@ def negotiate_profile(
     if requested is EnforcementProfile.OBSERVE:
         return ProfileSelection(1, requested, requested, missing, reason_codes, False)
     if not allow_diagnostic_downgrade:
+        # The effective profile must never name enforcement the host cannot perform. A caller
+        # that only reads `effective` (a diagnostic surface, a capability report) would
+        # otherwise believe strict enforcement is active while a required capability is
+        # missing. `missing` and the CAPABILITY_SHORTFALL reason still carry the request.
         return ProfileSelection(
             1,
             requested,
-            requested,
+            EnforcementProfile.OBSERVE,
             missing,
             ("CAPABILITY_SHORTFALL", *reason_codes),
-            False,
+            True,
         )
     effective = capabilities.maximum_profile()
     return ProfileSelection(
@@ -178,8 +182,9 @@ class ToolInvocation:
     description: str = ""
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1:
-            return
+        # Freeze and validate on every version. Skipping this for an unrecognized
+        # schema_version left `arguments` mutable and the name unchecked on exactly the
+        # values a caller is least likely to have validated elsewhere.
         if not self.name or any(character in self.name for character in ("\x00", "\n", "\r")):
             raise ValueError("tool name must be a non-empty single-line string")
         object.__setattr__(

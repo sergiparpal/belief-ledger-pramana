@@ -16,6 +16,7 @@ from typing import Any, TypeVar
 
 from .dependencies import RuntimeDependencies
 from .events import canonical_json, content_hash, isoformat_utc
+from .migrations import ENFORCEMENT_SCHEMA
 from .store import _is_busy
 
 _T = TypeVar("_T")
@@ -114,11 +115,31 @@ class EnforcementStore:
         self.database.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.dependencies = dependencies
         self.busy_timeout_ms = busy_timeout_ms
+        self._journal_configured = False
+        self._colocated_projections: frozenset[str] = frozenset()
         connection = self._connect()
         try:
+            # `executescript` issues an implicit COMMIT, so the schema lands first and the
+            # backfill runs in its own transaction. Without that transaction a crash midway
+            # could leave the derived tables partly populated but the version stamp absent.
             connection.executescript(_SCHEMA)
-            self._migrate_decision_indexes(connection)
-            connection.commit()
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._migrate_decision_indexes(connection)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            # Record which ledger projections this database carries. When authorization state
+            # is co-located with the ledger (what `BeliefLedger` composes), permit
+            # revalidation reads them directly; a table that was present at open and is
+            # missing later means the projection was dropped underneath us, which must fail
+            # closed rather than silently skip the check.
+            self._colocated_projections = frozenset(
+                name
+                for name in ("beliefs", "episodes", "conflicts")
+                if _table_exists(connection, name)
+            )
         finally:
             connection.close()
         with suppress(OSError):
@@ -375,6 +396,15 @@ class EnforcementStore:
         support_is_active: Callable[[tuple[str, ...]], bool] | None = None,
         conflicts_are_closed: Callable[[tuple[str, ...]], bool] | None = None,
     ) -> ConsumeResult:
+        """Consume a permit exactly once, revalidating its binding and its live premises.
+
+        Support and conflict revalidation reads the ledger projections when this store shares
+        the ledger database, which is what `BeliefLedger` composes. A store opened on its own
+        database has no ledger to read: there the callbacks are the contract, and a caller
+        that supplies neither gets binding and single-use guarantees only. A projection that
+        was present when this store was opened and is missing now always fails closed.
+        """
+
         token_digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
         connection = self._connect()
         try:
@@ -402,7 +432,12 @@ class EnforcementStore:
             approval_reason = self._approval_reason(connection, stored, allow_consumed=True)
             if approval_reason:
                 return self._reject(connection, token_digest, approval_reason)
-            if not self._stored_episode_is_active(connection, stored):
+            # `None` from a stored check means this database never carried that projection,
+            # so the caller's callback is the only available evidence. An unanswered
+            # undeterminable check resolves to False: consumption never proceeds on a
+            # predicate nobody verified.
+            episode_ok = _resolve(self._stored_episode_is_active(connection, stored), None)
+            if not episode_ok:
                 connection.execute(
                     "UPDATE action_decisions SET state='revoked' "
                     "WHERE token_digest=? AND state='issued'",
@@ -411,12 +446,22 @@ class EnforcementStore:
                 return self._reject(
                     connection, token_digest, "EPISODE_FINALIZED", event="ACTION_DECISION_REVOKED"
                 )
-            support_ok = self._stored_supports_are_active(connection, stored)
-            conflicts_ok = self._stored_conflicts_are_closed(connection, stored)
-            if support_ok and support_is_active is not None:
-                support_ok = bool(support_is_active(stored.supporting_belief_ids))
-            if conflicts_ok and conflicts_are_closed is not None:
-                conflicts_ok = bool(conflicts_are_closed(stored.blocking_conflict_ids))
+            support_ok = _resolve(
+                self._stored_supports_are_active(connection, stored),
+                (
+                    (lambda: bool(support_is_active(stored.supporting_belief_ids)))
+                    if support_is_active is not None
+                    else None
+                ),
+            )
+            conflicts_ok = _resolve(
+                self._stored_conflicts_are_closed(connection, stored),
+                (
+                    (lambda: bool(conflicts_are_closed(stored.blocking_conflict_ids)))
+                    if conflicts_are_closed is not None
+                    else None
+                ),
+            )
             if support_ok is False:
                 connection.execute(
                     "UPDATE action_decisions SET state='revoked' WHERE token_digest=? AND state='issued'",
@@ -589,31 +634,18 @@ class EnforcementStore:
     def rebuild(self) -> bool:
         """Rebuild decision state from append-only events and verify exact equality."""
 
-        before = self.projection_snapshot()
         connection = self._connect()
         try:
+            # Snapshot inside the transaction that rebuilds. Reading `before` on a separate
+            # connection first would let a concurrent writer land between the two, and the
+            # equality check would then compare against state that never existed.
             connection.execute("BEGIN IMMEDIATE")
-            connection.execute("DELETE FROM action_decision_supports")
-            connection.execute("DELETE FROM action_decisions")
-            connection.execute("DELETE FROM approval_receipts")
-            rows = connection.execute(
-                "SELECT kind,payload_json FROM enforcement_events ORDER BY seq"
-            ).fetchall()
-            for row in rows:
-                self._apply_projection_event(
-                    connection, str(row["kind"]), json.loads(str(row["payload_json"]))
-                )
-            state: dict[str, list[dict[str, Any]]] = {}
-            for table in (
-                "approval_receipts",
-                "action_decisions",
-                "action_decision_episodes",
-                "action_decision_supports",
-            ):
-                projected = [dict(item) for item in connection.execute(f"SELECT * FROM {table}")]
-                projected.sort(key=canonical_json)
-                state[table] = projected
-            after = canonical_json(state)
+            before = enforcement_projection_snapshot(connection)
+            # Reuse the module-level rebuild and snapshot helpers rather than a second copy
+            # of the same projection logic: `LedgerStore.replay` calls those, and two
+            # implementations of one projection is how they drift.
+            rebuild_enforcement_projection(connection)
+            after = enforcement_projection_snapshot(connection)
             if before != after:
                 raise RuntimeError("enforcement projection replay mismatch")
             connection.commit()
@@ -623,78 +655,6 @@ class EnforcementStore:
             raise
         finally:
             connection.close()
-
-    def _apply_projection_event(
-        self, connection: sqlite3.Connection, kind: str, payload: dict[str, Any]
-    ) -> None:
-        if kind == "APPROVAL_RECEIPT_ISSUED":
-            binding = payload["binding"]
-            connection.execute(
-                "INSERT INTO approval_receipts"
-                "(digest,binding_digest,binding_json,issued_at,expires_at,state) "
-                "VALUES (?,?,?,?,?,'issued')",
-                (
-                    payload["receipt_digest"],
-                    payload["binding_digest"],
-                    canonical_json(binding),
-                    payload["issued_at"],
-                    payload["expires_at"],
-                ),
-            )
-        elif kind.startswith("APPROVAL_RECEIPT_"):
-            if kind == "APPROVAL_RECEIPT_DENIED":
-                connection.execute(
-                    "UPDATE approval_receipts SET state='revoked' "
-                    "WHERE binding_digest=? AND state='issued'",
-                    (payload["binding_digest"],),
-                )
-                return
-            state = {
-                "APPROVAL_RECEIPT_CONSUMED": "consumed",
-                "APPROVAL_RECEIPT_EXPIRED": "expired",
-                "APPROVAL_RECEIPT_REVOKED": "revoked",
-            }.get(kind)
-            if state:
-                connection.execute(
-                    "UPDATE approval_receipts SET state=? WHERE digest=? AND state='issued'",
-                    (state, payload["receipt_digest"]),
-                )
-        elif kind == "ACTION_DECISION_ISSUED":
-            binding = payload["binding"]
-            connection.execute(
-                "INSERT INTO action_decisions"
-                "(token_digest,binding_digest,binding_json,issued_at,expires_at,state) "
-                "VALUES (?,?,?,?,?,'issued')",
-                (
-                    payload["token_digest"],
-                    payload["binding_digest"],
-                    canonical_json(binding),
-                    payload["issued_at"],
-                    payload["expires_at"],
-                ),
-            )
-            connection.executemany(
-                "INSERT INTO action_decision_supports(token_digest,belief_id) VALUES (?,?)",
-                (
-                    (payload["token_digest"], belief_id)
-                    for belief_id in binding.get("supporting_belief_ids", ())
-                ),
-            )
-            connection.execute(
-                "INSERT INTO action_decision_episodes(token_digest,episode_id) VALUES (?,?)",
-                (payload["token_digest"], binding["episode_id"]),
-            )
-        else:
-            state = {
-                "ACTION_DECISION_CONSUMED": "consumed",
-                "ACTION_DECISION_EXPIRED": "expired",
-                "ACTION_DECISION_REVOKED": "revoked",
-            }.get(kind)
-            if state:
-                connection.execute(
-                    "UPDATE action_decisions SET state=? WHERE token_digest=? AND state='issued'",
-                    (state, payload["token_digest"]),
-                )
 
     def _approval_reason(
         self,
@@ -738,11 +698,26 @@ class EnforcementStore:
         )
         return None if approval == expected else "APPROVAL_BINDING_MISMATCH"
 
+    def _projection_readable(self, connection: sqlite3.Connection, name: str) -> bool | None:
+        """Whether `name` can be read, or `None` when this database never carried it.
+
+        `None` means the ledger is not co-located and the caller's revalidation callbacks are
+        the contract. `False` means the projection was present when this store was opened and
+        has since disappeared, which is a integrity failure and must fail closed.
+        """
+
+        if _table_exists(connection, name):
+            return True
+        return False if name in self._colocated_projections else None
+
     def _stored_supports_are_active(
         self, connection: sqlite3.Connection, binding: ActionBinding
-    ) -> bool:
-        if not binding.supporting_belief_ids or not _table_exists(connection, "beliefs"):
+    ) -> bool | None:
+        if not binding.supporting_belief_ids:
             return True
+        readable = self._projection_readable(connection, "beliefs")
+        if readable is not True:
+            return readable
         placeholders = ",".join("?" for _ in binding.supporting_belief_ids)
         count = connection.execute(
             f"SELECT COUNT(*) FROM beliefs WHERE episode_id=? AND status='in' "
@@ -753,9 +728,10 @@ class EnforcementStore:
 
     def _stored_episode_is_active(
         self, connection: sqlite3.Connection, binding: ActionBinding
-    ) -> bool:
-        if not _table_exists(connection, "episodes"):
-            return True
+    ) -> bool | None:
+        readable = self._projection_readable(connection, "episodes")
+        if readable is not True:
+            return readable
         row = connection.execute(
             "SELECT state FROM episodes WHERE id=?", (binding.episode_id,)
         ).fetchone()
@@ -763,9 +739,10 @@ class EnforcementStore:
 
     def _stored_conflicts_are_closed(
         self, connection: sqlite3.Connection, binding: ActionBinding
-    ) -> bool:
-        if not _table_exists(connection, "conflicts"):
-            return True
+    ) -> bool | None:
+        readable = self._projection_readable(connection, "conflicts")
+        if readable is not True:
+            return readable
         # Deliberately episode-wide, and therefore stricter than the permit's own
         # blocking_conflict_ids: any open conflict anywhere in the episode blocks
         # consumption. A conflict opened after the permit was issued is precisely the case
@@ -851,8 +828,13 @@ class EnforcementStore:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute(f"PRAGMA busy_timeout={int(self.busy_timeout_ms)}")
-        connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=FULL")
+        # `journal_mode` is a persistent database property, not a per-connection one, and
+        # setting it takes a write lock. This store opens a connection per operation, so it
+        # is applied once at construction instead of on every open.
+        if not self._journal_configured:
+            connection.execute("PRAGMA journal_mode=WAL")
+            self._journal_configured = True
         return connection
 
     def verify_hash_chain(self) -> tuple[bool, str]:
@@ -891,6 +873,21 @@ def _action_binding(value: dict[str, Any]) -> ActionBinding:
     value["supporting_belief_ids"] = tuple(value.get("supporting_belief_ids", ()))
     value["blocking_conflict_ids"] = tuple(value.get("blocking_conflict_ids", ()))
     return ActionBinding(**value)
+
+
+def _resolve(stored: bool | None, callback: Callable[[], bool] | None) -> bool:
+    """Combine a stored-projection verdict with the caller's revalidation callback.
+
+    `False` from the stored check is final: the projection is co-located and readable, and it
+    says the premise no longer holds. `None` means this store cannot judge, so the callback
+    decides; with no callback there is nothing to check and nothing was promised.
+    """
+
+    if stored is False:
+        return False
+    if callback is not None:
+        return callback()
+    return True
 
 
 def _table_exists(connection: sqlite3.Connection, name: str) -> bool:
@@ -1095,68 +1092,6 @@ def compact_enforcement_events(
     return tuple(compacted)
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS enforcement_schema_migrations (
-  version INTEGER PRIMARY KEY,
-  applied_at TEXT NOT NULL
-);
-INSERT OR IGNORE INTO enforcement_schema_migrations(version,applied_at)
-VALUES (1,'2026-07-22T00:00:00.000000Z');
-CREATE TABLE IF NOT EXISTS enforcement_events (
-  seq INTEGER PRIMARY KEY,
-  id TEXT NOT NULL UNIQUE,
-  at TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  payload_schema_version INTEGER NOT NULL,
-  payload_json TEXT NOT NULL,
-  previous_hash TEXT NOT NULL,
-  event_hash TEXT NOT NULL UNIQUE
-);
-CREATE TRIGGER IF NOT EXISTS enforcement_events_no_update
-BEFORE UPDATE ON enforcement_events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
-CREATE TRIGGER IF NOT EXISTS enforcement_events_no_delete
-BEFORE DELETE ON enforcement_events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
-CREATE TABLE IF NOT EXISTS approval_receipts (
-  digest TEXT PRIMARY KEY,
-  binding_digest TEXT NOT NULL,
-  binding_json TEXT NOT NULL,
-  issued_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  state TEXT NOT NULL CHECK(state IN ('issued','consumed','expired','revoked'))
-);
-CREATE TABLE IF NOT EXISTS action_decisions (
-  token_digest TEXT PRIMARY KEY,
-  binding_digest TEXT NOT NULL,
-  binding_json TEXT NOT NULL,
-  issued_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  state TEXT NOT NULL CHECK(state IN ('issued','consumed','expired','revoked'))
-);
-CREATE TABLE IF NOT EXISTS action_decision_supports (
-  token_digest TEXT NOT NULL REFERENCES action_decisions(token_digest) ON DELETE CASCADE,
-  belief_id TEXT NOT NULL,
-  PRIMARY KEY(token_digest,belief_id)
-);
-CREATE INDEX IF NOT EXISTS action_decision_supports_belief_idx
-ON action_decision_supports(belief_id,token_digest);
-CREATE TABLE IF NOT EXISTS action_decision_episodes (
-  token_digest TEXT PRIMARY KEY REFERENCES action_decisions(token_digest) ON DELETE CASCADE,
-  episode_id TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS action_decision_episodes_episode_idx
-ON action_decision_episodes(episode_id,token_digest);
-CREATE TRIGGER IF NOT EXISTS approval_receipts_immutable_fields
-BEFORE UPDATE OF digest,binding_digest,binding_json,issued_at,expires_at ON approval_receipts
-BEGIN SELECT RAISE(ABORT, 'approval binding is immutable'); END;
-CREATE TRIGGER IF NOT EXISTS approval_receipts_state_transition
-BEFORE UPDATE OF state ON approval_receipts
-WHEN OLD.state != 'issued' OR NEW.state NOT IN ('consumed','expired','revoked')
-BEGIN SELECT RAISE(ABORT, 'invalid approval state transition'); END;
-CREATE TRIGGER IF NOT EXISTS action_decisions_immutable_fields
-BEFORE UPDATE OF token_digest,binding_digest,binding_json,issued_at,expires_at ON action_decisions
-BEGIN SELECT RAISE(ABORT, 'action binding is immutable'); END;
-CREATE TRIGGER IF NOT EXISTS action_decisions_state_transition
-BEFORE UPDATE OF state ON action_decisions
-WHEN OLD.state != 'issued' OR NEW.state NOT IN ('consumed','expired','revoked')
-BEGIN SELECT RAISE(ABORT, 'invalid action state transition'); END;
-"""
+# The authoritative DDL lives in `migrations.ENFORCEMENT_SCHEMA` so a database created here
+# and one migrated by `migrations.migrate` cannot drift into different shapes.
+_SCHEMA = ENFORCEMENT_SCHEMA

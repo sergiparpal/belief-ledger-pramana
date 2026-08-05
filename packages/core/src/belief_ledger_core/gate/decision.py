@@ -2,27 +2,87 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import Any
+from typing import Any, Protocol, cast
 
 from ..engine.trust import determine_admission
 from ..events import EventDraft, canonical_json, content_hash
-from ..models import GateDecision, GateOutcome, Stakes, max_stakes
-from ..store import LedgerStore
+from ..ingestion.tool import redact_secrets
+from ..models import (
+    Belief,
+    Conflict,
+    Episode,
+    Event,
+    GateDecision,
+    GateOutcome,
+    Source,
+    Stakes,
+    max_stakes,
+)
 from .classify import ActionPolicyRegistry
 from .preconditions import resolve_preconditions
 
 
+class ActionGateReader(Protocol):
+    """Read model required to evaluate an action policy.
+
+    Deliberately narrowed to exactly the calls the gate makes, so both `LedgerStore` and a
+    port adapter satisfy it structurally without either widening its own signature.
+    """
+
+    def get_episode(self, episode_id: str) -> Episode | None: ...
+
+    def list_beliefs(self, episode_id: str) -> list[Belief]: ...
+
+    def list_sources(self, episode_id: str) -> list[Source]: ...
+
+    def list_conflicts(self, episode_id: str) -> list[Conflict]: ...
+
+
+class ActionGateWriter(Protocol):
+    """Append the auditable record of one gate decision."""
+
+    def append_events(
+        self,
+        episode_id: str,
+        drafts: Sequence[EventDraft],
+        *,
+        correlation: dict[str, str] | None = None,
+        idempotency_key: str | None = None,
+        require_open_verification_task_id: str | None = None,
+    ) -> list[Event]: ...
+
+
 class ActionGate:
+    """The single host-neutral action gate.
+
+    ``reader`` and ``writer`` are structural ports: ``LedgerStore`` satisfies both, and an
+    adapter may supply narrower objects instead. Adapters must not re-implement this class;
+    a second copy is how the audited ``args_hash`` encoding silently diverged before.
+    """
+
     def __init__(
         self,
-        store: LedgerStore,
+        reader: ActionGateReader,
         config: dict[str, Any],
         policies: ActionPolicyRegistry,
+        *,
+        writer: ActionGateWriter | None = None,
     ) -> None:
-        self.store = store
+        self._reader = reader
+        # Legacy callers pass one LedgerStore that structurally satisfies both ports.
+        # New composition roots provide a writer explicitly.
+        self._writer = writer if writer is not None else cast(ActionGateWriter, reader)
         self.config = config
         self.policies = policies
+
+    @property
+    def store(self) -> ActionGateReader:
+        """Backwards-compatible alias for the read port."""
+
+        return self._reader
 
     def evaluate(
         self,
@@ -33,7 +93,7 @@ class ActionGate:
         description: str = "",
         action_stakes: Stakes | None = None,
     ) -> GateDecision:
-        episode = self.store.get_episode(episode_id)
+        episode = self._reader.get_episode(episode_id)
         if episode is None:
             return GateDecision(
                 GateOutcome.BLOCK,
@@ -79,9 +139,9 @@ class ActionGate:
             self._record(episode_id, tool_name, args, decision, classification.reason)
             return decision
 
-        beliefs = self.store.list_beliefs(episode_id)
-        sources = {source.id: source for source in self.store.list_sources(episode_id)}
-        conflicts = self.store.list_conflicts(episode_id)
+        beliefs = self._reader.list_beliefs(episode_id)
+        sources = {source.id: source for source in self._reader.list_sources(episode_id)}
+        conflicts = self._reader.list_conflicts(episode_id)
         preconditions = classification.policy.preconditions
         if (
             stakes is Stakes.CRITICAL
@@ -104,21 +164,32 @@ class ActionGate:
         elevated_checks = []
         for check in checks:
             if check.satisfied and check.belief_id:
-                belief = belief_map[check.belief_id]
-                admission = determine_admission(
-                    belief,
-                    sources[belief.source_id],
-                    self.config,
-                    episode_stakes=episode.default_stakes,
-                    action_stakes=stakes,
-                )
-                if admission.status.value != "in":
+                belief = belief_map.get(check.belief_id)
+                source = sources.get(belief.source_id) if belief is not None else None
+                if belief is None or source is None:
+                    # A satisfied check whose belief or source is no longer readable cannot
+                    # be re-confirmed at the action's stakes, so it fails closed.
                     check = replace(
                         check,
                         satisfied=False,
-                        reason=f"belief requires {admission.mode} at {stakes.value} stakes",
-                        suggestion="Verify this precondition at the action's effective stakes",
+                        reason="supporting belief or source is unavailable",
+                        suggestion="Re-observe this precondition before retrying",
                     )
+                else:
+                    admission = determine_admission(
+                        belief,
+                        source,
+                        self.config,
+                        episode_stakes=episode.default_stakes,
+                        action_stakes=stakes,
+                    )
+                    if admission.status.value != "in":
+                        check = replace(
+                            check,
+                            satisfied=False,
+                            reason=f"belief requires {admission.mode} at {stakes.value} stakes",
+                            suggestion="Verify this precondition at the action's effective stakes",
+                        )
             elevated_checks.append(check)
         checks = tuple(elevated_checks)
         missing_preconditions = tuple(check.proposition for check in checks if not check.satisfied)
@@ -168,7 +239,7 @@ class ActionGate:
     ) -> None:
         payload = {
             "tool_name": tool_name,
-            "args_hash": content_hash(canonical_json(args)),
+            "args_hash": arguments_digest(args),
             "outcome": decision.outcome.value,
             "reason_code": decision.reason_code,
             "detail": {
@@ -178,7 +249,38 @@ class ActionGate:
                 "classification": classification_reason,
             },
         }
-        self.store.append_events(
+        self._writer.append_events(
             episode_id,
             [EventDraft("GATE_DECIDED", "gate_decision", tool_name, payload)],
         )
+
+
+def arguments_digest(args: dict[str, Any]) -> str:
+    """Digest tool arguments for the audit record without ever failing the decision.
+
+    A host may pass values canonical JSON cannot encode. Recording an audit hash must never
+    turn a completed fail-closed decision into an unhandled exception, so unsupported values
+    fall back to a deterministic ``repr`` encoding. Secret-like material is removed first, so
+    the recorded digest never commits to a credential.
+    """
+
+    try:
+        serialized = canonical_json(args)
+    except (TypeError, ValueError):
+        serialized = canonical_json(_encodable(args))
+    return content_hash(redact_secrets(serialized)[0])
+
+
+def _encodable(value: Any) -> Any:
+    """Coerce an arbitrary host value into something ``canonical_json`` accepts."""
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else repr(value)
+    if isinstance(value, Mapping):
+        return {str(key): _encodable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = [_encodable(item) for item in value]
+        return sorted(items, key=canonical_json) if isinstance(value, (set, frozenset)) else items
+    return repr(value)

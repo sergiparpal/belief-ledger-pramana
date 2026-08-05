@@ -134,8 +134,12 @@ def validate_core_config(data: dict[str, Any], *, defaults: dict[str, Any]) -> N
     _bounded_int(storage, "busy_timeout_ms", 1, 120_000)
 
     context = _mapping(data, "context")
-    _bounded_int(context, "max_chars", 512, 1_000_000)
-    _bounded_int(context, "max_beliefs", 1, 20_000)
+    # Keep these bounds identical to `belief_ledger_pramana.config.validate_config`. Two
+    # validators disagreeing about the same key means a configuration accepted by the gateway
+    # is rejected by the plugin, or vice versa. `max_chars` is a rendered-prompt budget, so
+    # both sides converge on the tighter bound; the packaged default sits at its ceiling.
+    _bounded_int(context, "max_chars", 512, 8_000)
+    _bounded_int(context, "max_beliefs", 1, 1_000)
     _bounded_int(context, "max_graph_depth", 0, 32)
     _bounded_int(context, "retraction_ttl_turns", 1, 10_000)
     _boolean(context, "pending_only_when_relevant")

@@ -33,12 +33,24 @@ def test_profile_negotiation_complete_truth_table() -> None:
             first = negotiate_profile(capabilities, requested)
             assert first == negotiate_profile(capabilities, requested)
             assert first.missing == capabilities.missing_for(requested)
-            assert first.effective is requested
-            assert first.downgraded is False
+            # A shortfall without an authorized downgrade must not report an effective
+            # profile the host cannot perform. Callers that read only `effective` would
+            # otherwise believe enforcement is active while a capability is missing.
+            expected_first = requested if not first.missing else EnforcementProfile.OBSERVE
+            assert first.effective is expected_first
+            assert first.downgraded is (expected_first is not requested)
             downgraded = negotiate_profile(capabilities, requested, allow_diagnostic_downgrade=True)
             expected = requested if not first.missing else expected_maximum
             assert downgraded.effective is expected
             assert downgraded.downgraded is (expected is not requested)
+
+        # The effective profile is never stronger than the host can actually support.
+        for requested in EnforcementProfile:
+            for allow in (False, True):
+                selection = negotiate_profile(
+                    capabilities, requested, allow_diagnostic_downgrade=allow
+                )
+                assert not capabilities.missing_for(selection.effective)
 
 
 def test_enforcing_shortfall_fails_closed_and_downgrade_is_persisted(tmp_path) -> None:

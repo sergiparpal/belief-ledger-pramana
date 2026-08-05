@@ -1,6 +1,7 @@
 """Compatibility re-exports for host-neutral schema migrations."""
 
 from belief_ledger_core.migrations import (
+    LATEST_SCHEMA_VERSION,
     PROJECTION_HASH_ALGORITHM,
     PROJECTION_HASH_V1_ALGORITHM_VERSION,
     PROJECTION_HASH_V2_ALGORITHM_VERSION,
@@ -13,12 +14,14 @@ from belief_ledger_core.migrations import (
     SCHEMA_V4,
     SCHEMA_V5,
     SCHEMA_V6,
+    SCHEMA_V7,
     MigrationResult,
     configure_connection,
     migrate,
 )
 
 __all__ = [
+    "LATEST_SCHEMA_VERSION",
     "PROJECTION_HASH_ALGORITHM",
     "PROJECTION_HASH_V1_ALGORITHM_VERSION",
     "PROJECTION_HASH_V2_ALGORITHM_VERSION",
@@ -31,6 +34,7 @@ __all__ = [
     "SCHEMA_V4",
     "SCHEMA_V5",
     "SCHEMA_V6",
+    "SCHEMA_V7",
     "MigrationResult",
     "configure_connection",
     "migrate",

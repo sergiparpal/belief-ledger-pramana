@@ -64,6 +64,10 @@ def select_beliefs(
             continue
         candidates.append(belief)
 
+    # A belief whose source row is unreadable cannot be prioritized, and selection must not
+    # raise on the context-compilation path. Drop it instead: an unrankable belief is not
+    # eligible for the bounded context window.
+    candidates = [belief for belief in candidates if belief.source_id in sources]
     priority_values = {
         belief.id: priority_trace(belief, sources[belief.source_id], config).value
         for belief in candidates
@@ -129,12 +133,14 @@ def _add_with_premises(
                 for premise in justification.premises
             }
         )
+    # Preserve one slot for the requested conclusion. Premises may enrich a selected
+    # conclusion, but they must never crowd that conclusion out. The guard at the top of this
+    # function already established that `belief` is not yet chosen, so the reservation is
+    # unconditional.
+    premise_limit = limit - 1
     for premise_id in premise_ids:
         premise = belief_map.get(premise_id)
         if premise and premise.status in {Status.IN, Status.PENDING}:
-            # Preserve one slot for the requested conclusion. Premises may enrich
-            # a selected conclusion, but they must never crowd that conclusion out.
-            premise_limit = limit - 1 if belief.id not in chosen_ids else limit
             if len(chosen) >= premise_limit:
                 break
             _add_with_premises(

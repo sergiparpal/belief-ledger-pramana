@@ -5,6 +5,7 @@ from __future__ import annotations
 from base64 import b32encode
 from dataclasses import dataclass
 from enum import StrEnum
+from time import monotonic
 from typing import Any, Protocol, cast
 
 from belief_ledger_core import (
@@ -120,6 +121,7 @@ class BeliefLedgerMcp:
         allowed_episode_ids: tuple[str, ...] | None = None,
         max_upstream_bytes: int = 1_048_576,
         max_inventory_tools: int = 10_000,
+        inventory_ttl_seconds: float = 0.0,
     ) -> None:
         self.ledger = ledger
         self.mode = mode
@@ -134,9 +136,13 @@ class BeliefLedgerMcp:
             raise ValueError("max_inventory_tools must be positive")
         self.max_upstream_bytes = max_upstream_bytes
         self.max_inventory_tools = max_inventory_tools
+        if inventory_ttl_seconds < 0:
+            raise ValueError("inventory_ttl_seconds must not be negative")
+        self.inventory_ttl_seconds = inventory_ttl_seconds
         self._descriptors: dict[tuple[str, str], ToolDescriptor] = {}
         self._inventory_digest = ""
         self._inventory_reason = "INSPECTION_MODE"
+        self._inventory_checked_at: float | None = None
         if mode is McpMode.PROXY:
             self.refresh_inventory()
 
@@ -161,7 +167,27 @@ class BeliefLedgerMcp:
             "owns_final_output": False,
         }
 
+    def _refresh_inventory_if_stale(self) -> None:
+        """Re-verify the upstream inventory, at most once per TTL window.
+
+        Drift detection costs an upstream `list_tools` round trip on every proxied call. The
+        default TTL of 0 keeps that per-call verification, because it is what makes a schema
+        change between inventory and dispatch impossible to miss. A deployment that has
+        measured the round trip as the bottleneck may raise the TTL, accepting that a drifted
+        schema can be dispatched against for up to that long. Trading the guarantee away is
+        the caller's explicit decision, never the default.
+        """
+
+        now = monotonic()
+        if (
+            self._inventory_checked_at is not None
+            and now - self._inventory_checked_at < self.inventory_ttl_seconds
+        ):
+            return
+        self.refresh_inventory()
+
     def refresh_inventory(self) -> tuple[ToolDescriptor, ...]:
+        self._inventory_checked_at = monotonic()
         if self.mode is not McpMode.PROXY or self.upstream is None:
             self._inventory_reason = "UPSTREAM_UNAVAILABLE"
             self._descriptors = {}
@@ -300,7 +326,14 @@ class BeliefLedgerMcp:
         if self.upstream is None or not self.inventory_complete:
             return ProxyResult(1, False, "INVENTORY_INCOMPLETE")
         before = self._inventory_digest
-        if not self.refresh_inventory() or not before or self._inventory_digest != before:
+        self._refresh_inventory_if_stale()
+        # Compare digests, not the descriptor tuple's truthiness: an upstream server that
+        # legitimately exposes no tools produced an empty tuple and was reported as drift.
+        if (
+            not before
+            or self._inventory_reason != "INVENTORY_VERIFIED"
+            or self._inventory_digest != before
+        ):
             return ProxyResult(1, False, "UPSTREAM_SCHEMA_DRIFT")
         descriptor = self._descriptors.get((namespace, name))
         if descriptor is None:

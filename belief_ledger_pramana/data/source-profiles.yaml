@@ -28,4 +28,3 @@ profiles:
     kind: ledger
     integrity: semi
     competence: {general: 0.5}
-

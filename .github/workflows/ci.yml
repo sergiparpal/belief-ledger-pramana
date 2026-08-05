@@ -74,9 +74,11 @@ jobs:
       - run: uv pip install --python .venv "hermes-agent==0.19.0"
       # Hermes 0.19.0 pins vulnerable Pillow 12.2.0 and cryptography 46.0.7.
       # Keep the tested host release but override those leaves until Hermes
-      # relaxes its metadata.
+      # relaxes its metadata. cryptography is held at >=50 because
+      # PYSEC-2026-3552 affects 49.x; the ceiling exists only to keep the
+      # override deliberate, so raise both bounds together when 51 lands.
       - run: uv pip install --python .venv "Pillow>=12.3,<13"
-      - run: uv pip install --python .venv "cryptography>=48.0.1,<50"
+      - run: uv pip install --python .venv "cryptography>=50.0.0,<51"
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync mypy packages/core/src packages/gateway/src packages/reference/src packages/mcp/src belief_ledger_pramana
@@ -101,7 +103,7 @@ jobs:
       - run: uv sync --frozen --all-packages --group dev
       - run: uv pip install --python .venv "hermes-agent==${{ matrix.hermes }}"
       - run: uv pip install --python .venv "Pillow>=12.3,<13"
-      - run: uv pip install --python .venv "cryptography>=48.0.1,<50"
+      - run: uv pip install --python .venv "cryptography>=50.0.0,<51"
       - run: uv run --no-sync python -c "import importlib.metadata; assert importlib.metadata.version('hermes-agent') == '${{ matrix.hermes }}'"
       - run: uv run --no-sync python -m pytest tests/adapters/hermes tests/integration tests/contract/test_plugin_contract.py
 
@@ -187,7 +189,7 @@ jobs:
       - run: uv sync --frozen --all-packages --group dev
       - run: uv pip install --python .venv "hermes-agent==0.19.0"
       - run: uv pip install --python .venv "Pillow>=12.3,<13"
-      - run: uv pip install --python .venv "cryptography>=48.0.1,<50"
+      - run: uv pip install --python .venv "cryptography>=50.0.0,<51"
       # These Hermes advisories currently flag 0.19.0 although their published
       # affected ranges end at 0.12.0/2026.4.30. Keep explicit, reviewable
       # exceptions while auditing every installed host dependency.
@@ -208,7 +210,7 @@ jobs:
       - run: uv sync --frozen --all-packages --group dev
       - run: uv pip install --python .venv "hermes-agent==0.19.0"
       - run: uv pip install --python .venv "Pillow>=12.3,<13"
-      - run: uv pip install --python .venv "cryptography>=48.0.1,<50"
+      - run: uv pip install --python .venv "cryptography>=50.0.0,<51"
       - run: uv run --no-sync python -m pytest tests/unit/test_config.py tests/unit/test_store.py tests/contract/test_plugin_contract.py tests/contract/test_real_hermes_manager.py
       - run: uv run --no-sync belief-ledger demo --format json
 
