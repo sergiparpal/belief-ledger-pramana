@@ -31,7 +31,7 @@ from .enforcement import ActionBinding, EnforcementStore
 from .manifest import ToolDescriptor, ToolPolicyManifest, schema_digest
 from .runtime import LedgerRuntime
 
-__version__ = "1.0.0rc3"
+__version__ = "1.0.0rc4"
 
 __all__ = [
     "ActionAuthorization",

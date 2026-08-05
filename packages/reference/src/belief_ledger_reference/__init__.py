@@ -8,7 +8,7 @@ from .runner import (
     ReferenceRunner,
 )
 
-__version__ = "1.0.0rc3"
+__version__ = "1.0.0rc4"
 
 __all__ = [
     "DeliveryOutcome",

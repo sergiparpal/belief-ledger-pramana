@@ -35,7 +35,7 @@ jobs:
       - run: uv venv .core-venv
       - run: uv pip install --python .core-venv/bin/python ./packages/core pytest
       - run: .core-venv/bin/python -m pytest --confcutdir=tests/core tests/core tests/conformance/test_enforcement_profiles.py
-      - run: .core-venv/bin/python -c "import belief_ledger_core; assert belief_ledger_core.__version__ == '1.0.0rc3'"
+      - run: .core-venv/bin/python -c "import belief_ledger_core; assert belief_ledger_core.__version__ == '1.0.0rc4'"
       - run: uvx ruff check packages/core/src tests/core
 
   gateway-no-hermes:
@@ -175,7 +175,7 @@ jobs:
       - run: uv run python scripts/smoke_install.py --matrix core,core+gateway,core+reference,core+gateway+mcp,hermes --manifest build/artifacts.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rc3-wheels
+          name: rc4-wheels
           path: build/workspace-*/*.whl
 
   dependency-audit:

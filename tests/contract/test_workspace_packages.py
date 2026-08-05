@@ -25,7 +25,7 @@ def test_core_imports_when_all_hermes_imports_are_rejected(monkeypatch) -> None:
 
     monkeypatch.setattr(builtins, "__import__", guarded)
     core = importlib.import_module("belief_ledger_core")
-    assert core.__version__ == "1.0.0rc3"
+    assert core.__version__ == "1.0.0rc4"
     assert core.HostCapabilities().maximum_profile().value == "observe"
 
 
@@ -50,12 +50,12 @@ def test_workspace_versions_and_built_constraints_are_synchronized() -> None:
         gateway["version"],
         mcp["version"],
         reference["version"],
-    } == {"1.0.0rc3"}
-    assert "belief-ledger-core==1.0.0rc3" in hermes["dependencies"]
-    assert "belief-ledger-gateway==1.0.0rc3" in hermes["dependencies"]
-    assert "belief-ledger-core==1.0.0rc3" in reference["dependencies"]
-    assert "belief-ledger-core==1.0.0rc3" in gateway["dependencies"]
-    assert "belief-ledger-core==1.0.0rc3" in mcp["dependencies"]
+    } == {"1.0.0rc4"}
+    assert "belief-ledger-core==1.0.0rc4" in hermes["dependencies"]
+    assert "belief-ledger-gateway==1.0.0rc4" in hermes["dependencies"]
+    assert "belief-ledger-core==1.0.0rc4" in reference["dependencies"]
+    assert "belief-ledger-core==1.0.0rc4" in gateway["dependencies"]
+    assert "belief-ledger-core==1.0.0rc4" in mcp["dependencies"]
     root_metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     gateway_metadata = tomllib.loads(
         (root / "packages/gateway/pyproject.toml").read_text(encoding="utf-8")

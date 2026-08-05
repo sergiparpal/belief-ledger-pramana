@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "belief-ledger-reference"
-version = "1.0.0rc3"
+version = "1.0.0rc4"
 description = "Strict standalone reference adapter for Belief Ledger"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-  "belief-ledger-core==1.0.0rc3",
-  "belief-ledger-gateway==1.0.0rc3",
+  "belief-ledger-core==1.0.0rc4",
+  "belief-ledger-gateway==1.0.0rc4",
 ]
 
 [project.scripts]

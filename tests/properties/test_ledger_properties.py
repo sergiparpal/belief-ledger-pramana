@@ -71,7 +71,15 @@ def test_qualifier_reconciliation_is_symmetric(
     assert canonicalize_qualifiers(canonicalize_qualifiers(left)) == canonicalize_qualifiers(left)
 
 
-@settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+# deadline=None: this property asserts a deterministic fixed point, not latency. Each example
+# drives real SQLite work through the function-scoped runtime, so under the gate's coverage
+# instrumentation per-example wall time is dominated by machine load. A fixed deadline turns that
+# into a flaky failure that says nothing about the property.
+@settings(
+    max_examples=30,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 @given(size=st.integers(min_value=0, max_value=45), root_active=st.booleans())
 def test_finite_derived_graph_reaches_a_deterministic_fixed_point(
     runtime, size: int, root_active: bool
@@ -163,7 +171,14 @@ def test_finite_derived_graph_reaches_a_deterministic_fixed_point(
     assert set(first.statuses.values()) == {expected}
 
 
-@settings(max_examples=24, suppress_health_check=[HealthCheck.function_scoped_fixture])
+# deadline=None for the same reason as above: ingesting, verifying the hash chain, and replaying
+# once per example is inherently variable, and the assertions below are about boundedness and
+# replayability rather than speed.
+@settings(
+    max_examples=24,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 @given(
     result=st.text(
         alphabet=st.characters(blacklist_categories=("Cs",)),

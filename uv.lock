@@ -78,7 +78,7 @@ wheels = [
 
 [[package]]
 name = "belief-ledger-core"
-version = "1.0.0rc3"
+version = "1.0.0rc4"
 source = { editable = "packages/core" }
 dependencies = [
     { name = "jsonschema" },
@@ -93,7 +93,7 @@ requires-dist = [
 
 [[package]]
 name = "belief-ledger-gateway"
-version = "1.0.0rc3"
+version = "1.0.0rc4"
 source = { editable = "packages/gateway" }
 dependencies = [
     { name = "belief-ledger-core" },
@@ -108,7 +108,7 @@ requires-dist = [
 
 [[package]]
 name = "belief-ledger-mcp"
-version = "1.0.0rc3"
+version = "1.0.0rc4"
 source = { editable = "packages/mcp" }
 dependencies = [
     { name = "belief-ledger-core" },
@@ -125,7 +125,7 @@ requires-dist = [
 
 [[package]]
 name = "belief-ledger-pramana"
-version = "1.0.0rc3"
+version = "1.0.0rc4"
 source = { editable = "." }
 dependencies = [
     { name = "belief-ledger-core" },
@@ -187,7 +187,7 @@ dev = [
 
 [[package]]
 name = "belief-ledger-reference"
-version = "1.0.0rc3"
+version = "1.0.0rc4"
 source = { editable = "packages/reference" }
 dependencies = [
     { name = "belief-ledger-core" },

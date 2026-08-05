@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "belief-ledger-mcp"
-version = "1.0.0rc3"
+version = "1.0.0rc4"
 description = "Evidence-backed policy enforcement for AI agents"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-  "belief-ledger-core==1.0.0rc3",
-  "belief-ledger-gateway==1.0.0rc3",
+  "belief-ledger-core==1.0.0rc4",
+  "belief-ledger-gateway==1.0.0rc4",
   "mcp>=2,<3",
 ]
 

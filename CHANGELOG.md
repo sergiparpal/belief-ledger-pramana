@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.2.1 / 1.0.0rc4 - 2026-08-05
+
+GitHub source release correcting the `v0.2.0` product surface. It adds no feature and removes none:
+the package layout, public API, CLI, protocol, plugin entry point, and audited Hermes contract are
+those of `v0.2.0`. The five synchronized Python distributions advance to `1.0.0rc4` because their
+code changed, and remain unpublished to any package registry.
+
+- Advanced all five synchronized workspace distributions to `1.0.0rc4`.
 - Made episode lifecycle an in-transaction precondition of permit consumption: a permit bound to a
   finalized episode is refused with `EPISODE_FINALIZED` and revoked, including when finalization's
   revocation never ran.
@@ -51,6 +59,9 @@
   raised cryptography override, and added an index of the decision records.
 - Raised the clean-install smoke matrix's cryptography override to `>=50.0.0,<51`. It was the one
   path still installing a 49 release against the audited Hermes host after CI moved off it.
+- Removed the Hypothesis deadline from the two ledger-backed property tests. Both drive real SQLite
+  work per example, so under the gate's coverage instrumentation the 200 ms default measured
+  machine load rather than the property and failed the suite while the property itself held.
 
 ## v0.2.0 / 1.0.0rc3 - 2026-08-01
 
