@@ -1,7 +1,33 @@
 version: 2
 updates:
+  # The root manifest is a uv workspace. `pip` reads pyproject.toml but not uv.lock, so the
+  # frozen resolution every CI job installs from would never be updated; `uv` is the
+  # ecosystem that owns the lockfile. Both are declared so direct constraints and the
+  # resolved lock stay current.
   - package-ecosystem: pip
     directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+  # Workspace members declare their own dependencies (jsonschema, mcp, PyYAML). A single
+  # root directory entry does not scan them, so each one needs its own entry.
+  - package-ecosystem: pip
+    directory: /packages/core
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /packages/gateway
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /packages/mcp
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /packages/reference
     schedule:
       interval: weekly
   - package-ecosystem: github-actions

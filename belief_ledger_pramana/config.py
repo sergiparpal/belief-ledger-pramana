@@ -240,8 +240,12 @@ def state_paths(
         ).resolve()
     else:
         database_path = root / "ledger.sqlite3"
-    if not _is_within(database_path, root):
-        raise ConfigError("storage.database must resolve inside the plugin state directory")
+    if not _is_within(database_path, root) or database_path == root:
+        # `_is_within` accepts the root itself, whose parent is outside the tree. Rejecting
+        # it here keeps directory creation and every later path check well-founded.
+        raise ConfigError(
+            "storage.database must resolve to a file inside the plugin state directory"
+        )
     return StatePaths(
         hermes_home=home,
         root=root,
@@ -344,7 +348,7 @@ def load_config(
             raise ConfigError("; ".join(messages))
 
     merged = _deep_merge(defaults, override)
-    warnings.extend(validate_config(merged))
+    validate_config(merged)
     database_value = merged["storage"].get("database")
     paths = state_paths(
         hermes_home,
@@ -367,8 +371,13 @@ def load_config(
     return snapshot, paths
 
 
-def validate_config(config: Mapping[str, Any]) -> list[str]:
-    """Validate all safety-sensitive values and return non-fatal warnings."""
+def validate_config(config: Mapping[str, Any]) -> None:
+    """Validate all safety-sensitive values, raising `ConfigError` on the first problem.
+
+    Every check here is fatal by design; there is no soft-warning tier. The function
+    previously returned an always-empty warning list, which read as though some problems
+    were reported non-fatally.
+    """
 
     config = _mutable_config(config)
     if type(config.get("schema_version")) is not int or config["schema_version"] != 1:
@@ -407,6 +416,10 @@ def validate_config(config: Mapping[str, Any]) -> list[str]:
     _bounded_int(storage, "busy_timeout_ms", 1, 120_000)
 
     context = _mapping(config, "context")
+    # Keep these bounds identical to `belief_ledger_core.config.validate_core_config`. Two
+    # validators disagreeing about the same key means a configuration accepted by the gateway
+    # is rejected by the plugin, or vice versa. `max_chars` is a rendered-prompt budget, so
+    # both sides converge on the tighter bound; the packaged default sits at its ceiling.
     _bounded_int(context, "max_chars", 512, 8_000)
     _bounded_int(context, "max_beliefs", 1, 1_000)
     _bounded_int(context, "max_graph_depth", 0, 32)
@@ -613,7 +626,6 @@ def validate_config(config: Mapping[str, Any]) -> list[str]:
 
     engine = _mapping(config, "engine")
     _bounded_int(engine, "max_relabel_iterations", 1, 10_000)
-    return []
 
 
 def _mutable_config(value: Any) -> Any:
@@ -741,10 +753,20 @@ def require_private_path(path: Path, label: str, *, directory: bool = False) -> 
 
 
 def _resolve_private_extension_paths(config: dict[str, Any], root: Path) -> None:
+    """Rewrite extension paths in place as validated absolute paths.
+
+    The rewrite is load-bearing, not cosmetic. Every later reader resolves these strings
+    again, and a relative string resolves against the process working directory rather than
+    the state root. Without the write-back this function would check one file and the policy
+    loader would read a different one.
+    """
+
     for section, key, label in (
         ("gating", "policy_files", "action policy extension"),
         ("trust", "source_profile_files", "source profile extension"),
     ):
+        # `_mapping` returns a defensive copy, so the section is re-read from `config` for
+        # the assignment below. Mutating the copy would silently discard the resolution.
         values = _mapping(config, section).get(key, [])
         resolved: list[str] = []
         for raw_path in values:
@@ -756,10 +778,19 @@ def _resolve_private_extension_paths(config: dict[str, Any], root: Path) -> None
                 raise ConfigError(f"{label} is unavailable or too large: {path}")
             require_private_path(path, label)
             resolved.append(str(path))
-        _mapping(config, section)[key] = resolved
+        section_value = config.get(section)
+        if not isinstance(section_value, dict):
+            raise ConfigError(f"{section} must be a mapping")
+        section_value[key] = resolved
 
 
 def _extension_digests(config: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """Digest every extension file. Requires `_resolve_private_extension_paths` to have run.
+
+    The paths must already be absolute: reading a relative path here would resolve it
+    against the process working directory instead of the validated state root.
+    """
+
     paths = [
         str(raw_path)
         for section, key in (
@@ -768,9 +799,15 @@ def _extension_digests(config: dict[str, Any]) -> tuple[tuple[str, str], ...]:
         )
         for raw_path in _mapping(config, section).get(key, [])
     ]
-    return tuple(
-        (raw_path, content_hash(Path(raw_path).read_bytes())) for raw_path in sorted(set(paths))
-    )
+    digests: list[tuple[str, str]] = []
+    for raw_path in sorted(set(paths)):
+        if not Path(raw_path).is_absolute():
+            raise ConfigError(f"extension path was not resolved before use: {raw_path}")
+        try:
+            digests.append((raw_path, content_hash(Path(raw_path).read_bytes())))
+        except OSError as exc:
+            raise ConfigError(f"unable to read extension file: {raw_path}: {exc}") from exc
+    return tuple(digests)
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -782,13 +819,22 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def _directories_within(root: Path, target: Path) -> tuple[Path, ...]:
+    """Return `root`..`target` inclusive, refusing a target that is not under `root`.
+
+    Walking to `parent` has a fixed point at the filesystem root, so a target outside
+    `root` would otherwise loop forever and grow the result without bound.
+    """
+
     directories: list[Path] = []
     current = target
     while True:
         directories.append(current)
         if current == root:
             return tuple(reversed(directories))
-        current = current.parent
+        parent = current.parent
+        if parent == current:
+            raise ConfigError(f"path is not inside the plugin state directory: {target}")
+        current = parent
 
 
 def _require_private_windows_acl(path: Path, label: str) -> None:
@@ -815,9 +861,16 @@ def _require_private_windows_acl(path: Path, label: str) -> None:
         "users",
         "guests",
     }
-    for line in result.stdout.splitlines():
-        if ":" not in line:
+    # icacls prints one ACE per line as `PRINCIPAL:(mask)`, with the first ACE appended to
+    # the echoed path. Splitting a raw line on ":" yields the drive letter for that first
+    # ACE and silently skips it, so strip the echoed path and split on the mask delimiter
+    # instead. A principal may contain spaces and backslashes ("NT AUTHORITY\\Authenticated
+    # Users").
+    target = str(path)
+    for raw_line in result.stdout.splitlines():
+        line = raw_line[len(target) :] if raw_line.startswith(target) else raw_line
+        if ":(" not in line:
             continue
-        principal = line.split(":", 1)[0].strip().casefold()
+        principal = line.split(":(", 1)[0].strip().casefold()
         if principal in broad_principals:
             raise ConfigError(f"{label} ACL grants a broad principal access: {path}")

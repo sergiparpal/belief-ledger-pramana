@@ -584,7 +584,7 @@ class BeliefLedger:
             raise BeliefLedgerError("INVALID_APPROVAL_SCOPE", approval.scope)
         if re.fullmatch(r"[0-9a-f]{64}", approval.arguments_hash) is None:
             raise BeliefLedgerError("INVALID_ARGUMENTS_HASH", "expected a SHA-256 digest")
-        policy = self.manifest.match(approval.tool_name, approval.namespace)
+        policy = self._match_policy(approval.tool_name, approval.namespace)
         if policy is None:
             raise BeliefLedgerError("NO_POLICY", approval.tool_name)
         if (approval.policy_id, approval.policy_revision) != (policy.id, policy.revision):
@@ -640,10 +640,7 @@ class BeliefLedger:
         ):
             return PermissionConsumption(1, False, "UNSUPPORTED_SCHEMA", permit.decision_id)
         arguments = invocation.arguments_dict()
-        try:
-            policy = self.manifest.match(invocation.name, invocation.namespace)
-        except ValueError:
-            policy = None
+        policy = self._match_policy(invocation.name, invocation.namespace)
         fields = policy.target_fields if policy else ()
         presented = replace(
             permit.binding,
@@ -659,7 +656,17 @@ class BeliefLedger:
             config_content_digest=self.config.digest,
             stakes=policy.base_stakes if policy else "",
         )
-        result = self.enforcement.consume_action(permit._raw_token, presented)
+        # Revalidate support and conflicts through the facade as well as in SQL. The store
+        # checks are scoped to whatever tables its database happens to hold; these callbacks
+        # are the authoritative read model and make the permit fail closed if either says so.
+        result = self.enforcement.consume_action(
+            permit._raw_token,
+            presented,
+            support_is_active=self._supports_active,
+            conflicts_are_closed=lambda identifiers: self._conflicts_closed(
+                permit.binding.episode_id, identifiers
+            ),
+        )
         return PermissionConsumption(1, result.consumed, result.reason_code, permit.decision_id)
 
     def evaluate_output(self, episode_id: str, candidate: OutputCandidate) -> OutputEvaluation:
@@ -751,16 +758,16 @@ class BeliefLedger:
 
     def explain_decision(self, episode_id: str, decision_id: str) -> DecisionExplanation:
         self._episode(episode_id)
-        episode_events = self.store.events(episode_id)
-        event = next(
-            (
-                item
-                for item in episode_events
-                if item.kind == "ACTION_AUTHORIZATION_EVALUATED"
-                and item.aggregate_id == decision_id
-            ),
-            None,
-        )
+        # One pass: collect the decision's own transitions while locating the evaluation
+        # event, instead of scanning the whole episode history twice.
+        event = None
+        transitions = []
+        for item in self.store.events(episode_id):
+            if item.aggregate_id != decision_id:
+                continue
+            transitions.append(item)
+            if event is None and item.kind == "ACTION_AUTHORIZATION_EVALUATED":
+                event = item
         if event is None:
             raise BeliefLedgerError("DECISION_NOT_FOUND", decision_id)
         payload = event.payload
@@ -768,7 +775,7 @@ class BeliefLedger:
         conflict_ids = tuple(str(item) for item in payload.get("blocking_conflict_ids", []))
         beliefs = self.store.get_beliefs(support_ids)
         conflicts = {item.id: item for item in self.store.list_conflicts(episode_id, state=None)}
-        policy = self.manifest.match(str(payload["tool_name"]), str(payload["namespace"]))
+        policy = self._match_policy(str(payload["tool_name"]), str(payload["namespace"]))
         state = self.enforcement.action_state(decision_id)
         return DecisionExplanation(
             1,
@@ -783,9 +790,7 @@ class BeliefLedger:
             tuple(to_primitive(conflicts[item]) for item in conflict_ids if item in conflicts),
             payload.get("approval_binding"),
             state or "decision_only",
-            tuple(
-                to_primitive(item) for item in episode_events if item.aggregate_id == decision_id
-            ),
+            tuple(to_primitive(item) for item in transitions),
         )
 
     def verify_chain(self) -> ChainVerification:
@@ -1051,6 +1056,19 @@ class BeliefLedger:
             if item.id in identifiers
         }
         return all(states.get(item) == "resolved" for item in identifiers)
+
+    def _match_policy(self, name: str, namespace: str) -> ToolPolicy | None:
+        """Match a policy, treating an ambiguous manifest as no policy.
+
+        `ToolPolicyManifest.match` raises on ambiguity. Every caller here is on a path that
+        must fail closed rather than propagate, and a missing policy is already the
+        conservative outcome downstream.
+        """
+
+        try:
+            return self.manifest.match(name, namespace)
+        except ValueError:
+            return None
 
     def _episode(self, episode_id: str, *, require_active: bool = False) -> Episode:
         episode = self.store.get_episode(episode_id)

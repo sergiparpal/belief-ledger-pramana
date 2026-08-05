@@ -370,6 +370,11 @@ def _normalize_v1(data: dict[str, Any]) -> list[dict[str, Any]]:
                 "active": True,
             }
         )
+        # Drop the v1 spellings now that they have been translated. Leaving them in would
+        # force `_parse_rule` to keep accepting them, and a v2 rule that set
+        # `allow_human_approval` would then be silently ignored rather than rejected.
+        value.pop("allow_human_approval", None)
+        value.pop("minimum_priority", None)
         normalized.append(value)
     return normalized
 
@@ -393,8 +398,6 @@ def _parse_rule(value: Any, *, mode: str) -> ToolPolicy:
         "input_schema_digest",
         "priority",
         "active",
-        "allow_human_approval",
-        "minimum_priority",
     }
     unknown = set(value) - allowed
     if unknown and mode != "observe":

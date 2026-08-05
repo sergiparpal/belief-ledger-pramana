@@ -48,7 +48,14 @@ from .engine.graph import cycle_path
 from .engine.qualifiers import canonicalize_qualifiers
 from .engine.trust import TrustDecision, determine_admission
 from .engine.validity import normalize_content, validate_belief
-from .events import EventDraft, canonical_json, content_hash, to_primitive, utc_now
+from .events import (
+    EventDraft,
+    canonical_json,
+    content_hash,
+    isoformat_utc,
+    to_primitive,
+    utc_now,
+)
 from .gate.classify import ActionPolicyRegistry
 from .gate.decision import ActionGate
 from .ids import new_id
@@ -591,56 +598,65 @@ class PluginRuntime:
         while len(cache) > self._EPISODE_CONTEXT_CACHE_LIMIT:
             cache.popitem(last=False)
 
+    # Health and injection-failure state is read and written from concurrent host callbacks,
+    # and `finalize` mutates the very same containers under `_registry_lock`. Every accessor
+    # below takes that lock so a read-modify-write cannot interleave with a finalization.
     def mark_injection_failure(self, episode_id: str, reason: str) -> None:
-        self._injection_failures.add(episode_id)
-        reasons = self._episode_health_reasons.setdefault(episode_id, [])
-        entry = f"context injection failed: {reason}"
-        if entry not in reasons:
-            reasons.append(entry)
+        with self._registry_lock:
+            self._injection_failures.add(episode_id)
+            reasons = self._episode_health_reasons.setdefault(episode_id, [])
+            entry = f"context injection failed: {reason}"
+            if entry not in reasons:
+                reasons.append(entry)
 
     def clear_injection_failure(self, episode_id: str) -> None:
-        self._injection_failures.discard(episode_id)
-        reasons = self._episode_health_reasons.get(episode_id)
-        if reasons is None:
-            return
-        retained = [
-            reason for reason in reasons if not reason.startswith("context injection failed:")
-        ]
-        if retained:
-            self._episode_health_reasons[episode_id] = retained
-        else:
-            self._episode_health_reasons.pop(episode_id, None)
+        with self._registry_lock:
+            self._injection_failures.discard(episode_id)
+            reasons = self._episode_health_reasons.get(episode_id)
+            if reasons is None:
+                return
+            retained = [
+                reason for reason in reasons if not reason.startswith("context injection failed:")
+            ]
+            if retained:
+                self._episode_health_reasons[episode_id] = retained
+            else:
+                self._episode_health_reasons.pop(episode_id, None)
 
     def mark_global_failure(self, component: str, reason: str) -> None:
-        if self.health is not Health.UNAVAILABLE:
-            self.health = Health.DEGRADED
-        self.health_reasons.append(f"{component} failed: {reason}")
+        with self._registry_lock:
+            if self.health is not Health.UNAVAILABLE:
+                self.health = Health.DEGRADED
+            self.health_reasons.append(f"{component} failed: {reason}")
 
     def _mark_configuration_degraded(self, reason: str) -> None:
-        if self.health is not Health.UNAVAILABLE:
-            self.health = Health.DEGRADED
-        self.health_reasons = [
-            item
-            for item in self.health_reasons
-            if not item.startswith(("invalid configuration:", "configuration reload rejected:"))
-        ]
-        self.health_reasons.append(reason)
+        with self._registry_lock:
+            if self.health is not Health.UNAVAILABLE:
+                self.health = Health.DEGRADED
+            self.health_reasons = [
+                item
+                for item in self.health_reasons
+                if not item.startswith(("invalid configuration:", "configuration reload rejected:"))
+            ]
+            self.health_reasons.append(reason)
 
     def _clear_configuration_degradation(self) -> None:
-        self.health_reasons = [
-            item
-            for item in self.health_reasons
-            if not item.startswith(("invalid configuration:", "configuration reload rejected:"))
-        ]
-        if self.health is Health.UNAVAILABLE:
-            return
-        if self.compatibility.mode is not CompatibilityMode.FULL:
-            self.health = Health.DEGRADED
-        elif not self.health_reasons:
-            self.health = Health.HEALTHY
+        with self._registry_lock:
+            self.health_reasons = [
+                item
+                for item in self.health_reasons
+                if not item.startswith(("invalid configuration:", "configuration reload rejected:"))
+            ]
+            if self.health is Health.UNAVAILABLE:
+                return
+            if self.compatibility.mode is not CompatibilityMode.FULL:
+                self.health = Health.DEGRADED
+            elif not self.health_reasons:
+                self.health = Health.HEALTHY
 
     def injection_failed(self, episode_id: str) -> bool:
-        return episode_id in self._injection_failures
+        with self._registry_lock:
+            return episode_id in self._injection_failures
 
     def finalize(self, episode_id: str, *, state: str = "finalized", **kwargs: Any) -> None:
         self.ensure_initialized()
@@ -682,14 +698,17 @@ class PluginRuntime:
             return
         try:
             snapshot, paths = load_config(hermes_home=self.hermes_home)
-        except ConfigError as exc:
+        except (ConfigError, OSError) as exc:
+            # OSError as well as ConfigError: an extension file that disappeared between
+            # snapshots must degrade the runtime, not escape into a host callback.
             self._mark_configuration_degraded(f"configuration reload rejected: {exc}")
             return
-        if self.paths is not None and paths.database != self.paths.database:
-            self.health = Health.DEGRADED
-            self.health_reasons.append("database path changed; restart is required")
-            return
-        self._config = snapshot
+        with self._registry_lock:
+            if self.paths is not None and paths.database != self.paths.database:
+                self.health = Health.DEGRADED
+                self.health_reasons.append("database path changed; restart is required")
+                return
+            self._config = snapshot
         self._clear_configuration_degradation()
 
 
@@ -720,7 +739,7 @@ class EpisodeService:
         )
         self.gate = ActionGate(
             runtime.ledger_reader,
-            config,
+            self.config,
             runtime.policy_registry(config),
             writer=runtime.event_writer,
         )
@@ -2508,7 +2527,7 @@ class EpisodeService:
                     {
                         "evidence_id": evidence.id,
                         "source_root": source.root,
-                        "observed_at": evidence.observed_at.isoformat(),
+                        "observed_at": isoformat_utc(evidence.observed_at),
                     },
                 ),
                 EventDraft(
@@ -2518,7 +2537,10 @@ class EpisodeService:
                     {
                         "evidence_id": evidence.id,
                         "span": [candidate.span_start, candidate.span_end],
-                        "observed_at": evidence.observed_at.isoformat(),
+                        # `isoformat_utc`, not `datetime.isoformat`: this value is written
+                        # straight into `beliefs.observed_at`, which is ordered as text
+                        # alongside rows every other path stores in the trailing-Z form.
+                        "observed_at": isoformat_utc(evidence.observed_at),
                     },
                 ),
                 _record_draft(

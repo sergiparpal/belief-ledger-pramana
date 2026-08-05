@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from belief_ledger_core.enforcement import ApprovalBinding, EnforcementStore
+from belief_ledger_core.migrations import LATEST_SCHEMA_VERSION
 
 from belief_ledger_pramana.dependencies import deterministic_dependencies
 from belief_ledger_pramana.events import canonical_json, compute_event_hash
@@ -142,7 +143,7 @@ def test_v2_database_migrates_to_v6_with_online_backup_indexes_and_enforcement(
         connection.execute("DELETE FROM schema_migrations WHERE version>=3")
     migrated = LedgerStore(database)
     assert migrated.migration.from_version == 2
-    assert migrated.migration.to_version == 6
+    assert migrated.migration.to_version == LATEST_SCHEMA_VERSION
     assert migrated.migration.backup is not None and migrated.migration.backup.exists()
     with migrated.connect() as connection:
         assert connection.execute(

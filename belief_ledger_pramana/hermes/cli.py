@@ -29,6 +29,7 @@ from ..config import (
     validate_config,
 )
 from ..events import canonical_json, to_primitive, utc_now
+from ..migrations import LATEST_SCHEMA_VERSION
 from ..runtime import PluginRuntime
 
 
@@ -129,9 +130,11 @@ def run_cli(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]
                     "database": str(database),
                     "config_digest": snapshot.digest,
                     "current_schema": current,
-                    "target_schema": 6,
-                    "migration_required": current < 6,
-                    "backup_required": database.is_file() and current < 6,
+                    # Derived, never a literal: a hardcoded target silently goes stale the
+                    # next time a migration is added.
+                    "target_schema": LATEST_SCHEMA_VERSION,
+                    "migration_required": current < LATEST_SCHEMA_VERSION,
+                    "backup_required": database.is_file() and current < LATEST_SCHEMA_VERSION,
                     "writes_performed": False,
                 }
             )

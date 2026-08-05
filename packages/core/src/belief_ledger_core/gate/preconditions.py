@@ -133,7 +133,10 @@ def _entailing_belief(
     required = {"untrusted": 0, "semi": 1, "trusted": 2}.get(minimum_integrity, 2)
     normalized = normalize_content(proposition)
     for belief in sorted(beliefs, key=lambda item: item.id):
-        if belief.status is not Status.IN or ranks[sources[belief.source_id].integrity] < required:
+        source = sources.get(belief.source_id)
+        # A belief whose source is unreadable cannot clear a minimum-integrity bar, so it is
+        # skipped rather than raising KeyError out of a gate decision that must fail closed.
+        if belief.status is not Status.IN or source is None or ranks[source.integrity] < required:
             continue
         if _contains_negation(belief.normalized_content):
             continue

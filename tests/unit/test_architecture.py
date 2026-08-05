@@ -22,6 +22,26 @@ def test_event_draft_is_storage_neutral_with_a_legacy_store_reexport() -> None:
     assert EventDraft is LegacyEventDraft
 
 
+def test_packaged_policy_data_is_byte_identical_across_distributions() -> None:
+    """The adapter and core ship the same packaged trust and policy data.
+
+    Both distributions must carry these files, so the copies are only safe while they stay
+    identical. Silent drift here changes trust assignment or gate policy in one adapter and
+    not the other, which no other test would notice.
+    """
+
+    root = Path(__file__).parents[2]
+    adapter = root / "belief_ledger_pramana" / "data"
+    core = root / "packages" / "core" / "src" / "belief_ledger_core" / "data"
+    names = ("action-policies.yaml", "defaults.yaml", "source-profiles.yaml")
+
+    for name in names:
+        assert (adapter / name).read_bytes() == (core / name).read_bytes(), name
+
+    shared = {path.name for path in adapter.glob("*.yaml")}
+    assert shared == set(names), "a packaged data file was added without a parity assertion"
+
+
 def test_dependency_layers_do_not_bypass_their_declared_boundaries() -> None:
     package = Path(__file__).parents[2] / "belief_ledger_pramana"
     engine_and_domain = [package / "engine", package / "ingestion", package / "context"]
