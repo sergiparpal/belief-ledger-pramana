@@ -19,6 +19,36 @@
   keeps `ActionPermit._raw_token` out of every derived representation.
 - Version-guarded the authorization decision-index backfill instead of full-scanning on every open.
 - Untracked the stray `.kg-ground-audit.jsonl.ckpt` runtime checkpoint and ignored `.kg-*`.
+- Added schema 7, which normalizes legacy unscoped idempotency keys to their episode-scoped form. A
+  database written before that scoping failed its projection check and could no longer be opened;
+  it now migrates forward behind the usual pre-migration backup. No event bytes and no
+  `projection_hash_v1` change.
+- Made the action gate fail closed rather than raise when an argument cannot be encoded, and guarded
+  the unchecked source lookups that raised `KeyError` on other fail-closed paths.
+- Fixed `negotiate_profile` reporting a profile the host cannot actually perform, and wired the
+  permit revalidation callbacks that were never connected to anything.
+- Wrote every timestamp in the trailing-`Z` form. Two writers stored `+00:00`, which sorts before
+  digits and silently reversed text ordering for the rows they wrote.
+- Validated extension paths at the location they are read from rather than at a second location, and
+  stopped `_directories_within` from looping forever on a target outside its root.
+- Replaced the Hermes adapter's parallel `ActionGate`, which had already diverged from core on the
+  audited `args_hash` encoding, with a re-export; reconciled and pinned the two `HostLlmClient`
+  copies, the enforcement DDL and projection applier, the two config validators, and the three
+  packaged YAML files.
+- Fixed concurrency around runtime health state, verified the hash chain in a streaming pass, and
+  made `explain_decision` read in a single pass.
+- Bumped cryptography to `50.0.0` in the lock so the frozen resolution matches the override CI
+  installs; `49.0.0` is affected by PYSEC-2026-3552. Updated hatchling to `>=1.31.0` and hypothesis
+  to `6.165.0`.
+- Scoped Dependabot to a single `uv` entry covering the whole workspace. One entry already bumped
+  the root and all four member manifests, so the per-package `pip` entries added nothing and the
+  `pip` entry for `/` conflicted with `uv` over the same directory.
+- Recorded [ADR 0009](docs/adr/0009-incremental-relabeling.md): measurement attributes the
+  per-ingestion cost to contradiction detection, not relabeling, so the relabel fixed point stays
+  whole-episode and only detection becomes incremental, behind a differential test on emitted
+  events. Proposed; no code has changed for it.
+- Documented schema 7, the measured ingestion-cost profile and what bounds episode length, the
+  raised cryptography override, and added an index of the decision records.
 
 ## v0.2.0 / 1.0.0rc3 - 2026-08-01
 

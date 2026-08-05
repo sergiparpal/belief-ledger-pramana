@@ -44,8 +44,10 @@ handles without deleting history. Back up the SQLite database, `-wal`, and `-shm
 active, or checkpoint and then copy the main file. Retain the matching private
 `locks/ledger.integrity.key`, profile configuration, and policy/source-profile extensions in the
 same encrypted backup set. Do not regenerate or substitute the key for an existing database.
-Forward migrations create a pre-migration database backup. Schema v6, introduced in rc2 and retained
-by rc3, adds append-only authorization events and rebuildable receipt/decision projections. Follow
+Forward migrations create a pre-migration database backup. Schema v6, introduced in rc2, adds
+append-only authorization events and rebuildable receipt/decision projections. Schema v7 adds no
+table and no event format: it rewrites stored idempotency keys into the episode-scoped form that
+replay rebuilds, which is what lets a database written before that scoping be opened again. Follow
 [upgrade and rollback](upgrade-and-rollback.md) before opening older state with newer code.
 
 If chain or event-authentication verification fails, stop effectful work, preserve the database and
@@ -53,6 +55,16 @@ integrity key, and restore the matching set from a verified backup or export una
 Do not edit event rows or regenerate the key. If FTS5 is absent, deterministic
 lexical selection remains available. Busy errors retry with bounded jitter; persistent contention
 makes health degraded and HIGH/CRITICAL gates fail closed.
+
+Nothing bounds how many beliefs an open episode accumulates. `context.max_beliefs` (50) is a
+rendering budget, not a store limit, and correctness-sensitive reads deliberately take no limit at
+all, so episode length is decided entirely by the host that opens and finalizes episodes. Ingestion
+cost follows it: around 500 beliefs one ingestion measured about 96 ms, roughly 27 ms of that in
+contradiction detection and 7 ms in relabeling. Episodes well below that length are unaffected. A
+host that keeps one episode open indefinitely should expect ingestion latency to keep climbing;
+finalizing at natural task boundaries is what keeps it flat. `episode list` reports each episode's
+state, so it shows which ones are still open. [ADR 0009](adr/0009-incremental-relabeling.md) holds
+the measurements and the conditions for changing this.
 
 The retained `purge` operator command is Hermes-specific; the neutral gateway intentionally has no
 purge command. Purge is not a projection-only delete because append-only event payloads would
