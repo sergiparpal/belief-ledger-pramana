@@ -18,9 +18,8 @@ agrees with what CI installs.
 Pip may report the host's exact metadata pins as incompatible; do not downgrade the remediated
 leaves to silence that warning.
 
-One path has not caught up: `scripts/smoke_install.py` still applies `cryptography>=48.0.1,<50` to
-its clean-install environments, so the packaged smoke matrix tests the host against a 49 release
-rather than the remediated one. Raise that constant to match CI.
+`scripts/smoke_install.py` applies the same pair to the clean-install environments it builds, so the
+packaged smoke matrix tests the remediated combination rather than a release the advisory covers.
 
 Full mode requires all audited hooks plus `ctx.register_middleware("llm_request", ...)`.
 Older or contract-incompatible hosts enter an explicitly reported diagnostics-only mode;

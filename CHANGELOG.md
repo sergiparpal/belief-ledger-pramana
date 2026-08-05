@@ -49,6 +49,8 @@
   events. Proposed; no code has changed for it.
 - Documented schema 7, the measured ingestion-cost profile and what bounds episode length, the
   raised cryptography override, and added an index of the decision records.
+- Raised the clean-install smoke matrix's cryptography override to `>=50.0.0,<51`. It was the one
+  path still installing a 49 release against the audited Hermes host after CI moved off it.
 
 ## v0.2.0 / 1.0.0rc3 - 2026-08-01
 

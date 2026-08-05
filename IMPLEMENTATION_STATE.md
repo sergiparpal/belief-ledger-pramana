@@ -158,7 +158,22 @@ three places. This pass corrects the drift; it changes no source, schema, or tes
 | `uv run --no-sync python scripts/check_product_claims.py` | 0 | Product claims valid across the 10 public metadata files after the README and Hermes-integration edits. |
 | `uv run --no-sync python -m pytest tests/unit/test_product_claims.py tests/contract/test_workspace_packages.py -q` | 0 | 4 passed. These are the checks that read the edited public documents; no other gate observes Markdown. |
 
-Open item, not fixed here because it is a code change: `scripts/smoke_install.py` still applies
-`cryptography>=48.0.1,<50` to its clean-install environments, so the packaged smoke matrix installs
-a 49 release against the audited host while CI installs `>=50.0.0,<51` everywhere else. The
-divergence is recorded in `HERMES_COMPATIBILITY.md` until the constant is raised.
+That pass left one open item, since it was a code change rather than a documentation one:
+`scripts/smoke_install.py` still applied `cryptography>=48.0.1,<50` to its clean-install
+environments, so the packaged smoke matrix installed a 49 release against the audited host while
+every other CI path installed `>=50.0.0,<51`. Closed immediately afterwards — see below.
+
+## Smoke-install override raised — 2026-08-05
+
+`_HERMES_SECURITY_OVERRIDES` in `scripts/smoke_install.py` now carries
+`cryptography>=50.0.0,<51`, matching the four CI jobs that install the audited host, with the
+reason for the bound recorded next to the constant. The clean-install matrix is the only path that
+was still exercising a release covered by PYSEC-2026-3552.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `uv run --no-sync ruff format --check scripts/smoke_install.py` / `ruff check scripts/smoke_install.py` | 0 / 0 | No formatting drift or lint findings. |
+| `uv run --no-sync python scripts/smoke_install.py --help` | 0 | Module imports and the parser builds with the changed constant. |
+
+The override itself is exercised by the packaging job's `--matrix ... ,hermes` run, which needs
+built wheels and network access to install the host; CI performs that check on this change.

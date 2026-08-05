@@ -11,7 +11,10 @@ import tempfile
 import venv
 from pathlib import Path
 
-_HERMES_SECURITY_OVERRIDES = ("Pillow>=12.3,<13", "cryptography>=48.0.1,<50")
+# Mirrors the override every CI job applies after installing the audited Hermes host.
+# cryptography is held at >=50 because PYSEC-2026-3552 affects 49.x; the ceiling exists
+# only to keep the override deliberate, so raise both bounds together when 51 lands.
+_HERMES_SECURITY_OVERRIDES = ("Pillow>=12.3,<13", "cryptography>=50.0.0,<51")
 
 
 def _temporary_directory() -> tempfile.TemporaryDirectory[str]:
