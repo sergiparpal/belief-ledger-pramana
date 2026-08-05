@@ -144,7 +144,11 @@ def test_every_episode_timestamp_uses_one_sortable_encoding(tmp_path: Path) -> N
     episode = _episode(store)
     store.append_events(
         episode.id,
-        [EventDraft("EPISODE_STAKES_CHANGED", "episode", episode.id, {"from": "med", "to": "high"})],
+        [
+            EventDraft(
+                "EPISODE_STAKES_CHANGED", "episode", episode.id, {"from": "med", "to": "high"}
+            )
+        ],
     )
 
     with store.connect() as connection:
@@ -312,8 +316,14 @@ def test_legacy_unscoped_idempotency_rows_migrate_and_replay_cleanly(tmp_path: P
     episode = _episode(store)
     store.append_events(
         episode.id,
-        [EventDraft("EPISODE_TURN_STARTED", "episode", episode.id, {"current_turn": 2,
-                                                                    "updated_at": utc_now()})],
+        [
+            EventDraft(
+                "EPISODE_TURN_STARTED",
+                "episode",
+                episode.id,
+                {"current_turn": 2, "updated_at": utc_now()},
+            )
+        ],
         idempotency_key="turn-2",
     )
 
@@ -324,12 +334,16 @@ def test_legacy_unscoped_idempotency_rows_migrate_and_replay_cleanly(tmp_path: P
             "UPDATE idempotency SET idempotency_key=? WHERE idempotency_key=?",
             ("turn-2", f"{episode.id}:turn-2"),
         )
-        connection.execute("DELETE FROM schema_migrations WHERE version=?", (LATEST_SCHEMA_VERSION,))
+        connection.execute(
+            "DELETE FROM schema_migrations WHERE version=?", (LATEST_SCHEMA_VERSION,)
+        )
 
     reopened = LedgerStore(database)
     assert reopened.migration.to_version == LATEST_SCHEMA_VERSION
     with reopened.connect() as connection:
-        keys = [str(row[0]) for row in connection.execute("SELECT idempotency_key FROM idempotency")]
+        keys = [
+            str(row[0]) for row in connection.execute("SELECT idempotency_key FROM idempotency")
+        ]
     assert keys == [f"{episode.id}:turn-2"]
     assert reopened.replay().deterministic
 
@@ -338,9 +352,7 @@ def test_legacy_unscoped_idempotency_rows_migrate_and_replay_cleanly(tmp_path: P
 
 
 def test_capability_shortfall_never_reports_an_unavailable_effective_profile() -> None:
-    selection = negotiate_profile(
-        HostCapabilities(pre_action_gate=True), EnforcementProfile.STRICT
-    )
+    selection = negotiate_profile(HostCapabilities(pre_action_gate=True), EnforcementProfile.STRICT)
     assert selection.missing
     assert selection.effective is EnforcementProfile.OBSERVE
     assert selection.downgraded is True
