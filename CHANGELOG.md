@@ -40,6 +40,19 @@
 - Moved the timezone-awareness guarantee for `Belief.observed_at` to `Belief.__post_init__`, next to
   where `parse_datetime` and `FixedClock` already enforce the same rule. A naive timestamp is now
   refused when the belief is built rather than later inside defeat resolution.
+- Made model-component non-determinism detectable. Every call now records an
+  `LLM_CALL_ATTRIBUTION` event carrying provider and model labels, a digest of the prompt, a digest
+  of the whole request, a digest of the structured result, and the sampling policy applied. It is a
+  new record kind rather than a field on `ComponentVerdict` or `LlmUsage`, both of which appear in
+  the frozen v1 fixtures, so frozen hashes and both projection hashes are unchanged.
+- Added `hermes belief-ledger llm-divergence [--episode EP_ID] [--json]`, which groups recorded
+  calls by prompt and input digest and reports every input that produced more than one distinct
+  output. Failed calls are excluded: an error is the absence of an answer, not a second one.
+- Added `SamplingPolicy` and `verification.sampling_temperature`, defaulting to `0.0` and validated
+  to `[0.0, 2.0]`. Both `HostLlmClient` implementations previously passed `temperature=0.0` as a
+  hardcoded literal in two separate places; the policy is now expressed once, carried on
+  `StructuredModelRequest` as an additive optional field, and recorded on every call. See
+  [ADR 0012](docs/adr/0012-llm-call-attribution.md).
 
 ## v0.2.1 / 1.0.0rc4 - 2026-08-05
 

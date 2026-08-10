@@ -205,3 +205,50 @@ left in place, or the work starts to look like design rather than implementation
 - **Why not fixed here:** a naming difference, not a defect. The tests parametrize over `STABLE`,
   which is the class the plan meant.
 - **Suggested next step:** none.
+
+### F-14 — `llm/prompts.py` calls itself versioned but carries no version
+
+- **Stage:** 4
+- **Severity:** minor
+- **What:** the module docstring of `packages/core/src/belief_ledger_core/llm/prompts.py` reads
+  "Versioned concise instructions for fallible model components", but the module holds five bare
+  string constants and no version. The schema names carry a `_v1` suffix and the JSON schemas carry
+  a `$id` ending `.v1`; those version the *schemas*, not the prompts.
+- **Why not fixed here:** the plan says to reuse the existing version rather than invent a parallel
+  one, and there is none to reuse. Adding a `PROMPT_VERSION` constant would create a second thing
+  to keep in step, and a prompt edit that forgot to bump it would silently group two different
+  prompts as one.
+- **Suggested next step:** none required. `prompt_hash` in `llm/attribution.py` identifies each
+  prompt by digesting its own text, which cannot drift from the text. If an explicit version is
+  ever wanted for human-readable reporting, derive it from the digest rather than maintaining both.
+
+### F-15 — An existing test changed: a successful model call now emits three events
+
+- **Stage:** 4
+- **Severity:** minor
+- **What:**
+  `tests/core/test_core_services.py::test_core_structured_model_client_records_success_and_stable_failure`
+  asserted `len(result.event_ids) == 2`, covering `LLM_USAGE_RECORDED` and
+  `COMPONENT_VERDICT_RECORDED`. `LLM_CALL_ATTRIBUTION` makes it three.
+- **Why not fixed here:** the assertion was replaced with a stronger one rather than a bumped
+  number. It now asserts the three event kinds by name and in order, so a future change that swaps
+  one record for another cannot keep the test green the way a count could. The old expectation —
+  that a successful call records usage and a verdict — still holds and is still asserted.
+- **Suggested next step:** none.
+
+### F-16 — Sampling was neither host-controlled nor configurable: it was a hardcoded literal, twice
+
+- **Stage:** 4
+- **Severity:** significant
+- **What:** the plan's Part A branches on whether the port can accept sampling parameters, and
+  neither branch matched. `StructuredModelRequest` had no sampling field, but
+  `belief_ledger_pramana/hermes/model_port.py` and `belief_ledger_pramana/llm/client.py` were each
+  passing `temperature=0.0` to the Hermes facade as a literal. Sampling was controlled, in two
+  places, invisibly, with nothing tying the two together or recording what was applied.
+- **Why not fixed here:** it *was* fixed. `SamplingPolicy` is now a validated, configurable value
+  carried on the request and recorded on every attribution event, and both call sites read it from
+  one helper. The entry exists because the failure mode is instructive: a value that is correct but
+  unexpressed reads, from outside, exactly like a value that is out of our control.
+- **Suggested next step:** none. Note that `temperature=0.0` still cannot make a host
+  deterministic, which is why Part B exists and why `docs/operations.md` says an empty divergence
+  report is not a proof of determinism.

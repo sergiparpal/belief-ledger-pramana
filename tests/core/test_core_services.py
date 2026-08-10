@@ -103,7 +103,14 @@ def test_core_structured_model_client_records_success_and_stable_failure(tmp_pat
     )
     assert result.parsed == {"supported": True}
     assert result.provider == "fake-provider"
-    assert len(result.event_ids) == 2
+    # Three records per call since ADR 0012 added LLM_CALL_ATTRIBUTION alongside the usage and
+    # verdict records. Asserting the kinds rather than the count says what the three are, so a
+    # future change that swaps one for another cannot keep this test green.
+    assert [event.kind for event in store.events_by_ids(result.event_ids)] == [
+        "LLM_USAGE_RECORDED",
+        "COMPONENT_VERDICT_RECORDED",
+        "LLM_CALL_ATTRIBUTION",
+    ]
 
     with pytest.raises(LlmComponentError, match=r"evaluation\.failure failed"):
         client.complete_structured(

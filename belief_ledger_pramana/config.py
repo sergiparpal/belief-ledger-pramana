@@ -73,6 +73,7 @@ class VerificationSettings:
     max_input_tokens_per_episode: int
     max_output_tokens_per_episode: int
     structured_timeout_seconds: int
+    sampling_temperature: float
     critical_human_confirmation: bool
 
 
@@ -179,6 +180,7 @@ class ConfigSnapshot:
                 max_input_tokens_per_episode=int(verification["max_input_tokens_per_episode"]),
                 max_output_tokens_per_episode=int(verification["max_output_tokens_per_episode"]),
                 structured_timeout_seconds=int(verification["structured_timeout_seconds"]),
+                sampling_temperature=float(verification["sampling_temperature"]),
                 critical_human_confirmation=bool(verification["critical_human_confirmation"]),
             ),
             lint=LintSettings(
@@ -465,6 +467,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
     ):
         _bounded_int(verification, key, 0, 10_000_000)
     _bounded_int(verification, "structured_timeout_seconds", 1, 10_000_000)
+    _bounded_float(verification, "sampling_temperature", 0.0, 2.0)
     if not isinstance(verification.get("critical_human_confirmation"), bool):
         raise ConfigError("verification.critical_human_confirmation must be a boolean")
 
@@ -690,6 +693,16 @@ def _bounded_int(container: dict[str, Any], key: str, minimum: int, maximum: int
     if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
         raise ConfigError(f"{key} must be an integer in [{minimum},{maximum}]")
     return value
+
+
+def _bounded_float(container: dict[str, Any], key: str, minimum: float, maximum: float) -> float:
+    value = container.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{key} must be a number in [{minimum},{maximum}]")
+    number = float(value)
+    if not minimum <= number <= maximum:
+        raise ConfigError(f"{key} must be a number in [{minimum},{maximum}]")
+    return number
 
 
 def _string_paths(container: dict[str, Any], key: str) -> tuple[str, ...]:

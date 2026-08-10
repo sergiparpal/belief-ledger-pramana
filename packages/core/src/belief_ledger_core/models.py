@@ -287,6 +287,39 @@ class LlmUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class LlmCallAttribution:
+    """Everything needed to detect that one input produced two different outputs.
+
+    Written as a sibling of `ComponentVerdict` rather than as fields on it. `ComponentVerdict` and
+    `LlmUsage` are frozen v1 record kinds, and adding a required field to either would move hashes
+    that `tests/fixtures/v1_replay/` pins. `LLM_CALL_ATTRIBUTION` appears in no v1 fixture, so it
+    is hash-neutral by construction (ADR 0012).
+
+    `prompt_hash` digests the instruction text itself. The prompt module describes itself as
+    versioned but carries no version constant, and inventing a parallel numbering scheme would
+    create a second thing to keep in step. A digest of the prompt cannot drift from the prompt.
+
+    `input_hash` and `output_hash` are computed over redacted, canonicalised content with the same
+    `content_hash` helper the event chain uses, so neither commits to a credential.
+    """
+
+    id: str
+    episode_id: str
+    purpose: str
+    provider: str
+    model: str
+    prompt_hash: str
+    input_hash: str
+    output_hash: str | None
+    sampling: dict[str, Any]
+    outcome: str
+    turn_number: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sampling", freeze(self.sampling))
+
+
+@dataclass(frozen=True, slots=True)
 class Episode:
     id: str
     key: str

@@ -25,7 +25,7 @@ class HermesStructuredModelPort(StructuredModelPort):
                 json_schema=request.json_schema,
                 json_mode=True,
                 schema_name=request.purpose.replace(".", "_")[:64],
-                temperature=0.0,
+                temperature=request.sampling.temperature,
                 max_tokens=request.max_tokens,
                 timeout=request.timeout_seconds,
                 purpose=request.purpose,

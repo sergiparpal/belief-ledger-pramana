@@ -29,6 +29,7 @@ from ..config import (
     validate_config,
 )
 from ..events import canonical_json, to_primitive, utc_now
+from ..llm.divergence import divergence_report
 from ..migrations import LATEST_SCHEMA_VERSION
 from ..runtime import PluginRuntime
 
@@ -69,6 +70,13 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     evaluate = sub.add_parser("evaluate", help="Run deterministic evaluation suites")
     evaluate.add_argument("--suite", choices=("a", "b", "c", "d", "e", "all"), default="all")
     evaluate.add_argument("--offline", action="store_true", required=True)
+
+    divergence = sub.add_parser(
+        "llm-divergence",
+        help="Report identical model inputs that produced different outputs",
+    )
+    divergence.add_argument("--episode", default=None)
+    divergence.add_argument("--json", action="store_true")
 
     policy = sub.add_parser("policy", help="Inventory and validate tool policy coverage")
     policy_sub = policy.add_subparsers(dest="policy_command", required=True)
@@ -200,6 +208,11 @@ def run_cli(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]
                 return 2, _json({"ok": False, "error": "confirmation_mismatch"})
             result = runtime.store.purge_episode(args.episode, confirmation=args.confirm)
             return 0, _json({"ok": True, "result": to_primitive(result)})
+        if command == "llm-divergence":
+            report = divergence_report(runtime.store.events(args.episode))
+            if args.json:
+                return 0, _json(report)
+            return 0, _human_divergence(report)
         if command == "evaluate":
             from evaluations.report import run_offline_evaluations
 
@@ -502,6 +515,32 @@ def _distribution_version(name: str) -> str:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return "not-installed"
+
+
+def _human_divergence(report: dict[str, Any]) -> str:
+    """A short operator summary. `--json` carries the full detail."""
+
+    lines = [
+        f"recorded model calls: {report['recorded_calls']}",
+        f"distinct inputs: {report['distinct_inputs']}",
+        f"divergent inputs: {report['divergent_groups']}",
+    ]
+    for group in report["groups"]:
+        lines.append("")
+        lines.append(
+            f"  {group['purpose']} input {group['input_hash'][:12]} "
+            f"prompt {group['prompt_hash'][:12]} -> {group['distinct_outputs']} distinct outputs"
+        )
+        for call in group["calls"]:
+            output = call["output_hash"] or "none"
+            lines.append(
+                f"    {call['timestamp']}  {call['model'] or '(unlabelled model)'}  "
+                f"output {output[:12]}  {call['event_id']}"
+            )
+    if not report["groups"]:
+        lines.append("")
+        lines.append("no input produced more than one distinct output")
+    return "\n".join(lines)
 
 
 def _json(value: Any) -> str:

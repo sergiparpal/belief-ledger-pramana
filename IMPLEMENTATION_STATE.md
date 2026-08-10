@@ -322,3 +322,33 @@ F-12.
 
 Test count moved 405 → 419; coverage 88.18%, equal to the Stage 0 baseline of 88.16% and above the
 floor. Removing the perishability branch and adding the constructor branch net out.
+
+## Obvious-fix plan, Stage 4 — model determinism and divergence auditability — 2026-08-10
+
+Neither of the plan's Part A branches matched. The port could not carry sampling parameters, but
+`hermes/model_port.py` and `belief_ledger_pramana/llm/client.py` were each already passing
+`temperature=0.0` to the Hermes facade as a literal. Sampling was controlled — twice, invisibly,
+with nothing linking the two or recording what was applied. `SamplingPolicy` now expresses it once,
+`verification.sampling_temperature` configures it with bounded validation in both validators, and
+it rides on `StructuredModelRequest` as an additive defaulted field so existing port
+implementations are unaffected. Logged as F-16.
+
+Attribution is a new `LLM_CALL_ATTRIBUTION` record written alongside the usage and verdict records.
+R2 from the baseline confirmed neither `ComponentVerdict` nor `LlmUsage` can take a required field
+without moving a frozen v1 hash, so the sibling-record option the plan marks preferred is the one
+taken. No projection table is added, so neither projection hash moves either. `prompt_hash` digests
+the prompt text because the prompt module carries no version to reuse (F-14).
+
+`hermes belief-ledger llm-divergence` groups by `(prompt_hash, input_hash)` and reports every input
+answered more than one way. Failed calls are excluded.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_llm_divergence.py` | 0 | 16 passed, including the two-different-outputs acceptance case and the identical-results control. |
+| `pytest tests/integration/test_operator_surfaces.py` | 0 | 6 passed; the CLI reports one divergent group and nothing for a clean episode. |
+| `pytest tests/contract/test_v1_replay.py` | 0 | 10 passed; frozen event and projection hashes unchanged. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | No findings. |
+| `mypy packages/{core,gateway,mcp,reference}/src belief_ledger_pramana` | 0 | 150 source files. |
+| `pytest -m "not live_llm" --cov ... --cov-branch` | 0 | 436 passed; 88.33% against the 88% floor. |
+
+Test count moved 419 → 436; coverage 88.18% → 88.33%.

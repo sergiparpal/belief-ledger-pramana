@@ -353,3 +353,73 @@ def test_compatibility_fallback_hooks_are_visibly_degraded(runtime, monkeypatch)
     )
     degraded = hooks.pre_llm_call(user_message="Failure path")
     assert degraded is not None and "degraded" in degraded["context"]
+
+
+def test_llm_divergence_command_reports_identical_inputs_with_different_outputs(runtime) -> None:
+    """The operator-facing half of ADR 0012: the audit has to be runnable, not only recorded."""
+    from belief_ledger_core.llm.attribution import call_input_hash, prompt_hash
+
+    from belief_ledger_pramana.events import to_primitive
+    from belief_ledger_pramana.models import LlmCallAttribution
+    from belief_ledger_pramana.store import EventDraft
+
+    service = runtime.begin_turn(
+        session_id="divergence-session",
+        turn_id="divergence-turn",
+        user_message="Atlas is operational.",
+        sender_id="operator",
+    )
+    episode_id = service.episode_id
+
+    code, empty = run_cli(runtime, _arguments("llm-divergence", "--json"))
+    assert code == 0
+    assert json.loads(empty)["divergent_groups"] == 0
+
+    shared = {
+        "prompt_hash": prompt_hash("Classify support."),
+        "input_hash": call_input_hash(
+            instructions="Classify support.", text="Atlas", schema_name="support", max_tokens=8
+        ),
+    }
+    drafts = [
+        EventDraft(
+            "LLM_CALL_ATTRIBUTION",
+            "llm_call_attribution",
+            f"lca_divergence{index:016d}",
+            {
+                "record": to_primitive(
+                    LlmCallAttribution(
+                        id=f"lca_divergence{index:016d}",
+                        episode_id=episode_id,
+                        purpose="evaluation.entailment",
+                        provider="fake-provider",
+                        model="fake-model",
+                        output_hash=digest,
+                        sampling={"temperature": 0.0},
+                        outcome="success",
+                        turn_number=1,
+                        **shared,
+                    )
+                )
+            },
+        )
+        for index, digest in enumerate(("a" * 64, "b" * 64), start=1)
+    ]
+    service.store.append_events(episode_id, drafts)
+
+    code, output = run_cli(runtime, _arguments("llm-divergence", "--json"))
+    assert code == 0
+    report = json.loads(output)
+    assert report["recorded_calls"] == 2
+    assert report["distinct_inputs"] == 1
+    assert report["divergent_groups"] == 1
+    assert report["groups"][0]["output_hashes"] == ["a" * 64, "b" * 64]
+
+    code, scoped = run_cli(runtime, _arguments("llm-divergence", "--episode", episode_id))
+    assert code == 0
+    assert "divergent inputs: 1" in scoped
+    assert "fake-model" in scoped
+
+    code, other = run_cli(runtime, _arguments("llm-divergence", "--episode", "ep_absent"))
+    assert code == 0
+    assert "no input produced more than one distinct output" in other

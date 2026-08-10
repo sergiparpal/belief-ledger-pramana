@@ -18,6 +18,7 @@ and the automated check that pins it.
 | [0009 Incremental relabeling](0009-incremental-relabeling.md) | proposed, 2026-08-05 | The relabel fixed point stays whole-episode; measurement identifies contradiction detection as the quadratic term, and only it becomes incremental, behind a differential test on emitted events. |
 | [0010 Scalar competence in the priority order](0010-scalar-competence-in-the-priority-order.md) | accepted, 2026-08-10 | `reliability_rank` stays the third lexicographic key; the specification is corrected to say so, including that the same scalar bands SHABDA at `type_rank`. Removing it was rejected because every contest it settles would become `PENDING`, which has no drain. |
 | [0011 Unconditional recency key](0011-unconditional-recency-key.md) | accepted, 2026-08-10 | `recency_rank` is computed for every perishability class, not only `fast`/`live`, so stale-versus-fresh resolves instead of producing saṃśaya. It stays fifth, which bounds the change by position; timezone awareness moves to `Belief.__post_init__`. |
+| [0012 LLM call attribution](0012-llm-call-attribution.md) | accepted, 2026-08-10 | Every model call records prompt, input and output digests plus the applied sampling policy as a new `LLM_CALL_ATTRIBUTION` record, and `llm-divergence` reports identical inputs that produced different outputs. |
 
 0009 is proposed. It records a measurement and a direction; no code has changed for it, and the
 per-ingestion behaviour it describes is the behaviour that ships today.

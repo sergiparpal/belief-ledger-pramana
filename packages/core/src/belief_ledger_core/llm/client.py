@@ -8,12 +8,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from ..dependencies import RuntimeDependencies, StructuredModelPort, StructuredModelRequest
+from ..dependencies import (
+    RuntimeDependencies,
+    StructuredModelPort,
+    StructuredModelRequest,
+)
 from ..errors import LlmReservationError
 from ..events import EventDraft
 from ..ingestion.tool import redacted_content_hash
-from ..models import ComponentVerdict, LlmUsage
+from ..models import ComponentVerdict, LlmCallAttribution, LlmUsage
 from ..store import LedgerStore
+from .attribution import call_input_hash, call_output_hash, prompt_hash, sampling_policy
 
 _IN_COMPONENT_CALL: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "belief_ledger_component_call", default=False
@@ -99,6 +104,7 @@ class HostLlmClient:
         except LlmReservationError as exc:
             raise LlmBudgetError(str(exc)) from exc
 
+        sampling = sampling_policy(limits.get("sampling_temperature"))
         token = _IN_COMPONENT_CALL.set(True)
         started = self._dependencies.monotonic.now()
         provider = ""
@@ -108,6 +114,7 @@ class HostLlmClient:
         cost: float | None = None
         outcome = "error"
         parsed: Any = None
+        output_digest: str | None = None
         caught: Exception | None = None
         try:
             result = self._model_port.complete(
@@ -119,6 +126,7 @@ class HostLlmClient:
                     schema,
                     max_tokens,
                     float(limits["structured_timeout_seconds"]),
+                    sampling,
                 )
             )
             if result.schema_version != 1:
@@ -129,6 +137,7 @@ class HostLlmClient:
             output_tokens = _valid_output_tokens(result.output_tokens, max_tokens)
             cost = _valid_cost(result.cost_usd)
             parsed = validator(result.parsed)
+            output_digest = call_output_hash(parsed)
             outcome = "success"
         except Exception as exc:  # attribution is persisted before the stable wrapper is raised
             caught = exc
@@ -162,6 +171,24 @@ class HostLlmClient:
             belief_id=None,
             detail={"schema_name": schema_name},
         )
+        attribution = LlmCallAttribution(
+            id=self._dependencies.identity.new("attribution"),
+            episode_id=episode_id,
+            purpose=purpose,
+            provider=provider,
+            model=model,
+            prompt_hash=prompt_hash(instructions),
+            input_hash=call_input_hash(
+                instructions=instructions,
+                text=text,
+                schema_name=schema_name,
+                max_tokens=max_tokens,
+            ),
+            output_hash=output_digest,
+            sampling={"temperature": sampling.temperature},
+            outcome=outcome,
+            turn_number=episode.current_turn,
+        )
         try:
             events = self._store.append_events(
                 episode_id,
@@ -172,6 +199,12 @@ class HostLlmClient:
                         "component_verdict",
                         verdict.id,
                         verdict,
+                    ),
+                    _record_draft(
+                        "LLM_CALL_ATTRIBUTION",
+                        "llm_call_attribution",
+                        attribution.id,
+                        attribution,
                     ),
                 ],
             )

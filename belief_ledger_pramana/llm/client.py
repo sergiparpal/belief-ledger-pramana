@@ -14,8 +14,9 @@ from ..errors import LlmReservationError
 from ..events import EventDraft, to_primitive
 from ..ids import new_id
 from ..ingestion.tool import redacted_content_hash
-from ..models import ComponentVerdict, LlmUsage
+from ..models import ComponentVerdict, LlmCallAttribution, LlmUsage
 from ..ports import HostLlmFacade, LlmBudgetLedger
+from .attribution import call_input_hash, call_output_hash, prompt_hash, sampling_policy
 
 _IN_COMPONENT_CALL: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "belief_ledger_component_call", default=False
@@ -102,6 +103,7 @@ class HostLlmClient:
         except LlmReservationError as exc:
             raise LlmBudgetError(str(exc)) from exc
 
+        sampling = sampling_policy(getattr(limits, "sampling_temperature", None))
         token = _IN_COMPONENT_CALL.set(True)
         started = time.monotonic()
         provider = ""
@@ -113,6 +115,7 @@ class HostLlmClient:
         cost: float | None = None
         outcome = "error"
         parsed: Any = None
+        output_digest: str | None = None
         caught: Exception | None = None
         try:
             facade = self._facade_getter()
@@ -122,7 +125,7 @@ class HostLlmClient:
                 json_schema=schema,
                 json_mode=True,
                 schema_name=schema_name,
-                temperature=0.0,
+                temperature=sampling.temperature,
                 max_tokens=max_tokens,
                 timeout=float(limits.structured_timeout_seconds),
                 purpose=purpose,
@@ -134,6 +137,7 @@ class HostLlmClient:
             output_tokens = _output_tokens_or_reservation(usage, max_tokens)
             cost = _valid_cost(getattr(usage, "cost_usd", None))
             parsed = validator(getattr(result, "parsed", None))
+            output_digest = call_output_hash(parsed)
             outcome = "success"
         except Exception as exc:  # attribution is persisted before the stable wrapper is raised
             caught = exc
@@ -165,6 +169,24 @@ class HostLlmClient:
             belief_id=None,
             detail={"schema_name": schema_name},
         )
+        attribution = LlmCallAttribution(
+            id=new_id("attribution"),
+            episode_id=episode_id,
+            purpose=purpose,
+            provider=provider,
+            model=model,
+            prompt_hash=prompt_hash(instructions),
+            input_hash=call_input_hash(
+                instructions=instructions,
+                text=text,
+                schema_name=schema_name,
+                max_tokens=max_tokens,
+            ),
+            output_hash=output_digest,
+            sampling={"temperature": sampling.temperature},
+            outcome=outcome,
+            turn_number=episode.current_turn,
+        )
         try:
             events = self._store.append_events(
                 episode_id,
@@ -175,6 +197,12 @@ class HostLlmClient:
                         "component_verdict",
                         verdict.id,
                         verdict,
+                    ),
+                    _record_draft(
+                        "LLM_CALL_ATTRIBUTION",
+                        "llm_call_attribution",
+                        attribution.id,
+                        attribution,
                     ),
                 ],
             )

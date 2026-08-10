@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -29,6 +29,30 @@ class TokenPort(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class SamplingPolicy:
+    """Sampling parameters a caller asks the host to apply.
+
+    `temperature=0.0` is the default because a component verdict is a judgement the ledger records
+    and replays, not a generation. It cannot make a host deterministic — batching, model routing
+    and provider-side changes are all outside this process — so the policy is recorded on every
+    call alongside the input and output digests, and `llm.divergence` reports identical inputs that
+    produced different outputs. Reducing non-determinism and detecting it are separate jobs; this
+    type only does the first.
+
+    There is no `seed` field. `StructuredModelPort` does not accept one, and a knob that is
+    recorded but never applied would misrepresent what was asked of the provider.
+    """
+
+    temperature: float = 0.0
+
+    def __post_init__(self) -> None:
+        if isinstance(self.temperature, bool) or not isinstance(self.temperature, (int, float)):
+            raise ValueError("sampling temperature must be a number")
+        if not 0.0 <= float(self.temperature) <= 2.0:
+            raise ValueError("sampling temperature must be between 0.0 and 2.0")
+
+
+@dataclass(frozen=True, slots=True)
 class StructuredModelRequest:
     schema_version: int
     purpose: str
@@ -37,6 +61,8 @@ class StructuredModelRequest:
     json_schema: dict[str, Any]
     max_tokens: int
     timeout_seconds: float
+    # Additive and defaulted, so an existing port implementation keeps working unchanged.
+    sampling: SamplingPolicy = field(default_factory=SamplingPolicy)
 
 
 @dataclass(frozen=True, slots=True)

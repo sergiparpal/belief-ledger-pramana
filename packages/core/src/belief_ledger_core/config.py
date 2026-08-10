@@ -167,6 +167,7 @@ def validate_core_config(data: dict[str, Any], *, defaults: dict[str, Any]) -> N
     ):
         _bounded_int(verification, key, 0, 10_000_000)
     _bounded_int(verification, "structured_timeout_seconds", 1, 10_000_000)
+    _bounded_number(verification, "sampling_temperature", 0.0, 2.0)
     _boolean(verification, "critical_human_confirmation")
 
     lint = _mapping(data, "lint")

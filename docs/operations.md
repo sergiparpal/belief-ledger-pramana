@@ -37,7 +37,34 @@ hermes belief-ledger episode export EPISODE --format jsonl
 hermes belief-ledger evaluate --suite all --offline
 hermes belief-ledger policy validate
 hermes belief-ledger policy inventory
+hermes belief-ledger llm-divergence --json
 ```
+
+## Auditing model-component non-determinism
+
+Every model-component call records an `LLM_CALL_ATTRIBUTION` event carrying the provider and model
+labels, a digest of the prompt, a digest of the whole request, a digest of the structured result,
+and the sampling policy that was applied. `verification.sampling_temperature` defaults to `0.0` and
+is asked of the host on every call.
+
+`temperature: 0.0` reduces non-determinism. It cannot remove it — batching, model routing and
+provider-side changes all sit outside this process — so divergence is detected rather than assumed
+away:
+
+```bash
+hermes belief-ledger llm-divergence --json
+hermes belief-ledger llm-divergence --episode EP_ID
+```
+
+The command groups recorded calls by prompt and input digest and reports every input that produced
+more than one distinct output, with the model label, timestamps and event IDs for each call. An
+empty report means no recorded input has yet been answered two different ways; it is not a proof
+that the component is deterministic. Failed calls carry no output digest and are excluded, so a
+transient provider error is not reported as divergence.
+
+A non-empty report is a fact about history, not an alarm on its own. Read it alongside the model
+labels: the same input answered differently by two different model labels is a routing change, and
+by one label is provider-side variation.
 
 For the Hermes profile, WAL checkpoints occur after turns; finalization releases process-local
 handles without deleting history. Back up the SQLite database, `-wal`, and `-shm` together while
