@@ -139,10 +139,18 @@ That gap is the reason Stage 7a exists and must land before any move in 7b–7d.
 Recorded when answered; see [the plan findings register](plan-findings.md) for anything the answers
 displaced.
 
-| Question | Answer |
-|---|---|
-| Q1 — priority claim reconciliation | _pending_ |
-| Q2 — external anchor sink | _pending_ |
-| Q3 — `LedgerRuntime` facade | _pending_ |
-| Q4 — `runtime.py` split depth | _pending_ |
-| Q5 — delivery shape | _pending_ |
+Answered 2026-08-10. Every answer is the plan's default option A.
+
+| Question | Answer | What it selects |
+|---|---|---|
+| Q1 — priority claim reconciliation | **A** | Amend the documentation; no behaviour change; pin the field order with a structural test |
+| Q2 — external anchor sink | **A** | Local append-only JSONL file outside the ledger directory; no HTTP adapter |
+| Q3 — `LedgerRuntime` facade | **A** | Migrate internal callers; keep the facade emitting `DeprecationWarning`; document a removal version |
+| Q4 — `runtime.py` split depth | **A** | Split until no source file exceeds 600 lines |
+| Q5 — delivery shape | **A**, local only | One branch per stage, full offline gate before each; nothing pushed and no pull request opened |
+
+Q5 was extended beyond the plan's wording because `CLAUDE.md` rule 9 forbids pushing without
+authorization while the plan assumes pull requests through `ci-complete`. Authorization was not
+given, so every stage lands as a local branch for review. The branches form a stack — each stage
+branches from the previous stage's tip, because Stage 6 depends on Stage 1 and Stage 7 depends on
+all of them — and are listed in [the completion report](plan-completion-report.md).
