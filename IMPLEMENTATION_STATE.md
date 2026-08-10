@@ -241,3 +241,28 @@ Drift found and corrected in this change:
 
 Test count moved 353 → 367. Coverage is unchanged at 88.16%: the checker lives in `scripts/`, which
 is outside the five measured packages, and the tests that exercise it are test code.
+
+## Obvious-fix plan, Stage 2 — priority claim reconciliation — 2026-08-10
+
+Q1 answered A: keep the behaviour, correct the claim. No runtime code changed; `engine/priority.py`
+gained a module docstring, the specification's §1 and §4.2 were made precise, and
+`tests/unit/test_priority_order.py` pins the order structurally so the claim and the tuple cannot
+diverge again. Recorded as [ADR 0010](docs/adr/0010-scalar-competence-in-the-priority-order.md).
+
+Writing the pinning test found something neither document stated: `_type_key` bands SHABDA into
+`shabda_apta_hi`/`_mid`/`_lo` using the same `effective_competence` scalar, so competence also moves
+`type_rank`. The first version of the "reliability decides the tie" test failed for exactly that
+reason — a 0.9-vs-0.2 contest between two testimony beliefs resolves at `type`, not `reliability`.
+The docstring, the specification and the ADR all state the coupling rather than eliding it, and
+`test_for_shabda_a_competence_gap_across_a_band_boundary_is_decided_at_type` keeps it stated. Logged
+as F-07.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_priority_order.py` | 0 | 12 passed. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | 265 files, no findings. |
+| `mypy packages/{core,gateway,mcp,reference}/src belief_ledger_pramana` | 0 | 146 source files. |
+| `scripts/check_doc_invariants.py` / `scripts/check_product_claims.py` | 0 / 0 | No drift, no restricted claims. |
+| `pytest -m "not live_llm" --cov ... --cov-branch` | 0 | 379 passed; 88.18% against the 88% floor. |
+
+Test count moved 367 → 379; coverage 88.16% → 88.18%.

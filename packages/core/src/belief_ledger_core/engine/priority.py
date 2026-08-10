@@ -1,4 +1,34 @@
-"""Visible lexicographic priority traces and fixed defeat rules."""
+"""Visible lexicographic priority traces and fixed defeat rules.
+
+Defeat is decided by a fixed lexicographic order over five keys, in this order:
+
+    (integrity_rank, type_rank, reliability_rank, specificity_rank, recency_rank)
+
+A scalar quantity does participate. `reliability_rank`, derived from `effective_competence`, is the
+third key: it can decide a contest that `integrity_rank` and `type_rank` left tied, and it can never
+override either. It is not a confidence score over the belief; it is a competence estimate for the
+source, learned from that source's history of confirmations and defeats.
+
+One qualification, and it matters. For SHABDA the same scalar also feeds the *second* key:
+`_type_key` bands testimony into `shabda_apta_hi`/`_mid`/`_lo` by `effective_competence`, so a
+competence gap that crosses a band boundary is decided at `type_rank` and never reaches
+`reliability_rank`. "Third key" describes where the scalar sits in the tuple, not the full extent of
+its influence on testimony. It remains true that no amount of competence can beat a differing
+`integrity_rank`, and that for every other pramāṇa `type_rank` is independent of it.
+
+`Belief.confidence` is a different thing and is never read here. That field is auxiliary in the
+strict sense — no code path in this module consults it — which is what the specification's R1 means
+when it says a scalar does not govern defeat. Read the two claims together: the belief's own scalar
+never participates, and the source's competence participates only after two structural keys have
+tied.
+
+Two rules sit outside the tuple entirely. Positive evidence always defeats an admitted absence,
+whatever the tuple says; and equality across all five keys is not a tie-break but saṃśaya, which
+`relabel` turns into PENDING rather than an arbitrary winner.
+
+The order is pinned structurally by `tests/unit/test_priority_order.py`, so it cannot drift from
+this docstring silently. See `docs/adr/0010-scalar-competence-in-the-priority-order.md`.
+"""
 
 from __future__ import annotations
 

@@ -9,6 +9,7 @@ a claim of external scientific validity.
 | Requirement | Implementation | Automated evidence |
 |---|---|---|
 | R1 discrete state and structural defeat | `models.py`, `engine/defeat.py`, status transition events | `tests/unit/test_engine.py`, suite B |
+| R1 scalar participation is bounded ([ADR 0010](adr/0010-scalar-competence-in-the-priority-order.md)) | `engine/priority.py` module docstring and `PriorityTrace.value` | `tests/unit/test_priority_order.py` |
 | R2 wrapper/content separation | `ingestion/adapters.py`, `runtime.py:ingest_tool_result` | `tests/integration/test_episode_flow.py::test_wrapper_content_separation_and_lazy_promotion` |
 | R3 yogyatā for absence | `ingestion/absence.py`, `engine/validity.py`, `runtime.py:_absence_drafts` | `tests/unit/test_validity.py`, negative-search integration test |
 | R4 memory is transport | `engine/trust.py` prior-ledger LIVE rule, memory adapter provenance | `test_live_memory_transport_reentry_requires_reobservation` and trust tests |
@@ -71,7 +72,7 @@ a claim of external scientific validity.
 | §3 ANUPALABDHI/yogyatā | absence assessment and positive fixed rule | absence and engine tests |
 | §3 user/model/prior-ledger rules | trust profiles and adapter source kinds | complete trust-matrix test |
 | §4.1 REBUT/UNDERCUT | `models.DefeatKind`, `engine/defeat.py` | engine winner/undercut scenarios |
-| §4.2 lexicographic priority/fixed rules | `engine/priority.py`, packaged ranks | suite B, priority tests |
+| §4.2 lexicographic priority/fixed rules | `engine/priority.py`, packaged ranks | suite B, `tests/unit/test_priority_order.py` field-order and override pins |
 | §4.2 saṃśaya | equal/cycle PENDING plus persistent conflict/task | equal-priority test/integration |
 | §4.3 fixed point/termination/reinstatement | `engine/defeat.py` state detection/ceiling | generated finite chains and reinstatement test |
 | §4.4 structural retraction | rendered-belief projection, notice/descendants/ack | stale-claim end-to-end test |

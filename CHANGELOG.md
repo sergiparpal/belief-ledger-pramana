@@ -17,6 +17,12 @@
 - Stated the current schema version in `docs/operations.md` and `docs/architecture.md`, and the
   supported Python range in `README.md`. The new checker found all three missing on its first run;
   they were absent rather than stale, which no value-comparison check would have caught.
+- Corrected the specification's claim that a scalar does not govern defeat. `reliability_rank`, the
+  learned competence estimate for a source, is the third of the five lexicographic keys, and for
+  SHABDA the same scalar also selects the `shabda_apta_*` band at `type_rank`. The belief's own
+  `confidence` field remains genuinely unread. No behaviour changed; see
+  [ADR 0010](docs/adr/0010-scalar-competence-in-the-priority-order.md) and the new
+  `tests/unit/test_priority_order.py`, which pins the tuple order structurally.
 
 ## v0.2.1 / 1.0.0rc4 - 2026-08-05
 

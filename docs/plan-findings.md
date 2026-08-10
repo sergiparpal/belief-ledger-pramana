@@ -82,3 +82,33 @@ left in place, or the work starts to look like design rather than implementation
 - **Suggested next step:** none; keep the "states it nowhere" branch of the checker, and keep
   `tests/unit/test_doc_invariants.py::test_a_document_that_drops_the_fact_entirely_fails` pinning
   it.
+
+### F-06 — The imprecise defeat claim was in the specification, not the README
+
+- **Stage:** 2
+- **Severity:** minor
+- **What:** the plan attributes "scalar confidence never decides defeat" to `README.md`. A search of
+  the whole tree finds the claim only at `docs/belief-ledger-pramana-spec-v0.1.md:15`; `README.md`
+  makes no claim about defeat scalars at all, and §4.2 of the same specification already listed
+  `reliability` as the third key correctly.
+- **Why not fixed here:** nothing to fix in `README.md`. Recorded so the completion report is not
+  read as having silently skipped a file the plan named.
+- **Suggested next step:** none.
+
+### F-07 — For SHABDA, competence also determines `type_rank`, not only `reliability_rank`
+
+- **Stage:** 2
+- **Severity:** significant
+- **What:** `_type_key` in `packages/core/src/belief_ledger_core/engine/priority.py` bands testimony
+  into `shabda_apta_hi`/`_mid`/`_lo` by `effective_competence`, using the packaged thresholds 0.8
+  and 0.5. The same scalar that is the third key therefore also moves the second one. A competence
+  gap crossing a band boundary is decided at `type_rank` and never reaches `reliability_rank`. This
+  was found by writing the Stage 2 pinning test, which failed on its first run: a 0.9-vs-0.2
+  contest between two SHABDA beliefs resolved at `type`, not at `reliability`.
+- **Why not fixed here:** it is not obviously a defect. Banding testimony by source competence is a
+  deliberate modelling choice, and changing it would alter defeat outcomes — design work, not
+  implementation, and therefore out of scope by §0.
+- **Suggested next step:** decide whether the band coupling is intended to be load-bearing or is an
+  accident of expressing "how good is this witness" twice; if the former, say so in the
+  specification's §4.2 rather than only in the code. Note that it compounds the §2.3
+  `effective_competence` feedback loop, which is already out of scope.
