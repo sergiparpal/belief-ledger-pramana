@@ -19,6 +19,7 @@ and the automated check that pins it.
 | [0010 Scalar competence in the priority order](0010-scalar-competence-in-the-priority-order.md) | accepted, 2026-08-10 | `reliability_rank` stays the third lexicographic key; the specification is corrected to say so, including that the same scalar bands SHABDA at `type_rank`. Removing it was rejected because every contest it settles would become `PENDING`, which has no drain. |
 | [0011 Unconditional recency key](0011-unconditional-recency-key.md) | accepted, 2026-08-10 | `recency_rank` is computed for every perishability class, not only `fast`/`live`, so stale-versus-fresh resolves instead of producing saṃśaya. It stays fifth, which bounds the change by position; timezone awareness moves to `Belief.__post_init__`. |
 | [0012 LLM call attribution](0012-llm-call-attribution.md) | accepted, 2026-08-10 | Every model call records prompt, input and output digests plus the applied sampling policy as a new `LLM_CALL_ATTRIBUTION` record, and `llm-divergence` reports identical inputs that produced different outputs. |
+| [0013 External chain anchoring](0013-external-chain-anchoring.md) | accepted, 2026-08-10 | The chain root is published to an append-only sink outside the ledger directory, so local modification followed by re-chaining leaves evidence. It raises the cost of tampering; it does not prevent it. |
 
 0009 is proposed. It records a measurement and a direction; no code has changed for it, and the
 per-ingestion behaviour it describes is the behaviour that ships today.

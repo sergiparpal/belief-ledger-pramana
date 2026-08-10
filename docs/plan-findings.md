@@ -252,3 +252,33 @@ left in place, or the work starts to look like design rather than implementation
 - **Suggested next step:** none. Note that `temperature=0.0` still cannot make a host
   deterministic, which is why Part B exists and why `docs/operations.md` says an empty divergence
   report is not a proof of determinism.
+
+### F-17 — `verification/chain_audit.py` is about inference chains, not the hash chain
+
+- **Stage:** 5
+- **Severity:** minor
+- **What:** the plan says "`chain_audit.py` already computes chain state. Do not write a second root
+  computation; extract and reuse the existing one." That module is about *anumāna* chain audits —
+  `local_asiddha` and `validate_chain_audit` check warrants and premise statuses. It computes no
+  hash-chain state at all. The name collides.
+- **Why not fixed here:** the instruction's intent was followed against the code that actually
+  computes chain state, `LedgerStore.verify_hash_chain`. Its head computation was extracted into
+  `_verified_heads`, and `chain_state` reuses it, so there is still exactly one root computation.
+  `anchors.py` was placed next to `chain_audit.py` as the plan directs.
+- **Suggested next step:** consider renaming `verification/chain_audit.py` to something naming
+  inference — the collision is a live trap for exactly this kind of change. Not done here because a
+  rename touches the public compat surface and Stage 7a's pin does not exist yet.
+
+### F-18 — Append-only triggers are not a control against an attacker who can write the file
+
+- **Stage:** 5
+- **Severity:** minor
+- **What:** `events_no_update` and `events_no_delete` abort any `UPDATE` or `DELETE` on `events`.
+  Writing the tamper-simulation test made it concrete that a trigger is a row in the schema of a
+  file the attacker can write: `DROP TRIGGER` and the protection is gone. The test does exactly
+  that, then restores them.
+- **Why not fixed here:** there is nothing to fix. The triggers defend against a buggy or careless
+  caller inside the process, which is a real and different threat, and they do that well. The entry
+  exists so nobody reads them as tamper resistance.
+- **Suggested next step:** none. The threat model's anchoring section now states what does and does
+  not detect an attacker with file access.

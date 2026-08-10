@@ -471,6 +471,11 @@ def validate_config(config: Mapping[str, Any]) -> None:
     if not isinstance(verification.get("critical_human_confirmation"), bool):
         raise ConfigError("verification.critical_human_confirmation must be a boolean")
 
+    anchoring = _mapping(config, "anchoring")
+    sink_path = anchoring.get("sink_path")
+    if not isinstance(sink_path, str) or len(sink_path) > 4_096 or "\n" in sink_path:
+        raise ConfigError("anchoring.sink_path must be a string path, empty to disable")
+
     lint = _mapping(config, "lint")
     allowed_lint = {"annotate", "rewrite_once", "block", "allow"}
     for stake in ("low", "med", "high", "critical"):

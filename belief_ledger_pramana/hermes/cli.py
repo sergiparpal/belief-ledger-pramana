@@ -32,6 +32,13 @@ from ..events import canonical_json, to_primitive, utc_now
 from ..llm.divergence import divergence_report
 from ..migrations import LATEST_SCHEMA_VERSION
 from ..runtime import PluginRuntime
+from ..verification.anchors import (
+    GLOBAL_SCOPE,
+    AnchorError,
+    FileAnchorSink,
+    build_record,
+    compare_against_anchors,
+)
 
 
 def setup_cli(parser: argparse.ArgumentParser) -> None:
@@ -50,7 +57,12 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     db_sub.add_parser("status")
     migrate = db_sub.add_parser("migrate")
     migrate.add_argument("--dry-run", action="store_true")
-    db_sub.add_parser("verify-chain")
+    verify_chain = db_sub.add_parser("verify-chain")
+    verify_chain.add_argument(
+        "--against-anchors",
+        action="store_true",
+        help="Also compare every published anchor against the local chain",
+    )
     db_sub.add_parser("replay")
 
     episode = sub.add_parser("episode", help="Inspect or export episodes")
@@ -70,6 +82,14 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     evaluate = sub.add_parser("evaluate", help="Run deterministic evaluation suites")
     evaluate.add_argument("--suite", choices=("a", "b", "c", "d", "e", "all"), default="all")
     evaluate.add_argument("--offline", action="store_true", required=True)
+
+    anchor = sub.add_parser("anchor", help="Publish and verify external anchors of the hash chain")
+    anchor_sub = anchor.add_subparsers(dest="anchor_command", required=True)
+    publish = anchor_sub.add_parser("publish")
+    publish.add_argument("--scope", default=GLOBAL_SCOPE)
+    anchor_verify = anchor_sub.add_parser("verify")
+    anchor_verify.add_argument("--since-height", type=int, default=0)
+    anchor_verify.add_argument("--json", action="store_true")
 
     divergence = sub.add_parser(
         "llm-divergence",
@@ -162,7 +182,14 @@ def run_cli(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]
                 )
             if args.db_command == "verify-chain":
                 ok, digest = runtime.store.verify_hash_chain()
-                return 0, _json({"ok": ok, "heads": digest})
+                if not getattr(args, "against_anchors", False):
+                    return 0, _json({"ok": ok, "heads": digest})
+                anchors = _anchor_verification(runtime, since_height=0)
+                # The chain being internally consistent is exactly what a re-chaining attacker
+                # restores, so a passing chain with a failing anchor is still a failure.
+                return (0 if ok and anchors["ok"] else 1), _json(
+                    {"ok": ok and anchors["ok"], "heads": digest, "anchors": anchors}
+                )
             if args.db_command == "replay":
                 return 0, _json(to_primitive(runtime.store.replay()))
             return 0, _json(to_primitive(runtime.store.migration))
@@ -208,6 +235,13 @@ def run_cli(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]
                 return 2, _json({"ok": False, "error": "confirmation_mismatch"})
             result = runtime.store.purge_episode(args.episode, confirmation=args.confirm)
             return 0, _json({"ok": True, "result": to_primitive(result)})
+        if command == "anchor":
+            if args.anchor_command == "publish":
+                return _anchor_publish(runtime, scope=args.scope)
+            report = _anchor_verification(runtime, since_height=args.since_height)
+            if args.json:
+                return (0 if report["ok"] else 1), _json(report)
+            return (0 if report["ok"] else 1), _human_anchor_verification(report)
         if command == "llm-divergence":
             report = divergence_report(runtime.store.events(args.episode))
             if args.json:
@@ -515,6 +549,95 @@ def _distribution_version(name: str) -> str:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return "not-installed"
+
+
+def _anchor_sink(runtime: PluginRuntime) -> FileAnchorSink:
+    """Build the configured sink, or explain precisely why anchoring is unavailable."""
+
+    if runtime.paths is None or runtime.store is None:
+        raise AnchorError("ledger is not initialized")
+    configured = str(runtime.config.data["anchoring"]["sink_path"]).strip()
+    if not configured:
+        raise AnchorError(
+            "anchoring.sink_path is empty; set it to a path outside the ledger directory"
+        )
+    return FileAnchorSink(Path(configured), ledger_directory=runtime.paths.root)
+
+
+def _anchor_publish(runtime: PluginRuntime, *, scope: str) -> tuple[int, str]:
+    if runtime.store is None:
+        raise RuntimeError("ledger store is unavailable after initialization")
+    try:
+        sink = _anchor_sink(runtime)
+    except AnchorError as exc:
+        return 2, _json({"ok": False, "error": "anchor_unavailable", "message": str(exc)})
+    state = runtime.store.chain_state()
+    record = build_record(
+        state,
+        ledger_id=str(runtime.store.database),
+        scope=scope,
+        created_at=utc_now(),
+        package_version=_distribution_version("belief-ledger-pramana"),
+    )
+    receipt = sink.publish(record)
+    return 0, _json(
+        {
+            "ok": True,
+            "sink": receipt.sink,
+            "scope": scope,
+            "chain_height": receipt.chain_height,
+            "root_hash": receipt.root_hash,
+        }
+    )
+
+
+def _anchor_verification(runtime: PluginRuntime, *, since_height: int) -> dict[str, Any]:
+    if runtime.store is None:
+        raise RuntimeError("ledger store is unavailable after initialization")
+    try:
+        sink = _anchor_sink(runtime)
+        records = list(sink.fetch(since_height))
+    except AnchorError as exc:
+        return {"ok": False, "error": "anchor_unavailable", "message": str(exc), "checked": 0}
+    store = runtime.store
+    current = store.chain_state()
+    comparisons = compare_against_anchors(
+        records,
+        local_root_at=lambda height: store.chain_state(up_to_height=height).root_hash,
+        current_height=current.chain_height,
+    )
+    failures = [item for item in comparisons if not item.ok]
+    return {
+        "ok": not failures,
+        "sink": str(sink.path),
+        "checked": len(comparisons),
+        "current_height": current.chain_height,
+        "current_root": current.root_hash,
+        "failures": [item.as_json() for item in failures],
+        "comparisons": [item.as_json() for item in comparisons],
+    }
+
+
+def _human_anchor_verification(report: dict[str, Any]) -> str:
+    if report.get("error"):
+        return f"anchoring unavailable: {report['message']}"
+    lines = [
+        f"sink: {report['sink']}",
+        f"anchors checked: {report['checked']}",
+        f"current height: {report['current_height']} root {report['current_root'][:12]}",
+    ]
+    if report["ok"]:
+        lines.append("every anchored root matches the local chain")
+        return "\n".join(lines)
+    lines.append("")
+    lines.append("TAMPER EVIDENCE: an anchored root does not match the local chain")
+    for failure in report["failures"]:
+        local = failure["local_root"] or "unreachable"
+        lines.append(
+            f"  height {failure['chain_height']}: anchored {failure['anchored_root']} "
+            f"!= local {local} ({failure['status']})"
+        )
+    return "\n".join(lines)
 
 
 def _human_divergence(report: dict[str, Any]) -> str:

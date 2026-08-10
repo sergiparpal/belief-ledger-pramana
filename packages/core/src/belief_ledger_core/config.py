@@ -170,6 +170,11 @@ def validate_core_config(data: dict[str, Any], *, defaults: dict[str, Any]) -> N
     _bounded_number(verification, "sampling_temperature", 0.0, 2.0)
     _boolean(verification, "critical_human_confirmation")
 
+    anchoring = _mapping(data, "anchoring")
+    sink_path = anchoring.get("sink_path")
+    if not isinstance(sink_path, str) or len(sink_path) > 4_096 or "\n" in sink_path:
+        raise ValueError("anchoring.sink_path must be a string path, empty to disable")
+
     lint = _mapping(data, "lint")
     for stake in ("low", "med", "high", "critical"):
         if lint.get(stake) not in {"allow", "annotate", "rewrite_once", "block"}:

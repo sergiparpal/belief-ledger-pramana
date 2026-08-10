@@ -423,3 +423,64 @@ def test_llm_divergence_command_reports_identical_inputs_with_different_outputs(
     code, other = run_cli(runtime, _arguments("llm-divergence", "--episode", "ep_absent"))
     assert code == 0
     assert "no input produced more than one distinct output" in other
+
+
+def test_anchor_commands_publish_and_detect_a_rechained_tamper(runtime, tmp_path) -> None:
+    """The operator-facing half of ADR 0013, including `db verify-chain --against-anchors`."""
+    from tests.unit.test_chain_anchoring import _rechain_from
+
+    runtime.ensure_initialized()
+    sink_path = tmp_path / "outside" / "anchors.jsonl"
+
+    code, unavailable = run_cli(runtime, _arguments("anchor", "publish"))
+    assert code == 2
+    assert json.loads(unavailable)["error"] == "anchor_unavailable"
+
+    data = dict(runtime.config.data)
+    data["anchoring"] = {"sink_path": str(sink_path)}
+    runtime._config = replace(runtime.config, data=data)
+
+    service = runtime.begin_turn(
+        session_id="anchor-session", turn_id="anchor-turn", user_message="Atlas is operational."
+    )
+    service.ingest_user_message(
+        "Atlas is operational.", session_id="anchor-session", turn_id="anchor-turn"
+    )
+
+    code, published = run_cli(runtime, _arguments("anchor", "publish"))
+    assert code == 0
+    receipt = json.loads(published)
+    assert receipt["ok"] is True
+    assert receipt["scope"] == "global"
+    assert receipt["chain_height"] > 0
+    assert sink_path.is_file()
+
+    code, verified = run_cli(runtime, _arguments("anchor", "verify", "--json"))
+    assert code == 0
+    assert json.loads(verified)["ok"] is True
+
+    code, combined = run_cli(runtime, _arguments("db", "verify-chain", "--against-anchors"))
+    assert code == 0
+    assert json.loads(combined)["ok"] is True
+
+    _rechain_from(runtime.store, mutated_seq=2)
+
+    code, chain_only = run_cli(runtime, _arguments("db", "verify-chain"))
+    assert code == 0, "the chain check alone cannot see a faithful re-chain"
+    assert json.loads(chain_only)["ok"] is True
+
+    code, caught = run_cli(runtime, _arguments("anchor", "verify", "--json"))
+    assert code == 1
+    report = json.loads(caught)
+    assert report["ok"] is False
+    assert report["failures"][0]["status"] == "mismatch"
+    assert report["failures"][0]["chain_height"] == receipt["chain_height"]
+
+    code, human = run_cli(runtime, _arguments("anchor", "verify"))
+    assert code == 1
+    assert "TAMPER EVIDENCE" in human
+    assert f"height {receipt['chain_height']}" in human
+
+    code, combined_after = run_cli(runtime, _arguments("db", "verify-chain", "--against-anchors"))
+    assert code == 1
+    assert json.loads(combined_after)["ok"] is False

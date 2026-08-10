@@ -38,7 +38,26 @@ hermes belief-ledger evaluate --suite all --offline
 hermes belief-ledger policy validate
 hermes belief-ledger policy inventory
 hermes belief-ledger llm-divergence --json
+hermes belief-ledger anchor publish
+hermes belief-ledger anchor verify
 ```
+
+## Anchoring the chain externally
+
+Set `anchoring.sink_path` to a path outside the ledger directory — the configuration is rejected
+otherwise — then publish an anchor whenever you would take a backup:
+
+```bash
+hermes belief-ledger anchor publish --scope global
+hermes belief-ledger anchor verify --json
+hermes belief-ledger db verify-chain --against-anchors
+```
+
+`anchor verify` exits non-zero on any anchored root that disagrees with the recomputed local root,
+and on any anchored height the local chain no longer reaches. Both are tamper evidence; the output
+names the height and both roots. Back up and access-control the sink separately from the ledger, or
+the control adds nothing. Read the [threat model](threat-model.md) for what this does and does not
+detect.
 
 ## Auditing model-component non-determinism
 

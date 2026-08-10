@@ -75,6 +75,7 @@ a claim of external scientific validity.
 | §4.2 lexicographic priority/fixed rules | `engine/priority.py`, packaged ranks | suite B, `tests/unit/test_priority_order.py` field-order and override pins |
 | §4.2 recency for every perishability class ([ADR 0011](adr/0011-unconditional-recency-key.md)) | `engine/priority.py:priority_trace`, `models.Belief.__post_init__` | `tests/unit/test_recency_priority.py` |
 | Model-call attribution and divergence ([ADR 0012](adr/0012-llm-call-attribution.md)) | `llm/attribution.py`, `llm/divergence.py`, `LLM_CALL_ATTRIBUTION` events | `tests/unit/test_llm_divergence.py`, `test_llm_divergence_command_reports_identical_inputs_with_different_outputs` |
+| External chain anchoring ([ADR 0013](adr/0013-external-chain-anchoring.md)) | `verification/anchors.py`, `store.chain_state`, `anchor publish`/`verify` | `tests/unit/test_chain_anchoring.py::test_a_rechained_tamper_passes_verify_chain_and_fails_anchor_verify` |
 | §4.2 saṃśaya | equal/cycle PENDING plus persistent conflict/task | equal-priority test/integration |
 | §4.3 fixed point/termination/reinstatement | `engine/defeat.py` state detection/ceiling | generated finite chains and reinstatement test |
 | §4.4 structural retraction | rendered-belief projection, notice/descendants/ack | stale-claim end-to-end test |

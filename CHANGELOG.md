@@ -53,6 +53,17 @@
   hardcoded literal in two separate places; the policy is now expressed once, carried on
   `StructuredModelRequest` as an additive optional field, and recorded on every call. See
   [ADR 0012](docs/adr/0012-llm-call-attribution.md).
+- Added external anchoring of the hash chain. `hermes belief-ledger anchor publish` writes the chain
+  root at a height to an append-only JSONL sink whose path must resolve outside the ledger
+  directory; `anchor verify` recomputes the local root at every anchored height and exits non-zero
+  on a mismatch or an anchored height the chain no longer reaches. `db verify-chain
+  --against-anchors` fails if either check fails. This makes local modification followed by
+  re-chaining detectable — a tamper `db verify-chain` alone cannot see, because the attacker
+  restores the chain's internal consistency. It raises the cost of tampering; it does not prevent
+  it, and the threat model says so. Off by default via `anchoring.sink_path: ""`. See
+  [ADR 0013](docs/adr/0013-external-chain-anchoring.md).
+- Added `LedgerStore.chain_state(up_to_height=...)`, which shares its verification with
+  `verify_hash_chain` rather than recomputing the root a second way.
 
 ## v0.2.1 / 1.0.0rc4 - 2026-08-05
 

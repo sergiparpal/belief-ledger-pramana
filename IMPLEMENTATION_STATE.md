@@ -352,3 +352,32 @@ answered more than one way. Failed calls are excluded.
 | `pytest -m "not live_llm" --cov ... --cov-branch` | 0 | 436 passed; 88.33% against the 88% floor. |
 
 Test count moved 419 → 436; coverage 88.18% → 88.33%.
+
+## Obvious-fix plan, Stage 5 — external anchoring of the hash chain — 2026-08-10
+
+Q2 answered A: a local append-only JSONL sink, no HTTP adapter. The integrity key sits beside the
+database, so an attacker who can read the ledger can also forge it: edit a row, re-chain everything
+after it, and `db verify-chain` passes because the chain is internally consistent again. An anchor
+is a copy of the chain root written where the ledger cannot reach back into.
+
+The plan's instruction to reuse `chain_audit.py`'s chain-state computation did not apply — that
+module audits *inference* chains, not the hash chain (F-17). The instruction's intent was followed
+against `LedgerStore.verify_hash_chain`, whose head computation moved into `_verified_heads` so
+`chain_state(up_to_height=...)` shares it. There is still exactly one root computation, which is
+what keeps an anchor mismatch from being ambiguous between tampering and a bug.
+
+The acceptance test is the tamper simulation and it is unconditional: build a real chain from a
+frozen fixture, publish an anchor, drop the append-only triggers, edit event 2, faithfully re-chain
+everything after it, restore the triggers, then assert `verify_hash_chain` still passes and anchor
+verification fails at the anchored height naming both roots. Dropping the triggers is faithful to
+the threat: a trigger is a row in the schema of a file the attacker can write (F-18).
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_chain_anchoring.py` | 0 | 17 passed: tamper simulation, unreachable-height case, append-only and 0600 sink, path validation, no key material in any record. |
+| `pytest tests/integration/test_operator_surfaces.py` | 0 | 7 passed; `anchor publish`/`verify` and `db verify-chain --against-anchors` exercised through the CLI. |
+| `python scripts/check_product_claims.py` | 0 | The anchoring documentation passes the restricted-language checker without relaxing it. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 454 passed; 88.39% against the 88% floor. |
+
+Test count moved 436 → 454; coverage 88.33% → 88.37%. Warnings stay at 8: the raw `sqlite3`
+connections the tamper helper needs are closed explicitly, so no `ResourceWarning` is added.

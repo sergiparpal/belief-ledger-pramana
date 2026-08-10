@@ -43,6 +43,13 @@ verification:
   # detected separately. See docs/adr/0012-llm-call-attribution.md.
   sampling_temperature: 0.0
 
+anchoring:
+  # Append-only JSONL copy of the chain root, written somewhere the ledger cannot reach
+  # back into. Empty disables anchoring. The path must resolve outside the ledger
+  # directory: a sink inside it is not an external anchor. See
+  # docs/adr/0013-external-chain-anchoring.md and docs/threat-model.md.
+  sink_path: ""
+
 lint:
   low: annotate
   med: rewrite_once

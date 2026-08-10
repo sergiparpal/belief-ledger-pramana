@@ -52,7 +52,32 @@ transformers can remain visible, so Hermes does not claim strict buffered delive
 
 Hash chaining plus a private HMAC key detects database mutation by an attacker who cannot also read
 or replace the key. It is not a remote signature or witness and cannot protect against an attacker
-who controls the plugin, profile key, and database together. Other controls include parameterized
-SQL, strict schemas, bounded inputs/graphs/events/context/model calls, private atomic writes,
-structured and pattern-based secret redaction before persistence, and no provider credential
-overrides.
+who controls the plugin, profile key, and database together.
+
+## External anchoring
+
+The key sits beside the database, so the ability to read the ledger and the ability to forge it are
+close to the same ability. An attacker holding the key can edit an event and re-chain everything
+after it, and `db verify-chain` then passes: the chain is internally consistent again, and nothing
+inside a file the attacker rewrote can say otherwise.
+
+`hermes belief-ledger anchor publish` writes the chain root at a height to an append-only JSONL
+sink whose path must resolve outside the ledger directory. `anchor verify` recomputes the local
+root at every anchored height; a root that disagrees, or an anchored height the local chain no
+longer reaches, is tamper evidence and exits non-zero naming the height and both roots.
+`db verify-chain --against-anchors` fails if either check fails, because a passing chain with a
+failing anchor is exactly what re-chaining produces.
+
+What this defends against: silent local modification followed by re-chaining.
+
+What it does not defend against: an attacker who controls both the ledger and the sink. A file sink
+on the same host raises the cost of tampering by turning one access into two; it is not a barrier,
+not a remote witness, and not a timestamping authority. Anchoring is off by default, and a ledger
+with no published anchors verifies vacuously — an empty report proves nothing.
+
+Operational requirement: the sink must be backed up and access-controlled independently of the
+ledger. In the same backup set, under the same credentials, it is decorative.
+
+Other controls include parameterized SQL, strict schemas, bounded
+inputs/graphs/events/context/model calls, private atomic writes, structured and pattern-based
+secret redaction before persistence, and no provider credential overrides.
