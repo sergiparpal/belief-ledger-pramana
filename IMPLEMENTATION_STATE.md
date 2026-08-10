@@ -296,3 +296,29 @@ as F-10.
 | `pytest -m "not live_llm" --cov ... --cov-branch` | 0 | 405 passed; 88.18% against the 88% floor. |
 
 Test count moved 379 → 405; coverage unchanged at 88.18%.
+
+## Obvious-fix plan, Stage 3 — recency for slow and stable beliefs — 2026-08-10
+
+R1 from the baseline said replay-independent, so this proceeded without a fixture copy:
+`tests/fixtures/v1_replay/` is untouched and still verifies byte-for-byte. `recency_rank` is now
+computed from `observed_at` for every perishability class and stays the fifth key, which bounds the
+change by position rather than by a guard.
+
+Making recency unconditional made `_timestamp`'s naive-datetime raise reachable for every belief,
+so the guarantee moved to `Belief.__post_init__`, alongside `parse_datetime` and `FixedClock` which
+already enforce it with the same message. `_timestamp`'s check is kept as redundancy and is pinned
+so it is not read as dead code.
+
+Running the suite before adding new tests produced exactly one failure — the naive-construction
+test — and no defeat outcome moved anywhere in `tests/` or `evaluations/`. The case this change
+exists to fix was not covered by any existing test or suite. Logged as F-11; the changed test is
+F-12.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_recency_priority.py` | 0 | 14 passed, including the relabel pair that resolves and the same-timestamp control that still reaches saṃśaya. |
+| `pytest tests/contract/test_v1_replay.py` | 0 | 10 passed; frozen projection hashes unchanged. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 419 passed; 88.18% against the 88% floor; evaluations, examples, gateway demo, policy validate and the Hermes contract all pass. |
+
+Test count moved 405 → 419; coverage 88.18%, equal to the Stage 0 baseline of 88.16% and above the
+floor. Removing the perishability branch and adding the constructor branch net out.

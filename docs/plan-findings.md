@@ -161,3 +161,47 @@ left in place, or the work starts to look like design rather than implementation
   `tests/unit/test_self_claim_scope.py::test_self_pattern_characterisation` assert current
   behaviour with each limitation named at its assertion, so a change to the pattern shows up there
   first. Treat that parametrization as the specification when the pattern is revisited.
+
+### F-11 — No existing test or evaluation suite covered stale-versus-fresh defeat
+
+- **Stage:** 3
+- **Severity:** significant
+- **What:** making `recency_rank` unconditional changes which belief wins whenever two otherwise
+  identical beliefs differ only in age. Running the full suite before adding new tests produced one
+  failure, and it was the naive-datetime construction test — not a single defeat outcome moved
+  across `tests/`, `evaluations/` suites A–E, or the integration tests. The saṃśaya-versus-recency
+  case the change exists to fix was not covered anywhere.
+- **Why not fixed here:** it *is* covered now, by `tests/unit/test_recency_priority.py`. The entry
+  records the gap itself, which is a data point for the plan's out-of-scope §1.1: 43 hand-written
+  cases with perfect scores did not exercise a decision the engine makes on every relabel.
+- **Suggested next step:** when evaluation methodology is revisited, treat "which existing case
+  would fail if this rule were inverted?" as the admission criterion for a suite case. A rule no
+  case can distinguish is a rule the suite does not test.
+
+### F-12 — An existing test changed: naive timestamps are now refused at construction
+
+- **Stage:** 3
+- **Severity:** minor
+- **What:** `tests/unit/test_domain_edges.py::test_graph_retractions_apta_methods_and_ids`
+  previously constructed a `Belief` with `datetime(2026, 7, 11)` and asserted
+  `pytest.raises(ValueError, match="timezone-aware")` around
+  `priority_trace(naive, source, packaged_yaml("defaults.yaml"))`. The construction now raises, so
+  `priority_trace` is never reached and the original assertion could not run.
+- **Why not fixed here:** the assertion was moved, not weakened. It now wraps the `Belief(...)`
+  call, and a second assertion was added that an aware belief yields a non-zero `recency_rank`.
+  The new form asserts strictly more: the invalid value cannot be constructed at all, rather than
+  being caught later by one consumer. The old expectation — that a naive timestamp is rejected —
+  still holds and is still tested; only the boundary at which it is rejected moved, which is what
+  ADR 0011 decided.
+- **Suggested next step:** none.
+
+### F-13 — The plan's `STATIC` perishability is spelled `STABLE` in code
+
+- **Stage:** 3
+- **Severity:** minor
+- **What:** the plan's §6.4 asks for a test with `STATIC` perishability. `Perishability` in
+  `packages/core/src/belief_ledger_core/models.py` has `STABLE`, `SLOW`, `FAST`, `LIVE`. There is
+  no `STATIC`.
+- **Why not fixed here:** a naming difference, not a defect. The tests parametrize over `STABLE`,
+  which is the class the plan meant.
+- **Suggested next step:** none.

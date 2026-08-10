@@ -178,6 +178,12 @@ class Belief:
     validity: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # Timezone awareness is guaranteed here rather than where observed_at is read. Since
+        # recency became an unconditional priority key (ADR 0011), every belief is compared by
+        # timestamp, so a naive value would fail deep inside defeat resolution instead of at the
+        # boundary that admitted it. parse_datetime and FixedClock enforce the same rule.
+        if self.observed_at.tzinfo is None:
+            raise ValueError("belief observed_at must be timezone-aware")
         object.__setattr__(self, "qualifiers", freeze(self.qualifiers))
         object.__setattr__(self, "validity", freeze(self.validity))
 

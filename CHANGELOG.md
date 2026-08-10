@@ -30,6 +30,16 @@
   verification at HIGH stakes, not a competence adjustment; `docs/threat-model.md` now says so, and
   `tests/unit/test_self_claim_scope.py` characterises the pattern's known limitations — no negation
   handling, English and Spanish only, injectable by any user-channel text.
+- Made `recency_rank` a priority key for every perishability class rather than only `fast` and
+  `live`. Two `slow` or `stable` beliefs differing only in age previously tied on all five keys and
+  both went to `PENDING`, which has no active exit; they now resolve to one `IN` and one `OUT`.
+  Recency stays fifth, so it can never overturn integrity, type, reliability or specificity, and
+  `positive_over_anupalabdhi` still precedes the whole comparison. Frozen v1 replay fixtures are
+  unaffected because defeat semantics are replay-independent. See
+  [ADR 0011](docs/adr/0011-unconditional-recency-key.md).
+- Moved the timezone-awareness guarantee for `Belief.observed_at` to `Belief.__post_init__`, next to
+  where `parse_datetime` and `FixedClock` already enforce the same rule. A naive timestamp is now
+  refused when the belief is built rather than later inside defeat resolution.
 
 ## v0.2.1 / 1.0.0rc4 - 2026-08-05
 

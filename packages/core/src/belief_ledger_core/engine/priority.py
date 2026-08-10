@@ -87,9 +87,11 @@ def priority_trace(belief: Belief, source: Source, config: dict[str, Any]) -> Pr
     reliability_rank = round(reliability * 1_000)
     specificity_keys = priority.get("specificity_keys", [])
     specificity = sum(1 for key in specificity_keys if belief.qualifiers.get(str(key)))
-    recency = 0
-    if belief.perishability.value in {"fast", "live"}:
-        recency = int(_timestamp(belief.observed_at))
+    # Recency is computed for every perishability class, not only fast and live. It stays the
+    # fifth and last key, so it can only settle a contest that integrity, type, reliability and
+    # specificity all left tied — see ADR 0011. Before that change two slow or static beliefs
+    # differing only in age produced saṃśaya, and saṃśaya has no active exit.
+    recency = int(_timestamp(belief.observed_at))
     return PriorityTrace(
         belief.id,
         integrity_rank,

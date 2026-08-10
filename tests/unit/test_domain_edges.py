@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -322,21 +322,43 @@ def test_graph_retractions_apta_methods_and_ids() -> None:
 
     from belief_ledger_pramana.models import Belief, Perishability, Pramana, Status
 
-    naive = Belief(
+    # A naive observed_at is now refused at construction rather than later by priority_trace.
+    # Recency became an unconditional priority key in ADR 0011, so every belief is compared by
+    # timestamp and the rejection belongs at the boundary that admits the belief. This asserts
+    # strictly more than the previous version: the invalid value can no longer be constructed at
+    # all, let alone reach the engine.
+    with pytest.raises(ValueError, match="timezone-aware"):
+        Belief(
+            new_id("belief"),
+            source.episode_id,
+            "Naive timestamp is invalid",
+            "naive timestamp is invalid",
+            Pramana.SHABDA,
+            source.id,
+            (),
+            (),
+            {},
+            Perishability.FAST,
+            datetime(2026, 7, 11),
+            Stakes.LOW,
+            Status.IN,
+            Status.IN,
+        )
+
+    aware = Belief(
         new_id("belief"),
         source.episode_id,
-        "Naive timestamp is invalid",
-        "naive timestamp is invalid",
+        "Aware timestamp is accepted",
+        "aware timestamp is accepted",
         Pramana.SHABDA,
         source.id,
         (),
         (),
         {},
         Perishability.FAST,
-        datetime(2026, 7, 11),
+        datetime(2026, 7, 11, tzinfo=UTC),
         Stakes.LOW,
         Status.IN,
         Status.IN,
     )
-    with pytest.raises(ValueError, match="timezone-aware"):
-        priority_trace(naive, source, packaged_yaml("defaults.yaml"))
+    assert priority_trace(aware, source, packaged_yaml("defaults.yaml")).recency_rank > 0
