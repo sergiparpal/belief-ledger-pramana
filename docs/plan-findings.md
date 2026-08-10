@@ -112,3 +112,52 @@ left in place, or the work starts to look like design rather than implementation
   accident of expressing "how good is this witness" twice; if the former, say so in the
   specification's §4.2 rather than only in the code. Note that it compounds the §2.3
   `effective_competence` feedback loop, which is already out of scope.
+
+### F-08 — The self-claim privilege is a verification waiver, not the competence bump the plan describes
+
+- **Stage:** 2b
+- **Severity:** significant
+- **What:** the plan describes `is_about_user_self` as raising source competence "from `0.65` to
+  `0.95`". That is not the mechanism. `about_self` reaches `trust_profile` in
+  `packages/core/src/belief_ledger_core/engine/trust.py:41`, which selects `user_self` over
+  `user_world`. In the packaged trust matrix those differ at HIGH stakes: `user_self` is `svatah`
+  with `k=0`, `user_world` is `paratah` with `k=1` and a `cross_source` method. The privilege is
+  therefore a waiver of cross-source verification, which is a larger grant than a scalar bump and
+  is invisible in `effective_competence`.
+- **Why not fixed here:** nothing to fix — the mechanism is correct, only the description was
+  wrong. The scope guard the plan asks for is the right control either way, and is now in place.
+- **Suggested next step:** none for the guard. Anyone reasoning about this privilege should read
+  the trust matrix rather than the competence dictionary.
+
+### F-09 — `user_source` advertises a `self: 0.95` competence that nothing can reach
+
+- **Stage:** 2b
+- **Severity:** minor
+- **What:** `user_source` in `packages/core/src/belief_ledger_core/ingestion/user.py` returns
+  `competence={"self": 0.95, "general": 0.65}`, and `source-profiles.yaml` carries the same pair for
+  the `user` profile. `effective_competence` keys that dictionary by `belief.domain`, and the only
+  extractor on the user path — `deterministic_candidates` — always emits `domain="general"`. No
+  code path assigns `domain="self"`, so the 0.95 entry is unreachable configuration.
+- **Why not fixed here:** two defensible fixes exist — delete the dead entry, or make the user path
+  set `domain="self"` when the claim is a self-claim — and the second changes admission outcomes.
+  Choosing between them is design work, and §0 puts that out of scope.
+- **Suggested next step:** decide whether self-claims are meant to carry a domain of their own. If
+  they are not, delete the entry from both the code and `source-profiles.yaml` so it stops implying
+  a mechanism that does not exist.
+  `tests/unit/test_self_claim_scope.py::test_the_self_competence_entry_is_unreached_by_the_user_ingestion_path`
+  fails the day something starts reaching it.
+
+### F-10 — The self-claim pattern has no negation handling and covers two languages
+
+- **Stage:** 2b
+- **Severity:** significant
+- **What:** `_SELF` in `packages/core/src/belief_ledger_core/ingestion/user.py` matches "I am not
+  the administrator" exactly as it matches "I am the administrator", covers English and Spanish
+  only — German "Ich bin ..." and French "Je suis ..." do not match — and is satisfied by any text
+  on the user channel, including text the user pasted from elsewhere.
+- **Why not fixed here:** explicitly out of scope for Stage 2b, which covers the mechanical scope
+  guard only. Negation handling and language coverage are modelling decisions.
+- **Suggested next step:** the eleven cases in
+  `tests/unit/test_self_claim_scope.py::test_self_pattern_characterisation` assert current
+  behaviour with each limitation named at its assertion, so a change to the pattern shows up there
+  first. Treat that parametrization as the specification when the pattern is revisited.

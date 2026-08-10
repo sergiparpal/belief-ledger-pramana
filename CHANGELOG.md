@@ -23,6 +23,13 @@
   `confidence` field remains genuinely unread. No behaviour changed; see
   [ADR 0010](docs/adr/0010-scalar-competence-in-the-priority-order.md) and the new
   `tests/unit/test_priority_order.py`, which pins the tuple order structurally.
+- Bound the self-claim privilege to the user's own channel structurally rather than by call-site
+  placement. `is_user_self_claim(source, content)` refuses any source whose kind is not `USER`
+  before consulting the pattern, and the runtime now calls it instead of `is_about_user_self`.
+  `is_about_user_self` is unchanged and still exported. The privilege is a waiver of cross-source
+  verification at HIGH stakes, not a competence adjustment; `docs/threat-model.md` now says so, and
+  `tests/unit/test_self_claim_scope.py` characterises the pattern's known limitations — no negation
+  handling, English and Spanish only, injectable by any user-channel text.
 
 ## v0.2.1 / 1.0.0rc4 - 2026-08-05
 

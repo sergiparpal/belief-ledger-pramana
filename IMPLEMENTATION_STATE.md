@@ -266,3 +266,33 @@ as F-07.
 | `pytest -m "not live_llm" --cov ... --cov-branch` | 0 | 379 passed; 88.18% against the 88% floor. |
 
 Test count moved 367 → 379; coverage 88.16% → 88.18%.
+
+## Obvious-fix plan, Stage 2b — self-claim scope guard — 2026-08-10
+
+Tracing the call site answered the plan's branch: `is_about_user_self` is reached only from
+`ingest_user_message`, whose source is always `user_source(...)` and therefore always
+`SourceKind.USER`, and that method is called only from the `pre_llm_call` hook with
+`kwargs["user_message"]`. Content from a tool result, a fetched page, a file, or a prior-ledger
+belief cannot reach it. The guarantee held, but it held by call-site placement, which nothing
+enforced.
+
+`is_user_self_claim(source, content)` now enforces it: a non-`USER` source is refused before the
+pattern is consulted. `trust_profile` already gated the `user_self` branch on the same kind, so the
+privilege now has two independent guards and removing either alone fails a test.
+`is_about_user_self` is unchanged and still exported, so the compatibility surface only grows.
+
+The privilege itself is not what the plan described. `about_self` selects the `user_self` trust
+profile over `user_world`; at HIGH stakes that is `svatah`/`k=0` against `paratah`/`k=1`
+`cross_source`. It waives cross-source verification rather than raising a competence scalar. Logged
+as F-08, with the unreachable `self: 0.95` competence entry as F-09 and the pattern's limitations
+as F-10.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_self_claim_scope.py` | 0 | 26 passed: 12 scope pins, 11 characterisation cases, 3 profile assertions. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | 266 files, no findings. |
+| `mypy packages/{core,gateway,mcp,reference}/src belief_ledger_pramana` | 0 | 146 source files. |
+| `scripts/check_product_claims.py` / `scripts/check_doc_invariants.py` | 0 / 0 | Threat-model addition passes the restricted-language checker. |
+| `pytest -m "not live_llm" --cov ... --cov-branch` | 0 | 405 passed; 88.18% against the 88% floor. |
+
+Test count moved 379 → 405; coverage unchanged at 88.18%.

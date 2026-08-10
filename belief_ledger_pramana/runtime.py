@@ -80,7 +80,7 @@ from .ingestion.tool import (
     redact_secrets,
     redacted_content_hash,
 )
-from .ingestion.user import is_about_user_self, user_source
+from .ingestion.user import is_user_self_claim, user_source
 from .lint.enforce import enforce_report, linter_failure_response
 from .lint.report import lint_response
 from .llm.client import HostLlmClient, LlmComponentError
@@ -808,7 +808,10 @@ class EpisodeService:
         )
         for candidate in candidates:
             candidate_drafts = self._candidate_drafts(
-                candidate, evidence, source, about_self=is_about_user_self(candidate.content)
+                candidate,
+                evidence,
+                source,
+                about_self=is_user_self_claim(source, candidate.content),
             )
             drafts.extend(candidate_drafts)
         turn_id = _clean(kwargs.get("turn_id"))
