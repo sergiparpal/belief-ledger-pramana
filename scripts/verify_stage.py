@@ -76,6 +76,7 @@ def main() -> int:
     run([sys.executable, "scripts/check_dependency_boundaries.py"])
     run([sys.executable, "scripts/check_workspace_boundaries.py"])
     run([sys.executable, "scripts/check_product_claims.py"])
+    run([sys.executable, "scripts/check_doc_invariants.py"])
     run([sys.executable, "examples/deployment_gate/validate_fixtures.py"])
     run(
         [

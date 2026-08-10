@@ -35,7 +35,12 @@ Coverage detail, from the CI invocation
 | Statements missed | 857 |
 | Branches | 2818 |
 | Partial branches | 495 |
-| Total | 88.2% |
+| Total | 88.16% (88.2% at the configured precision of 1) |
+
+**88.16% is the number later stages must not fall below.** It was measured from a clean tree with
+untracked files stashed. A measurement taken with the plan's own new test files present but the
+sources they test stashed reports 88.18%, which is an artefact of the partial tree and not a real
+baseline; the figure is recorded here so no later stage mistakes that artefact for a regression.
 
 The eight warnings are all intentional `DeprecationWarning`s from tests that deliberately exercise
 the `LedgerRuntime` facade (`tests/conformance/test_enforcement_profiles.py`,

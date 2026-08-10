@@ -44,7 +44,8 @@ handles without deleting history. Back up the SQLite database, `-wal`, and `-shm
 active, or checkpoint and then copy the main file. Retain the matching private
 `locks/ledger.integrity.key`, profile configuration, and policy/source-profile extensions in the
 same encrypted backup set. Do not regenerate or substitute the key for an existing database.
-Forward migrations create a pre-migration database backup. Schema v6, introduced in rc2, adds
+Forward migrations create a pre-migration database backup. The current schema version is 7.
+Schema v6, introduced in rc2, adds
 append-only authorization events and rebuildable receipt/decision projections. Schema v7 adds no
 table and no event format: it rewrites stored idempotency keys into the episode-scoped form that
 replay rebuilds, which is what lets a database written before that scoping be opened again. Follow

@@ -8,6 +8,15 @@
 - Documented the backward-compatible `belief_ledger_pramana` import surface in
   `docs/compat-surface.md`, separating the four promised names from the 77 reachable modules.
 - Opened the append-only findings register at `docs/plan-findings.md`.
+- Added `scripts/check_doc_invariants.py`, which fails when a documented constant diverges from the
+  code it is derived from. Six facts are guarded — `LATEST_SCHEMA_VERSION`, the package version, the
+  `requires-python` range, the audited Hermes version and commit, and the CI cryptography override —
+  across nine files, plus an assertion that every schema version in `1..LATEST_SCHEMA_VERSION` has
+  either a migration SQL file or a `SCHEMA_V*` constant. Wired into `scripts/verify_stage.py` and
+  the `replay-claims-evaluations` CI job.
+- Stated the current schema version in `docs/operations.md` and `docs/architecture.md`, and the
+  supported Python range in `README.md`. The new checker found all three missing on its first run;
+  they were absent rather than stale, which no value-comparison check would have caught.
 
 ## v0.2.1 / 1.0.0rc4 - 2026-08-05
 

@@ -65,3 +65,20 @@ left in place, or the work starts to look like design rather than implementation
   pin yet (F-03). Doing it before Stage 7a would be changing an unmeasured thing.
 - **Suggested next step:** Stage 7a records it in the snapshot as present-but-private; Stage 7b
   decides whether to drop it from `__all__` under the deprecation path.
+
+### F-05 — Two of the three documents named for the schema fact never stated it at all
+
+- **Stage:** 1
+- **Severity:** minor
+- **What:** the plan's Stage 1 table requires `LATEST_SCHEMA_VERSION` to appear in
+  `docs/upgrade-and-rollback.md`, `docs/operations.md` and `docs/architecture.md`. On first run the
+  new checker reported that only the first stated it; the other two discussed schema v6 and v7 by
+  name but never said which version is current. `README.md` likewise never stated the
+  `requires-python` range that the plan requires of it — only `HERMES_COMPATIBILITY.md` did.
+- **Why not fixed here:** it *was* fixed here. The entry exists because the failure mode is worth
+  recording: this is absence, not staleness, and a checker that only compared stated values would
+  have passed all three files silently. That is why a listed document matching the pattern nowhere
+  is a failure rather than a skip.
+- **Suggested next step:** none; keep the "states it nowhere" branch of the checker, and keep
+  `tests/unit/test_doc_invariants.py::test_a_document_that_drops_the_fact_entirely_fails` pinning
+  it.

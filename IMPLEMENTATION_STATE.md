@@ -214,3 +214,30 @@ One gate run failed before this one and neither failure was a defect in the rele
   `uvx --from twine==7.0.0 twine check build/workspace-*/*.whl`, which passed. `scripts/verify_stage.py`
   still invokes the venv's twine, so the complete local gate cannot finish in a venv that also has
   Hermes installed.
+
+## Obvious-fix plan, Stage 1 — documentation invariant guard — 2026-08-10
+
+`scripts/check_doc_invariants.py` is a new, separate checker from
+`scripts/check_product_claims.py`: that one guards restricted marketing language, this one guards
+derived facts. Each fact names one source of truth read with `ast` or `tomllib`, never by importing
+the module, and lists the documents that must state it together with the pattern each states it in.
+A listed document that matches the pattern nowhere fails exactly as loudly as one that matches with
+a stale value — the drift found on the first run was absence, not staleness, in all three cases.
+
+Drift found and corrected in this change:
+
+| File | What was wrong |
+|---|---|
+| `docs/operations.md` | Discussed schema v6 and v7 by name but never stated which version is current |
+| `docs/architecture.md` | Same |
+| `README.md` | Never stated the `requires-python` range; only `HERMES_COMPATIBILITY.md` did |
+
+| Command | Exit | Result |
+|---|---:|---|
+| `python scripts/check_doc_invariants.py` | 0 | 6 facts across 9 files; every schema version has a migration. |
+| `python scripts/check_doc_invariants.py --root <mutated tree>` | 1 | Names fact, expected value, file, line and found value. |
+| `pytest tests/unit/test_doc_invariants.py` | 0 | 14 passed, including seven that prove the checker fails. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 367 passed, 88.16% combined coverage against the 88% floor. |
+
+Test count moved 353 → 367. Coverage is unchanged at 88.16%: the checker lives in `scripts/`, which
+is outside the five measured packages, and the tests that exercise it are test code.
