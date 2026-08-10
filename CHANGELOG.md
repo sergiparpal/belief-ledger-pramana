@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Recorded a measured baseline for the obvious-fix plan in `docs/plan-baseline.md`, including the
+  experiment showing that defeat semantics are replay-independent: frozen v1 event and projection
+  hashes do not move when `compare_priority` changes.
+- Documented the backward-compatible `belief_ledger_pramana` import surface in
+  `docs/compat-surface.md`, separating the four promised names from the 77 reachable modules.
+- Opened the append-only findings register at `docs/plan-findings.md`.
+
 ## v0.2.1 / 1.0.0rc4 - 2026-08-05
 
 GitHub source release correcting the `v0.2.0` product surface. It adds no feature and removes none:
