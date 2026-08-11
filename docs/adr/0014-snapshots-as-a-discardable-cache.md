@@ -79,8 +79,9 @@ hermes belief-ledger db verify-snapshot [--scope global]
 
 ## The replay budget warning
 
-`replay.max_events_warn` defaults to 50 000. A full replay at or above it emits a warning through
-`db replay`. It reports; it never refuses.
+`replay.max_events_warn` defaults to 50 000. A replay at or above it emits a warning through
+`db replay`, and `doctor` carries a `replay_budget` check that warns at the same threshold. It
+reports; it never refuses, and it never changes doctor's health verdict.
 
 This is the part of the finding that actually addresses the scaling wall. Snapshots bound the cost
 of a replay; the warning is what makes the wall visible *before* it is hit, on a ledger whose

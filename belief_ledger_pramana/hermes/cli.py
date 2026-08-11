@@ -434,6 +434,21 @@ def doctor(runtime: PluginRuntime) -> dict[str, Any]:
             "schema": runtime.store.migration.to_version,
             "fts5": runtime.store.migration.fts5_available,
         }
+        # Replay cost grows with total history, so the scaling wall has to be visible before an
+        # operator hits it rather than the first time a replay takes too long (ADR 0014). Doctor
+        # is where an operator looks when nothing is wrong yet, which is exactly when this is
+        # worth knowing. It reports; it never changes the health verdict.
+        event_count = len(runtime.store.events())
+        replay_warning = replay_budget_warning(
+            event_count, int(runtime.config.data["replay"]["max_events_warn"])
+        )
+        checks["replay_budget"] = {
+            "events": event_count,
+            "max_events_warn": int(runtime.config.data["replay"]["max_events_warn"]),
+            "over_threshold": replay_warning is not None,
+        }
+        if replay_warning:
+            warnings.append(replay_warning)
         permission_issues = _permission_issues(runtime)
         checks["permissions"] = {"ok": not permission_issues, "issues": permission_issues}
         warnings.extend(permission_issues)

@@ -325,3 +325,31 @@ def test_the_packaged_default_threshold_is_configured() -> None:
     from belief_ledger_pramana.config import packaged_yaml
 
     assert packaged_yaml("defaults.yaml")["replay"]["max_events_warn"] == 50_000
+
+
+def test_doctor_reports_the_replay_budget(runtime) -> None:
+    """The plan puts the warning in `doctor` as well as `db replay`.
+
+    `doctor` is where an operator looks when nothing is wrong yet, which is exactly when a replay
+    approaching its budget is worth knowing about. It reports; it never changes the health verdict.
+    """
+    from dataclasses import replace as replace_dataclass
+
+    from belief_ledger_pramana.hermes.cli import doctor
+
+    runtime.ensure_initialized()
+    quiet = doctor(runtime)
+    assert quiet["checks"]["replay_budget"]["max_events_warn"] == 50_000
+    assert quiet["checks"]["replay_budget"]["over_threshold"] is False
+    assert not any("replay" in item for item in quiet["warnings"])
+
+    data = dict(runtime.config.data)
+    data["replay"] = {"max_events_warn": 1}
+    runtime._config = replace_dataclass(runtime.config, data=data)
+    runtime.begin_turn(session_id="budget", turn_id="budget-turn", user_message="Atlas is up.")
+
+    loud = doctor(runtime)
+
+    assert loud["checks"]["replay_budget"]["over_threshold"] is True
+    assert any("max_events_warn" in item for item in loud["warnings"])
+    assert loud["status"] == quiet["status"], "a budget warning must not change the verdict"

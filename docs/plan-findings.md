@@ -388,3 +388,36 @@ left in place, or the work starts to look like design rather than implementation
 - **Suggested next step:** if the shims are ever removed, do it at 2.0.0 alongside the
   `LedgerRuntime` removal, in one breaking release with one migration note, rather than
   piecemeal.
+
+### F-25 — Two plan deliverables were missed on the first pass and found by audit
+
+- **Stage:** 8
+- **Severity:** minor
+- **What:** a systematic re-read of the plan against the tree after Stage 8 found two items that
+  had been implemented partially. §9.2 requires the replay budget warning to be emitted "through
+  `doctor` and the replay command itself" — only `db replay` had it. §6.5 requires the recency
+  change to update the specification's "§3 and §4.2"; §4.2 and §1 were updated, §3 was not, and its
+  PRATYAKSHA row still said re-observation rebuts "for FAST/LIVE facts", which the change makes an
+  understatement.
+- **Why not fixed here:** both were fixed in the audit. `doctor` now carries a `replay_budget`
+  check that warns at the same threshold without changing its health verdict, and §3's PRATYAKSHA
+  row states the new scope. Recorded because the failure mode is worth keeping visible: both gaps
+  are places where the *headline* of a stage was delivered and a secondary clause of the same
+  paragraph was not, which is exactly what a stage-level "done" judgement misses.
+- **Suggested next step:** none for these two. When a plan sentence lists two destinations for one
+  change, treat it as two deliverables rather than one.
+
+### F-26 — The size guard caught its own author
+
+- **Stage:** 8
+- **Severity:** minor
+- **What:** adding the `replay_budget` check to `doctor` pushed
+  `belief_ledger_pramana/hermes/cli.py` from 723 to 738 lines, past the ceiling recorded for it in
+  `OVERSIZED_EXEMPTIONS` one stage earlier. `test_no_exempt_file_grows_beyond_its_recorded_ceiling`
+  failed.
+- **Why not fixed here:** nothing to fix. The ceiling was raised to 738 in the same change, with
+  the move and its reason written into the exemption text. That is the intended workflow — a
+  ceiling is a ratchet against drift, not a freeze against reviewed change, and the guard's value
+  is that it forces the bump to be stated rather than absorbed.
+- **Suggested next step:** none. Recorded as evidence the guard does something, since a guard never
+  observed failing is not a guard.

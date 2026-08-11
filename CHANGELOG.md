@@ -73,8 +73,9 @@
   [ADR 0014](docs/adr/0014-snapshots-as-a-discardable-cache.md).
 - Added `hermes belief-ledger db snapshot create|list|prune`, `db replay --from-snapshot` and
   `db verify-snapshot`.
-- Added `replay.max_events_warn` (default 50 000). A full replay at or above it reports a warning
-  through `db replay`, which makes the scaling wall visible before it is hit. It never refuses.
+- Added `replay.max_events_warn` (default 50 000), reported by both `db replay` and `doctor`, which
+  gains a `replay_budget` check. It makes the scaling wall visible before it is hit; it never
+  refuses and never changes doctor's health verdict.
 - Fixed a migration test that had silently stopped exercising its migration: it rolled the schema
   stamp back by `LATEST_SCHEMA_VERSION`, so adding a version above the one under test made the
   rollback skip it entirely. It now names the migration it exercises.

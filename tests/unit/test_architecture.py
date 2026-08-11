@@ -119,9 +119,11 @@ OVERSIZED_EXEMPTIONS: dict[str, tuple[int, str]] = {
         "from the table that must list all of them.",
     ),
     "belief_ledger_pramana/hermes/cli.py": (
-        723,
+        738,
         "One argparse tree and one dispatch function. Grew past the limit in Stages 4 to 6, which "
-        "added the divergence, anchor and snapshot commands.",
+        "added the divergence, anchor and snapshot commands. Ceiling moved once, 723 to 738 in "
+        "Stage 8, for the `replay_budget` check in `doctor`: the guard caught that addition, "
+        "which is the intended workflow — a ceiling moves only in a change that says why.",
     ),
 }
 

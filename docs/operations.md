@@ -66,9 +66,11 @@ Run `db verify-snapshot` before relying on acceleration. It rebuilds twice, once
 from the newest valid snapshot, and compares every projection table; a mismatch exits non-zero
 naming the first differing table and row.
 
-`replay.max_events_warn` (default 50 000) makes the scaling wall visible before it is hit: a full
-replay at or above it reports a warning. It never refuses. Treat the first warning as the signal to
-start snapshotting, not as an error.
+`replay.max_events_warn` (default 50 000) makes the scaling wall visible before it is hit. Both
+`db replay` and `doctor` report it: `doctor` carries a `replay_budget` check with the event count
+and the threshold, and adds a warning once the count reaches it. Neither refuses, and the warning
+does not change doctor's health verdict. Treat the first one as the signal to start snapshotting,
+not as an error.
 
 Snapshot payloads contain projection rows and are as sensitive as the database they came from.
 Keep them in the same encrypted backup set.
