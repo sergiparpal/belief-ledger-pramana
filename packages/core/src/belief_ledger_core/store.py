@@ -14,11 +14,12 @@ import time
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal, TypeVar
 
+from . import snapshots
 from .errors import HashChainError, LlmReservationError, StoreError
 from .events import (
     EventDraft,
@@ -939,7 +940,20 @@ class LedgerStore:
             ).fetchone()
         return row is not None
 
-    def replay(self) -> ReplayResult:
+    def replay(
+        self, *, from_snapshot: bool = False, scope: str = snapshots.GLOBAL_SCOPE
+    ) -> ReplayResult:
+        """Rebuild every projection from the log.
+
+        Full replay from origin is the default and stays the default (ADR 0014 invariant 3).
+        `from_snapshot=True` restores the newest snapshot whose derivation fingerprint matches the
+        current code and replays only the events above its height. A snapshot with a stale
+        fingerprint is skipped rather than upgraded, and the replay silently falls back to full —
+        correctness never depends on a snapshot existing or being usable.
+
+        `ReplayResult.events_replayed` counts events actually read, so a caller can assert which
+        path ran without timing anything.
+        """
         from belief_ledger_core.enforcement import (
             enforcement_projection_snapshot,
             rebuild_enforcement_projection,
@@ -952,12 +966,21 @@ class LedgerStore:
             before = _projection_hash(connection, version=1)
             before_v2 = _projection_hash(connection, version=2)
             enforcement_before = enforcement_projection_snapshot(connection)
+            restored = (
+                snapshots.load_newest_valid(connection, scope=scope) if from_snapshot else None
+            )
             with suppress(sqlite3.OperationalError):
                 connection.execute("DELETE FROM beliefs_fts")
             connection.execute("DELETE FROM llm_reservations")
             for table in PROJECTION_TABLES:
                 connection.execute(f"DELETE FROM {table}")
-            rows = connection.execute("SELECT * FROM events ORDER BY seq").fetchall()
+            if restored is not None:
+                snapshots.restore(connection, restored)
+                rows = connection.execute(
+                    "SELECT * FROM events WHERE seq > ? ORDER BY seq", (restored.chain_height,)
+                ).fetchall()
+            else:
+                rows = connection.execute("SELECT * FROM events ORDER BY seq").fetchall()
             idempotency_batches: dict[tuple[str, str], list[Event]] = {}
             for row in rows:
                 event = _event_from_row(row)
@@ -965,7 +988,8 @@ class LedgerStore:
                 key = event.correlation.get("idempotency_key")
                 if key:
                     idempotency_batches.setdefault((event.episode_id, key), []).append(event)
-            _restore_idempotency(connection, idempotency_batches)
+            if restored is None:
+                _restore_idempotency(connection, idempotency_batches)
             rebuild_enforcement_projection(connection)
             enforcement_after = enforcement_projection_snapshot(connection)
             after = _projection_hash(connection, version=1)
@@ -986,6 +1010,85 @@ class LedgerStore:
             raise
         finally:
             connection.close()
+
+    def create_snapshot(
+        self,
+        *,
+        scope: str = snapshots.GLOBAL_SCOPE,
+        created_at: datetime | None = None,
+        package_version: str = "",
+    ) -> list[snapshots.SnapshotRow]:
+        """Capture the current projections at the current chain height.
+
+        The chain is verified first. Snapshotting an unverified chain would cache a projection
+        derived from history that may not be the history the log records.
+        """
+        self.verify_hash_chain()
+        height = self.chain_state().chain_height
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = snapshots.create(
+                connection,
+                scope=scope,
+                chain_height=height,
+                created_at=created_at or utc_now(),
+                package_version=package_version,
+            )
+            connection.commit()
+        return rows
+
+    def list_snapshots(self, *, scope: str | None = None) -> list[snapshots.SnapshotRow]:
+        with self.connect() as connection:
+            return snapshots.listing(connection, scope=scope)
+
+    def prune_snapshots(self, *, scope: str = snapshots.GLOBAL_SCOPE, keep: int) -> int:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            removed = snapshots.prune(connection, scope=scope, keep=keep)
+            connection.commit()
+        return removed
+
+    def verify_snapshot(
+        self, *, scope: str = snapshots.GLOBAL_SCOPE
+    ) -> snapshots.SnapshotVerification:
+        """Rebuild twice and compare every projection table row by row.
+
+        Once fully from origin, once accelerated from the newest valid snapshot. Any difference is
+        a snapshot that does not reproduce the log, and the first differing table and row are
+        named. This is invariant 4 of ADR 0014, and it is the reason a snapshot may be trusted for
+        acceleration at all.
+        """
+        with self.connect() as connection:
+            available = snapshots.load_newest_valid(connection, scope=scope)
+        if available is None:
+            return snapshots.SnapshotVerification(
+                scope, None, False, "no snapshot with a matching derivation fingerprint"
+            )
+
+        self.replay()
+        with self.connect() as connection:
+            full = snapshots.projection_tables(connection)
+        full_hash = self.projection_hash(version=2)
+
+        self.replay(from_snapshot=True, scope=scope)
+        with self.connect() as connection:
+            accelerated = snapshots.projection_tables(connection)
+        accelerated_hash = self.projection_hash(version=2)
+
+        difference = snapshots.first_difference(full, accelerated)
+        if difference is None and full_hash == accelerated_hash:
+            return snapshots.SnapshotVerification(
+                scope, available.chain_height, True, "accelerated rebuild matches full rebuild"
+            )
+        table, row = difference if difference is not None else ("projection_hash_v2", None)
+        return snapshots.SnapshotVerification(
+            scope,
+            available.chain_height,
+            False,
+            "accelerated rebuild differs from full rebuild",
+            differing_table=table,
+            differing_row=row,
+        )
 
     def checkpoint(self) -> None:
         with self.connect() as connection:

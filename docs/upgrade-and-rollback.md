@@ -31,12 +31,12 @@ Databases behind the current schema move forward on first open. The migration cr
 `ledger.sqlite3.pre-vN.<timestamp>.bak` before DDL, where `N` is the first pending migration, so a
 database at schema 6 is backed up as `pre-v7`.
 
-The current schema is 7. No migration since rc2 introduces a replacement event format: v1 event
+The current schema is 8. No migration since rc2 introduces a replacement event format: v1 event
 bytes and `projection_hash_v1` remain unchanged throughout. Schema 6 adds enforcement events and
 decision projections. Schema 7 adds no table — it rewrites stored `idempotency` rows from the older
 unscoped key form into the episode-scoped form, because replay always rebuilds that projection
 scoped and a database still holding legacy rows would fail its projection check and refuse to open.
-The rewrite drops a legacy row only where the scoped row it maps to already exists.
+The rewrite drops a legacy row only where the scoped row it maps to already exists. Schema 8 adds the `snapshots` table, a discardable derived cache that is never the source of truth: every row in it can be deleted at any time with no loss, and rolling back to schema 7 loses nothing but the cache.
 
 After upgrading a neutral root, run `ledger status`, `ledger verify-chain`, and `ledger replay` with
 the explicit `--state-root`. After upgrading Hermes, run `doctor`, `db verify-chain`, and

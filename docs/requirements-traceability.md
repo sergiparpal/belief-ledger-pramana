@@ -76,6 +76,7 @@ a claim of external scientific validity.
 | §4.2 recency for every perishability class ([ADR 0011](adr/0011-unconditional-recency-key.md)) | `engine/priority.py:priority_trace`, `models.Belief.__post_init__` | `tests/unit/test_recency_priority.py` |
 | Model-call attribution and divergence ([ADR 0012](adr/0012-llm-call-attribution.md)) | `llm/attribution.py`, `llm/divergence.py`, `LLM_CALL_ATTRIBUTION` events | `tests/unit/test_llm_divergence.py`, `test_llm_divergence_command_reports_identical_inputs_with_different_outputs` |
 | External chain anchoring ([ADR 0013](adr/0013-external-chain-anchoring.md)) | `verification/anchors.py`, `store.chain_state`, `anchor publish`/`verify` | `tests/unit/test_chain_anchoring.py::test_a_rechained_tamper_passes_verify_chain_and_fails_anchor_verify` |
+| Snapshots never authoritative ([ADR 0014](adr/0014-snapshots-as-a-discardable-cache.md)) | `snapshots.py`, schema 8 `snapshots` table, `db verify-snapshot` | `tests/unit/test_snapshots.py::test_deleting_every_snapshot_loses_nothing`, `tests/properties/test_ledger_properties.py::test_a_snapshot_at_any_height_rebuilds_to_the_same_projections` |
 | §4.2 saṃśaya | equal/cycle PENDING plus persistent conflict/task | equal-priority test/integration |
 | §4.3 fixed point/termination/reinstatement | `engine/defeat.py` state detection/ceiling | generated finite chains and reinstatement test |
 | §4.4 structural retraction | rendered-belief projection, notice/descendants/ack | stale-claim end-to-end test |

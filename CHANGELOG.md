@@ -64,6 +64,20 @@
   [ADR 0013](docs/adr/0013-external-chain-anchoring.md).
 - Added `LedgerStore.chain_state(up_to_height=...)`, which shares its verification with
   `verify_hash_chain` rather than recomputing the root a second way.
+- Added schema 8 and a `snapshots` table: a discardable derived cache that bounds replay cost
+  without ever becoming the source of truth. Any snapshot can be deleted at any time with no loss,
+  a snapshot whose derivation fingerprint no longer matches the installed code is discarded rather
+  than upgraded, `db replay` with no flags still reads every event from origin, and
+  `db verify-snapshot` rebuilds twice and compares every projection table row by row. Schema 8 adds
+  no event kind and no projection table, so both projection hashes are unchanged. See
+  [ADR 0014](docs/adr/0014-snapshots-as-a-discardable-cache.md).
+- Added `hermes belief-ledger db snapshot create|list|prune`, `db replay --from-snapshot` and
+  `db verify-snapshot`.
+- Added `replay.max_events_warn` (default 50 000). A full replay at or above it reports a warning
+  through `db replay`, which makes the scaling wall visible before it is hit. It never refuses.
+- Fixed a migration test that had silently stopped exercising its migration: it rolled the schema
+  stamp back by `LATEST_SCHEMA_VERSION`, so adding a version above the one under test made the
+  rollback skip it entirely. It now names the migration it exercises.
 
 ## v0.2.1 / 1.0.0rc4 - 2026-08-05
 

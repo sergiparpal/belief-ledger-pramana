@@ -8,6 +8,7 @@ from belief_ledger_pramana.hermes.cli import doctor, run_cli, setup_cli
 from belief_ledger_pramana.hermes.hooks import HermesHooks
 from belief_ledger_pramana.hermes.slash_commands import build_ledger_command
 from belief_ledger_pramana.hermes.tools import build_tool_handlers
+from belief_ledger_pramana.migrations import LATEST_SCHEMA_VERSION
 from belief_ledger_pramana.models import CompatibilityMode, Health, Pramana, Stakes
 
 
@@ -60,11 +61,11 @@ def test_operator_cli_and_slash_command_cover_normal_workflow(runtime) -> None:
     assert json.loads(preflight) == {
         "backup_required": False,
         "config_digest": runtime.config.digest,
-        "current_schema": 7,
+        "current_schema": LATEST_SCHEMA_VERSION,
         "database": str(runtime.store.database),
         "dry_run": True,
         "migration_required": False,
-        "target_schema": 7,
+        "target_schema": LATEST_SCHEMA_VERSION,
         "writes_performed": False,
     }
 

@@ -32,6 +32,8 @@ from ..events import canonical_json, to_primitive, utc_now
 from ..llm.divergence import divergence_report
 from ..migrations import LATEST_SCHEMA_VERSION
 from ..runtime import PluginRuntime
+from ..snapshots import GLOBAL_SCOPE as SNAPSHOT_GLOBAL_SCOPE
+from ..snapshots import replay_budget_warning
 from ..verification.anchors import (
     GLOBAL_SCOPE,
     AnchorError,
@@ -63,7 +65,23 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Also compare every published anchor against the local chain",
     )
-    db_sub.add_parser("replay")
+    replay = db_sub.add_parser("replay")
+    replay.add_argument(
+        "--from-snapshot",
+        action="store_true",
+        help="Accelerate from the newest valid snapshot instead of replaying from origin",
+    )
+    snapshot = db_sub.add_parser("snapshot")
+    snapshot_sub = snapshot.add_subparsers(dest="snapshot_command", required=True)
+    snapshot_create = snapshot_sub.add_parser("create")
+    snapshot_create.add_argument("--scope", default=SNAPSHOT_GLOBAL_SCOPE)
+    snapshot_list = snapshot_sub.add_parser("list")
+    snapshot_list.add_argument("--scope", default=None)
+    snapshot_prune = snapshot_sub.add_parser("prune")
+    snapshot_prune.add_argument("--scope", default=SNAPSHOT_GLOBAL_SCOPE)
+    snapshot_prune.add_argument("--keep", type=int, default=1)
+    verify_snapshot = db_sub.add_parser("verify-snapshot")
+    verify_snapshot.add_argument("--scope", default=SNAPSHOT_GLOBAL_SCOPE)
 
     episode = sub.add_parser("episode", help="Inspect or export episodes")
     episode_sub = episode.add_subparsers(dest="episode_command", required=True)
@@ -190,8 +208,21 @@ def run_cli(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]
                 return (0 if ok and anchors["ok"] else 1), _json(
                     {"ok": ok and anchors["ok"], "heads": digest, "anchors": anchors}
                 )
+            if args.db_command == "snapshot":
+                return _snapshot_command(runtime, args)
+            if args.db_command == "verify-snapshot":
+                verification = runtime.store.verify_snapshot(scope=args.scope)
+                return (0 if verification.ok else 1), _json(verification.as_json())
             if args.db_command == "replay":
-                return 0, _json(to_primitive(runtime.store.replay()))
+                replayed = runtime.store.replay(from_snapshot=args.from_snapshot)
+                payload = dict(to_primitive(replayed))
+                warning = replay_budget_warning(
+                    replayed.events_replayed,
+                    int(runtime.config.data["replay"]["max_events_warn"]),
+                )
+                if warning:
+                    payload["warning"] = warning
+                return 0, _json(payload)
             return 0, _json(to_primitive(runtime.store.migration))
         if command == "episode":
             if args.episode_command == "list":
@@ -549,6 +580,28 @@ def _distribution_version(name: str) -> str:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return "not-installed"
+
+
+def _snapshot_command(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]:
+    if runtime.store is None:
+        raise RuntimeError("ledger store is unavailable after initialization")
+    if args.snapshot_command == "create":
+        rows = runtime.store.create_snapshot(
+            scope=args.scope, package_version=_distribution_version("belief-ledger-pramana")
+        )
+        return 0, _json(
+            {
+                "ok": True,
+                "scope": args.scope,
+                "chain_height": rows[0].chain_height if rows else 0,
+                "projections": len(rows),
+                "fingerprint": rows[0].fingerprint if rows else "",
+            }
+        )
+    if args.snapshot_command == "list":
+        return 0, _json([row.as_json() for row in runtime.store.list_snapshots(scope=args.scope)])
+    removed = runtime.store.prune_snapshots(scope=args.scope, keep=args.keep)
+    return 0, _json({"ok": True, "scope": args.scope, "kept": args.keep, "rows_removed": removed})
 
 
 def _anchor_sink(runtime: PluginRuntime) -> FileAnchorSink:

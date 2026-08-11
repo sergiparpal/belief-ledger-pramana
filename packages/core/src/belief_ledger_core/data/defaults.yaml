@@ -43,6 +43,12 @@ verification:
   # detected separately. See docs/adr/0012-llm-call-attribution.md.
   sampling_temperature: 0.0
 
+replay:
+  # Warn when a full replay processes at least this many events. Replay cost grows with
+  # total history, and this makes the scaling wall visible before it is hit. It reports;
+  # it never refuses. 0 disables. See docs/adr/0014-snapshots-as-a-discardable-cache.md.
+  max_events_warn: 50000
+
 anchoring:
   # Append-only JSONL copy of the chain root, written somewhere the ledger cannot reach
   # back into. Empty disables anchoring. The path must resolve outside the ledger

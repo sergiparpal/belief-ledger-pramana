@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from belief_ledger_core.migrations import LATEST_SCHEMA_VERSION
 
 from scripts.check_doc_invariants import (
     FACTS,
@@ -60,10 +61,12 @@ def test_every_requirement_pattern_has_exactly_one_capture_group() -> None:
 def test_a_mutated_constant_is_caught_and_the_file_is_named(tmp_path: Path) -> None:
     """The load-bearing negative test: a guard never observed failing is not a guard."""
     root = _mirror(tmp_path / "tree")
+    current = LATEST_SCHEMA_VERSION
+    stale = current - 1
     document = root / "docs/upgrade-and-rollback.md"
     document.write_text(
         document.read_text(encoding="utf-8").replace(
-            "The current schema is 7", "The current schema is 6"
+            f"The current schema is {current}", f"The current schema is {stale}"
         ),
         encoding="utf-8",
     )
@@ -73,8 +76,8 @@ def test_a_mutated_constant_is_caught_and_the_file_is_named(tmp_path: Path) -> N
     assert result.returncode != 0
     assert "docs/upgrade-and-rollback.md" in result.stdout
     assert "latest_schema_version" in result.stdout
-    assert "expected '7'" in result.stdout
-    assert "found '6'" in result.stdout
+    assert f"expected '{current}'" in result.stdout
+    assert f"found '{stale}'" in result.stdout
 
 
 def test_a_document_that_drops_the_fact_entirely_fails(tmp_path: Path) -> None:
@@ -159,27 +162,32 @@ def test_a_hermes_commit_edit_in_one_document_is_caught(tmp_path: Path) -> None:
 def test_a_schema_version_without_a_migration_is_reported(tmp_path: Path) -> None:
     root = _mirror(tmp_path / "tree")
     module = root / "packages/core/src/belief_ledger_core/migrations.py"
+    unreachable = LATEST_SCHEMA_VERSION + 1
     module.write_text(
         module.read_text(encoding="utf-8").replace(
-            "LATEST_SCHEMA_VERSION = 7", "LATEST_SCHEMA_VERSION = 8"
+            f"LATEST_SCHEMA_VERSION = {LATEST_SCHEMA_VERSION}",
+            f"LATEST_SCHEMA_VERSION = {unreachable}",
         ),
         encoding="utf-8",
     )
 
     failures = migration_coverage_failures(root)
 
-    assert any("schema version 8 of 8" in item for item in failures), failures
+    assert any(f"schema version {unreachable} of {unreachable}" in item for item in failures), (
+        failures
+    )
 
 
 def test_a_sql_file_ahead_of_the_latest_version_is_reported(tmp_path: Path) -> None:
     root = _mirror(tmp_path / "tree")
-    (root / "packages/core/src/belief_ledger_core/data/migrations/0009_future.sql").write_text(
-        "-- not reachable from LATEST_SCHEMA_VERSION\n", encoding="utf-8"
-    )
+    ahead = LATEST_SCHEMA_VERSION + 1
+    (
+        root / f"packages/core/src/belief_ledger_core/data/migrations/{ahead:04d}_future.sql"
+    ).write_text("-- not reachable from LATEST_SCHEMA_VERSION\n", encoding="utf-8")
 
     failures = migration_coverage_failures(root)
 
-    assert any("carries version 9 above" in item for item in failures), failures
+    assert any(f"carries version {ahead} above" in item for item in failures), failures
 
 
 def test_current_migration_coverage_is_complete() -> None:

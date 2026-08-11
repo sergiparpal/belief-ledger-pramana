@@ -170,6 +170,9 @@ def validate_core_config(data: dict[str, Any], *, defaults: dict[str, Any]) -> N
     _bounded_number(verification, "sampling_temperature", 0.0, 2.0)
     _boolean(verification, "critical_human_confirmation")
 
+    replay = _mapping(data, "replay")
+    _bounded_int(replay, "max_events_warn", 0, 1_000_000_000)
+
     anchoring = _mapping(data, "anchoring")
     sink_path = anchoring.get("sink_path")
     if not isinstance(sink_path, str) or len(sink_path) > 4_096 or "\n" in sink_path:

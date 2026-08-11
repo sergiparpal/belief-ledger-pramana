@@ -282,3 +282,51 @@ left in place, or the work starts to look like design rather than implementation
   exists so nobody reads them as tamper resistance.
 - **Suggested next step:** none. The threat model's anchoring section now states what does and does
   not detect an attacker with file access.
+
+### F-19 — An existing test hardcoded the schema numbers in the migration dry run
+
+- **Stage:** 6
+- **Severity:** minor
+- **What:**
+  `tests/integration/test_operator_surfaces.py::test_operator_cli_and_slash_command_cover_normal_workflow`
+  asserted `{"current_schema": 7, "target_schema": 7, ...}` against `db migrate --dry-run`. Bumping
+  `LATEST_SCHEMA_VERSION` to 8 broke it.
+- **Why not fixed here:** it was fixed by removing the coupling rather than by bumping the numbers.
+  Both fields now assert against `LATEST_SCHEMA_VERSION`, which is what the command derives them
+  from — the CLI already had a comment saying the target must never be a literal, and the test was
+  the literal.
+- **Suggested next step:** none.
+
+### F-20 — A migration test silently stopped exercising its migration when a version was added
+
+- **Stage:** 6
+- **Severity:** significant
+- **What:**
+  `tests/unit/test_audit_regressions.py::test_legacy_unscoped_idempotency_rows_migrate_and_replay_cleanly`
+  reproduced the pre-v7 on-disk shape and then rolled the schema stamp back with
+  `DELETE FROM schema_migrations WHERE version = LATEST_SCHEMA_VERSION`. That only re-ran the v7
+  rescoping migration for as long as v7 *was* `LATEST_SCHEMA_VERSION`. Adding schema 8 made the
+  rollback delete only the v8 stamp, so the migration loop restarted at v8, v7 never re-ran, and
+  the test failed against an unscoped key.
+- **Why not fixed here:** it *was* fixed, and the entry records that this was a latent defect in
+  the test rather than a consequence of adding schema 8 — schema 8 only revealed it. Had the test
+  asserted something weaker it would have kept passing while testing nothing. The rollback now
+  targets the rescoping migration by number (`WHERE version >= 7`), which is what the test's own
+  comment always said it was doing.
+- **Suggested next step:** when a test rolls back schema state to force a migration to re-run, name
+  the migration it is exercising. `LATEST_SCHEMA_VERSION` is never the right handle for that,
+  because the test is about one specific migration and not about whichever one happens to be last.
+
+### F-21 — A corrupt snapshot payload raised instead of being discarded
+
+- **Stage:** 6
+- **Severity:** minor
+- **What:** `load_newest_valid` verified each payload's content hash, but `zlib.decompress` runs
+  before the hash can be computed, so a truncated payload raised `zlib.error` out of
+  `replay(from_snapshot=True)` — from a code path that had a correct full-replay fallback available
+  and should have taken it. Found by `test_a_corrupted_payload_is_discarded_rather_than_used`, which
+  was written expecting the discard behaviour the invariant promises.
+- **Why not fixed here:** it was fixed. Decompression and JSON decoding are now guarded and any
+  failure discards the snapshot.
+- **Suggested next step:** none. This is invariant 2 doing its job: anything unusable about a
+  snapshot must degrade to a full replay, never to an error.

@@ -471,6 +471,9 @@ def validate_config(config: Mapping[str, Any]) -> None:
     if not isinstance(verification.get("critical_human_confirmation"), bool):
         raise ConfigError("verification.critical_human_confirmation must be a boolean")
 
+    replay = _mapping(config, "replay")
+    _bounded_int(replay, "max_events_warn", 0, 1_000_000_000)
+
     anchoring = _mapping(config, "anchoring")
     sink_path = anchoring.get("sink_path")
     if not isinstance(sink_path, str) or len(sink_path) > 4_096 or "\n" in sink_path:

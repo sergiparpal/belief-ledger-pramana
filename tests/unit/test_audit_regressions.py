@@ -328,14 +328,18 @@ def test_legacy_unscoped_idempotency_rows_migrate_and_replay_cleanly(tmp_path: P
     )
 
     # Reproduce the pre-v7 on-disk shape: the stored key without its episode scope, and the
-    # schema stamp rolled back so the migration runs again on reopen.
+    # schema stamp rolled back so the migration runs again on reopen. The rollback targets the
+    # rescoping migration by number rather than LATEST_SCHEMA_VERSION: rolling back only the
+    # newest stamp stopped re-running v7 the moment v8 was added, which made this test pass
+    # vacuously against an unscoped key.
+    idempotency_rescope_version = 7
     with sqlite3.connect(database) as connection:
         connection.execute(
             "UPDATE idempotency SET idempotency_key=? WHERE idempotency_key=?",
             ("turn-2", f"{episode.id}:turn-2"),
         )
         connection.execute(
-            "DELETE FROM schema_migrations WHERE version=?", (LATEST_SCHEMA_VERSION,)
+            "DELETE FROM schema_migrations WHERE version>=?", (idempotency_rescope_version,)
         )
 
     reopened = LedgerStore(database)

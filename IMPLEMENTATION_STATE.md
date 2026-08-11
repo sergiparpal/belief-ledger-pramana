@@ -381,3 +381,37 @@ the threat: a trigger is a row in the schema of a file the attacker can write (F
 
 Test count moved 436 → 454; coverage 88.33% → 88.37%. Warnings stay at 8: the raw `sqlite3`
 connections the tamper helper needs are closed explicitly, so no `ResourceWarning` is added.
+
+## Obvious-fix plan, Stage 6 — snapshots as a discardable cache — 2026-08-10
+
+Schema 8 adds the `snapshots` table. It adds no event kind and no projection table, so
+`projection_hash_v1` and `projection_hash_v2` are both unchanged and the frozen v1 fixtures still
+verify byte-for-byte. Rolling back to schema 7 loses nothing but the cache.
+
+The four invariants are tests, not comments. Deleting every snapshot loses nothing, asserted against
+all six frozen fixtures. A stale derivation fingerprint means discard rather than upgrade, and so
+does a corrupt payload — `zlib.decompress` runs before the content hash can be checked, so it needed
+its own guard, which is F-21. `db replay` with no flags reads every event, asserted by event-read
+count rather than timing. `db verify-snapshot` rebuilds twice and compares every projection table
+row by row.
+
+`replay.max_events_warn` defaults to 50 000. The v1 fixtures are 22 events, so no timing measurement
+in this repository can surface the scaling wall — the threshold is a configured number for that
+reason.
+
+Two existing tests changed. One hardcoded the schema numbers in the migrate dry-run output (F-19).
+The other rolled the schema stamp back by `LATEST_SCHEMA_VERSION` to re-run the v7 idempotency
+rescoping, which silently stopped re-running it the moment v8 existed (F-20) — a latent defect in
+the test that schema 8 revealed rather than caused.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_snapshots.py` | 0 | 29 passed, one per invariant plus the parametrized sweep over all six fixtures. |
+| `pytest tests/properties/test_ledger_properties.py` | 0 | 6 passed; the new hypothesis case snapshots at a generated height and asserts the accelerated rebuild equals the full one. |
+| `pytest tests/contract/test_v1_replay.py` | 0 | 10 passed; frozen hashes unchanged across the schema bump. |
+| `python scripts/check_doc_invariants.py` | 0 | The Stage 1 guard forced the schema bump into all three documents in the same change. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 484 passed; 88.31% against the 88% floor. |
+
+Test count moved 454 → 484; coverage 88.37% → 88.31%. The drop is the new
+`from_snapshot`/verification branches in `store.py` and `snapshots.py`, which are exercised but not
+saturated; both remain well above the floor and above the 88.16% Stage 0 baseline.

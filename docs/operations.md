@@ -40,7 +40,38 @@ hermes belief-ledger policy inventory
 hermes belief-ledger llm-divergence --json
 hermes belief-ledger anchor publish
 hermes belief-ledger anchor verify
+hermes belief-ledger db snapshot create
+hermes belief-ledger db verify-snapshot
 ```
+
+## Bounding replay cost
+
+Replay reads every event from origin, so its cost grows with total history. `db replay` with no
+flags always does that, and always will. Snapshots are an opt-in cache on top:
+
+```bash
+hermes belief-ledger db snapshot create --scope global
+hermes belief-ledger db snapshot list
+hermes belief-ledger db verify-snapshot
+hermes belief-ledger db replay --from-snapshot
+hermes belief-ledger db snapshot prune --keep 3
+```
+
+A snapshot is never the source of truth. Delete every one of them at any time and nothing is lost:
+the append-only log rebuilds every projection. A snapshot whose derivation fingerprint no longer
+matches the installed code is discarded rather than upgraded, and `db replay --from-snapshot`
+falls back to a full replay without error — so an upgrade never needs a snapshot migration step.
+
+Run `db verify-snapshot` before relying on acceleration. It rebuilds twice, once fully and once
+from the newest valid snapshot, and compares every projection table; a mismatch exits non-zero
+naming the first differing table and row.
+
+`replay.max_events_warn` (default 50 000) makes the scaling wall visible before it is hit: a full
+replay at or above it reports a warning. It never refuses. Treat the first warning as the signal to
+start snapshotting, not as an error.
+
+Snapshot payloads contain projection rows and are as sensitive as the database they came from.
+Keep them in the same encrypted backup set.
 
 ## Anchoring the chain externally
 
@@ -90,11 +121,12 @@ handles without deleting history. Back up the SQLite database, `-wal`, and `-shm
 active, or checkpoint and then copy the main file. Retain the matching private
 `locks/ledger.integrity.key`, profile configuration, and policy/source-profile extensions in the
 same encrypted backup set. Do not regenerate or substitute the key for an existing database.
-Forward migrations create a pre-migration database backup. The current schema version is 7.
+Forward migrations create a pre-migration database backup. The current schema version is 8.
 Schema v6, introduced in rc2, adds
 append-only authorization events and rebuildable receipt/decision projections. Schema v7 adds no
 table and no event format: it rewrites stored idempotency keys into the episode-scoped form that
-replay rebuilds, which is what lets a database written before that scoping be opened again. Follow
+replay rebuilds, which is what lets a database written before that scoping be opened again.
+Schema v8 adds the `snapshots` table, the discardable cache described above. Follow
 [upgrade and rollback](upgrade-and-rollback.md) before opening older state with newer code.
 
 If chain or event-authentication verification fails, stop effectful work, preserve the database and
