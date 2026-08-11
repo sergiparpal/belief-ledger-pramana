@@ -330,3 +330,61 @@ left in place, or the work starts to look like design rather than implementation
   failure discards the snapshot.
 - **Suggested next step:** none. This is invariant 2 doing its job: anything unusable about a
   snapshot must degrade to a full replay, never to an error.
+
+### F-22 — `LedgerRuntime` is a fixture, so its callers cannot be mechanically migrated
+
+- **Stage:** 7c
+- **Severity:** minor
+- **What:** the plan says to migrate every internal caller of the facade to the core API.
+  `LedgerRuntime` is not a wrapper over `BeliefLedger`: `ingest_health` and `authorize_deployment`
+  in `packages/core/src/belief_ledger_core/runtime.py` encode the deployment-gate fixture's own
+  policy — a hardcoded `deploy-production` rule, a `sha256:fixture-policy-v1` revision, and a
+  green/red health toggle. `BeliefLedger` has no equivalent, which
+  `docs/python-api.md` already hinted at by calling it a "deprecated fixture facade".
+- **Why not fixed here:** migrating `examples/deployment_gate/run.py` off it means rewriting the
+  example against a different policy model. That is design work, out of scope by §0. The three
+  remaining callers are the deterministic example and two test modules that exercise the facade on
+  purpose, which is what the plan says the end state should be.
+- **Suggested next step:** treat the facade's removal in 2.0.0 as a task to rewrite the
+  deployment-gate example against `BeliefLedger` with an explicit manifest, not as a deletion.
+  `tests/unit/test_core_runtime.py::test_the_facade_is_a_fixture_and_not_a_core_api_wrapper` pins
+  the asymmetry so this does not have to be rediscovered.
+
+### F-23 — `EpisodeService` cannot be split by a pure move
+
+- **Stage:** 7d
+- **Severity:** significant
+- **What:** after `runtime.py` was split into a package, `episode_service.py` is 2,430 lines and
+  holds exactly one class. Reaching the 600-line limit would require distributing `EpisodeService`
+  across modules via mixins or by relocating methods onto collaborators. Both change the class
+  rather than move it, so Stage 7d's hard rule — revert the move, leave the cluster, record it —
+  applies. The same blocker applies to `store.py` (1,601, one class), `api.py` (1,178, the public
+  core API) and `enforcement.py` (1,097).
+- **Why not fixed here:** a class decomposition is design work with real behavioural risk, and the
+  plan puts design out of scope. Doing it inside a refactor commit would also make the diff
+  unreviewable, which is the reason the pure-move rule exists.
+- **Suggested next step:** the cohesive seams inside `EpisodeService` are visible in the method
+  order and would survive extraction as collaborators rather than mixins: evidence ingestion and
+  claim promotion (`ingest_user_message`, `ingest_tool_result`, `_prepare_tool_evidence`,
+  `_promote_evidence`, `_claim_admission_drafts`, `_candidate_drafts`); relabel orchestration
+  (`relabel`, `_edge_activity_drafts`, `_belief_transition_drafts`, `_conflict_transition_drafts`,
+  `_relabel_summary_drafts`); output lint (`lint_and_enforce`, `_semantic_lint`, `pre_verify`,
+  `record_accepted_response`); and verification (`request_verification`, `complete_verification`,
+  `run_chain_audit`, `_verification_drafts`). Each takes the store and config it already uses; the
+  question a design pass has to answer is what state genuinely has to stay shared.
+
+### F-24 — Re-export shims were kept rather than deleted
+
+- **Stage:** 7b
+- **Severity:** minor
+- **What:** the plan's 7b would delete shim modules "not in the promised surface". Only four names
+  are formally promised by `belief_ledger_pramana.__all__`, so applying that rule literally would
+  authorize deleting almost the entire package — 77 modules that existing Hermes installations
+  import by path.
+- **Why not fixed here:** deliberate. Deleting them is a breaking change to a 1.x compatibility
+  contract (ADR 0007) with no measured need behind it, and ground rule 1.1.7 requires a deprecation
+  path for any such removal. `docs/compat-surface.md` records what is promised versus what is
+  merely reachable, so a future pass can make that call with the distinction already drawn.
+- **Suggested next step:** if the shims are ever removed, do it at 2.0.0 alongside the
+  `LedgerRuntime` removal, in one breaking release with one migration note, rather than
+  piecemeal.

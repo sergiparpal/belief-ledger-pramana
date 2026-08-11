@@ -78,6 +78,24 @@
 - Fixed a migration test that had silently stopped exercising its migration: it rolled the schema
   stamp back by `LATEST_SCHEMA_VERSION`, so adding a version above the one under test made the
   rollback skip it entirely. It now names the migration it exercises.
+- Pinned the backward-compatible import surface. `tests/fixtures/compat_surface.json` records every
+  module reachable from `belief_ledger_pramana` and every name it exports, and
+  `tests/unit/test_compat_surface.py` fails if a module or name disappears. Nothing asserted this
+  before, despite the package being a 1.x compatibility contract.
+- Gave packaged policy data one home. `defaults.yaml`, `action-policies.yaml` and
+  `source-profiles.yaml` no longer ship a second byte-identical copy in the adapter; it loads
+  core's, which it already depends on. The parity test now asserts there is exactly one copy.
+- Split `belief_ledger_pramana/runtime.py` (3,233 lines) into a package by pure moves:
+  `errors.py`, `helpers.py`, `plugin_runtime.py` and `episode_service.py`, with `__init__.py`
+  re-exporting every previously importable name. No behaviour changed. `EpisodeService` remains one
+  2,430-line class; splitting it is not a pure move and is recorded as a finding rather than
+  attempted.
+- Added a source-file size guard at 600 lines with eight reasoned exemptions, each recording a
+  ceiling the file may not exceed. A file that falls under the limit must leave the list. See
+  [ADR 0015](docs/adr/0015-runtime-module-layout.md).
+- Scheduled `LedgerRuntime` for removal in 2.0.0 and pinned its `DeprecationWarning` with a test.
+  Its remaining callers were not migrated: `ingest_health` and `authorize_deployment` are
+  deployment-gate fixture policy with no `BeliefLedger` equivalent, which a test now asserts.
 
 ## v0.2.1 / 1.0.0rc4 - 2026-08-05
 

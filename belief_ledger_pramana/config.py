@@ -15,9 +15,12 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
+
+# Packaged policy data has exactly one copy, in core. The adapter depends on core, so this
+# is always installed alongside it; a second copy could only ever drift (ADR 0015).
+from belief_ledger_core import data as data_package
 from belief_ledger_core.config import freeze_config
 
-from . import data as data_package
 from .atomic import write_private_text_atomically
 from .events import canonical_json, content_hash
 from .models import Stakes, VerificationMethod

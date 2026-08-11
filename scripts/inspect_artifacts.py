@@ -127,9 +127,9 @@ def main() -> int:
         else:
             required = [
                 "belief_ledger_pramana/plugin.py",
-                "belief_ledger_pramana/data/defaults.yaml",
-                "belief_ledger_pramana/data/action-policies.yaml",
-                "belief_ledger_pramana/data/source-profiles.yaml",
+                # Packaged policy YAML is not listed: it has one home, in belief-ledger-core,
+                # which this distribution depends on. The SQL files below stay because they are
+                # reference material shipped with the adapter, not a second source of truth.
                 "belief_ledger_pramana/data/migrations/0001_initial.sql",
                 "belief_ledger_pramana/data/migrations/0002_llm_reservations.sql",
                 "belief_ledger_pramana/data/migrations/0003_performance_indexes.sql",

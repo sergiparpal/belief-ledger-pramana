@@ -21,6 +21,7 @@ and the automated check that pins it.
 | [0012 LLM call attribution](0012-llm-call-attribution.md) | accepted, 2026-08-10 | Every model call records prompt, input and output digests plus the applied sampling policy as a new `LLM_CALL_ATTRIBUTION` record, and `llm-divergence` reports identical inputs that produced different outputs. |
 | [0013 External chain anchoring](0013-external-chain-anchoring.md) | accepted, 2026-08-10 | The chain root is published to an append-only sink outside the ledger directory, so local modification followed by re-chaining leaves evidence. It raises the cost of tampering; it does not prevent it. |
 | [0014 Snapshots as a discardable cache](0014-snapshots-as-a-discardable-cache.md) | accepted, 2026-08-10 | Schema 8 adds a `snapshots` cache that is never the source of truth: any snapshot may be deleted with no loss, a stale derivation fingerprint means discard rather than upgrade, full replay stays the default, and `db verify-snapshot` proves an accelerated rebuild equals a full one. |
+| [0015 Runtime module layout](0015-runtime-module-layout.md) | accepted, 2026-08-10 | `runtime.py` becomes a package by pure moves, packaged policy data gets one home in core, and the 600-line limit ships as a guard with reasoned per-file ceilings. `EpisodeService` cannot be split by a pure move and stays exempt. |
 
 0009 is proposed. It records a measurement and a direction; no code has changed for it, and the
 per-ingestion behaviour it describes is the behaviour that ships today.

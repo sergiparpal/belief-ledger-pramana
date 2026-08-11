@@ -415,3 +415,44 @@ the test that schema 8 revealed rather than caused.
 Test count moved 454 → 484; coverage 88.37% → 88.31%. The drop is the new
 `from_snapshot`/verification branches in `store.py` and `snapshots.py`, which are exercised but not
 saturated; both remain well above the floor and above the 88.16% Stage 0 baseline.
+
+## Obvious-fix plan, Stage 7 — structural consolidation — 2026-08-10
+
+**7a.** `tests/fixtures/compat_surface.json` and `tests/unit/test_compat_surface.py` pin the
+`belief_ledger_pramana` import surface: 81 modules, 288 exported names. Nothing asserted this
+before (F-03). It lives in `tests/unit/` rather than `tests/core/` because the `core-no-adapters`
+CI job runs `tests/core` against a core-only venv that does not have the adapter installed.
+
+**7b.** Packaged policy data now has one home. The adapter loads `belief_ledger_core.data`, the
+three duplicated YAML files are deleted, and the byte-identity test became a one-copy assertion.
+Re-export shims were kept: only four names are formally promised, so deleting everything outside
+the promised surface would delete most of a 1.x compatibility contract (F-24).
+
+**7c.** Q3 answered A. The facade keeps its warning, now pinned by a test, and removal is
+documented for 2.0.0. Its callers were not migrated because `LedgerRuntime` is a fixture, not a
+`BeliefLedger` wrapper (F-22).
+
+**7d.** `runtime.py` (3,233 lines) is now a package, by pure moves:
+
+| Module | Lines |
+|---|---:|
+| `runtime/__init__.py` | 42 |
+| `runtime/errors.py` | 36 |
+| `runtime/helpers.py` | 271 |
+| `runtime/plugin_runtime.py` | 598 |
+| `runtime/episode_service.py` | 2430 |
+
+The 600-line target is not met and cannot be met by pure moves: `EpisodeService` is one class of
+2,430 lines, and splitting a class is not a move (F-23). The guard ships anyway, with eight
+exemptions that each record a ceiling and a reason, plus tests that stop an exempt file growing and
+force a file that drops under the limit to leave the list.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_compat_surface.py` | 0 | 90 passed; no module or exported name lost across the split. |
+| `pytest tests/unit/test_architecture.py` | 0 | 9 passed, including the four size-guard tests. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | No findings after the move. |
+| `mypy packages/{core,gateway,mcp,reference}/src belief_ledger_pramana` | 0 | 158 source files. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 581 passed; 88.42% against the 88% floor. |
+
+Test count moved 484 → 581; coverage 88.31% → 88.42%. Largest source file: 3,233 → 2,430 lines.

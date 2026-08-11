@@ -114,3 +114,11 @@ surface also exports `CoreConfig`, `RuntimeDependencies`, `ToolDescriptor`, `Too
 
 The legacy `LedgerRuntime` remains only as a deprecated fixture facade for 1.x compatibility. New
 integrations must use `BeliefLedger` and must not import through `belief_ledger_pramana`.
+
+It emits a `DeprecationWarning` on construction and is scheduled for removal in **2.0.0**. It is
+not a thin wrapper over `BeliefLedger`: `ingest_health` and `authorize_deployment` encode the
+deployment-gate fixture's own policy and have no equivalent in the core API, which is why the
+remaining callers are the deterministic example and the tests that exercise the facade on purpose.
+Anything depending on those two methods is depending on a fixture, not on a supported interface.
+`tests/unit/test_core_runtime.py::test_the_deprecated_facade_still_warns_on_construction` keeps the
+warning itself pinned.
