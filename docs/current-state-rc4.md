@@ -6,8 +6,9 @@ gateway owns the neutral executable; reference is strict conformance evidence; M
 inspection and an action proxy; Hermes retains its 1.x public surfaces.
 
 Frozen v1 event fixtures and released historical documents remain unchanged. Current verification
-is defined by `scripts/verify_stage.py all`, including workspace boundaries, product claims, generic
-examples, five-wheel inspection, Twine metadata, and clean-install modes. GitHub release `v0.2.1`
+is defined by `scripts/verify_stage.py all`, including workspace boundaries, product claims,
+documented-constant invariants, generic examples, five-wheel inspection, Twine metadata, and
+clean-install modes. GitHub release `v0.2.1`
 publishes this repository state as generated source archives. The five Python distributions remain
 unpublished to package registries; no built distribution is uploaded or signed by the release.
 
@@ -70,3 +71,30 @@ that grows with episode length; relabeling stays whole-episode because reinstate
 the iteration ceiling, time-driven staleness, and equal-priority conflicts are properties of the
 complete graph. The record is proposed and no code has changed for it, so what ships today is three
 whole-episode passes per ingestion, costing roughly 96 ms at around 500 beliefs.
+
+## State after the obvious-fix plan
+
+Unreleased work on top of `v0.2.1`, recorded in full in
+[the completion report](plan-completion-report.md) and measured against
+[the baseline](plan-baseline.md). Nothing here is released; the five distributions still report
+`1.0.0rc4`.
+
+The schema moved from 7 to 8, adding only the `snapshots` cache. Frozen v1 event and projection
+hashes are unchanged across that bump, across a new `LLM_CALL_ATTRIBUTION` record kind, across a
+defeat-semantics change, and across the split of a 3,233-line module — verified by
+`tests/contract/test_v1_replay.py`, which still passes byte-for-byte.
+
+Six decision records were added, 0010 through 0015. Three change behaviour: recency became a
+priority key for every perishability class (0011), every model call is now attributed and
+divergence is queryable (0012), and the chain root can be anchored outside the ledger (0013). Two
+add capability without changing existing behaviour: the snapshot cache (0014) and the runtime
+module layout (0015). One changes nothing but the documentation, deliberately (0010).
+
+Three new machine checks now gate the tree: documented constants must equal the code they derive
+from, the `belief_ledger_pramana` import surface must not lose a module or a name, and no source
+file may exceed 600 lines outside eight exemptions that each carry a ceiling and a reason.
+
+Test count 353 → 581; combined coverage 88.16% → 88.46% against an unchanged 88% floor.
+Twenty-four findings are recorded in [the findings register](plan-findings.md), including four
+existing tests that had to change and one — F-20 — that had silently stopped exercising the
+migration it was written for.

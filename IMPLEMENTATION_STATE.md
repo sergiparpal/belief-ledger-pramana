@@ -456,3 +456,21 @@ force a file that drops under the limit to leave the list.
 | `python scripts/verify_stage.py all --skip-build` | 0 | 581 passed; 88.42% against the 88% floor. |
 
 Test count moved 484 → 581; coverage 88.31% → 88.42%. Largest source file: 3,233 → 2,430 lines.
+
+## Obvious-fix plan, Stage 8 — consolidation and reporting — 2026-08-10
+
+Final gate from the Stage 7 tree, `docs/plan-completion-report.md` written, and
+`docs/current-state-rc4.md` updated with the post-plan state.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `python scripts/verify_stage.py all --skip-build` | 0 | 581 passed; 88.46% against the 88% floor; 34.4 s wall clock. |
+| `pytest tests/contract/test_v1_replay.py` | 0 | 10 passed; frozen hashes unchanged across a schema bump, a new record kind, a defeat-semantics change and the runtime split. |
+| `git diff main -- tests/fixtures/v1_replay/` | — | Empty. The fixtures were never touched. |
+| `python scripts/check_doc_invariants.py` | 0 | 6 facts across 9 files. |
+| `python scripts/check_product_claims.py` | 0 | 10 public metadata files. |
+
+Baseline → final: tests 353 → 581, coverage 88.16% → 88.46%, largest source file 3 233 → 2 430
+lines, ADRs 9 → 15, warnings 8 → 8. One in-scope item is incomplete and listed with its reason: the
+600-line target in Stage 7d, blocked by `EpisodeService` being a single 2,430-line class that no
+pure move can divide (F-23).

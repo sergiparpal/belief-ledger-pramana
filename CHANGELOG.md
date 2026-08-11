@@ -96,6 +96,9 @@
 - Scheduled `LedgerRuntime` for removal in 2.0.0 and pinned its `DeprecationWarning` with a test.
   Its remaining callers were not migrated: `ingest_health` and `authorize_deployment` are
   deployment-gate fixture policy with no `BeliefLedger` equivalent, which a test now asserts.
+- Recorded the outcome of the obvious-fix plan in `docs/plan-completion-report.md`, with baseline
+  versus final numbers, the one in-scope item not completed and why, and the 24-entry findings
+  register.
 
 ## v0.2.1 / 1.0.0rc4 - 2026-08-05
 
