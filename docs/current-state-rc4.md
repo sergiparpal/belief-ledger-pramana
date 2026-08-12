@@ -75,8 +75,8 @@ whole-episode passes per ingestion, costing roughly 96 ms at around 500 beliefs.
 ## State after the obvious-fix plan
 
 Unreleased work on top of `v0.2.1`, recorded in full in
-[the completion report](plan-completion-report.md) and measured against
-[the baseline](plan-baseline.md). Nothing here is released; the five distributions still report
+[the completion report](obvious-fix-report.md) and measured against
+[the baseline](obvious-fix-baseline.md). Nothing here is released; the five distributions still report
 `1.0.0rc4`.
 
 The schema moved from 7 to 8, adding only the `snapshots` cache. Frozen v1 event and projection
@@ -95,6 +95,6 @@ from, the `belief_ledger_pramana` import surface must not lose a module or a nam
 file may exceed 600 lines outside eight exemptions that each carry a ceiling and a reason.
 
 Test count 353 → 581; combined coverage 88.16% → 88.46% against an unchanged 88% floor.
-Twenty-four findings are recorded in [the findings register](plan-findings.md), including four
+Twenty-four findings are recorded in [the findings register](obvious-fix-findings.md), including four
 existing tests that had to change and one — F-20 — that had silently stopped exercising the
 migration it was written for.

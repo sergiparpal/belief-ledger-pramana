@@ -1,8 +1,9 @@
 # Obvious-fix plan — completion report
 
-Closes `belief-ledger-pramana-obvious-fixes-plan.md`. Measured against
-[the Stage 0 baseline](plan-baseline.md); the register of everything found along the way is
-[plan-findings.md](plan-findings.md).
+Closes the obvious-fix plan, an external working document that is not kept in this
+repository. Measured against
+[the Stage 0 baseline](obvious-fix-baseline.md); the register of everything found along the way is
+[obvious-fix-findings.md](obvious-fix-findings.md).
 
 ## Baseline versus final
 
@@ -104,7 +105,7 @@ typed reasoning is still episode-scoped (§5.1); the Hermes profile cap is uncha
 - [x] `tests/fixtures/v1_replay/` unchanged
 - [x] Every semantic change has an ADR, indexed in `docs/adr/README.md` and traced in
       `docs/requirements-traceability.md`
-- [x] `docs/plan-findings.md` and this report exist and are complete
+- [x] `docs/obvious-fix-findings.md` and this report exist and are complete
 - [x] No item from §0.2 implemented
 
 ## Post-implementation audit
@@ -130,7 +131,7 @@ coverage floor is untouched at 88, all six new ADRs are indexed and traced, and
 
 ## Findings register
 
-Twenty-six entries, reproduced in full in [plan-findings.md](plan-findings.md). The ones worth
+Twenty-six entries, reproduced in full in [obvious-fix-findings.md](obvious-fix-findings.md). The ones worth
 reading first:
 
 | ID | Severity | Why it matters |

@@ -42,7 +42,7 @@ fresher admitted absence still loses to older positive evidence.
 None. Defeat semantics are replay-independent: `relabel` output is materialised into
 `BELIEF_STATUS_CHANGED` and `DEFEAT_ADDED` events, and replay reapplies those events through the
 projection handler table rather than re-running the engine. This was verified by experiment in
-`docs/plan-baseline.md` (R1) — inverting the sign of the lexicographic comparison fails
+`docs/obvious-fix-baseline.md` (R1) — inverting the sign of the lexicographic comparison fails
 `tests/unit/test_engine.py` and leaves `tests/contract/test_v1_replay.py` green.
 
 `tests/fixtures/v1_replay/` is therefore untouched, no legacy fixture directory is needed, and
@@ -65,7 +65,7 @@ One existing test changed as a result. `tests/unit/test_domain_edges.py` constru
 `Belief` and asserted that `priority_trace` rejected it. It now asserts that the construction
 itself is rejected, and additionally that an aware belief produces a non-zero `recency_rank`. This
 asserts strictly more than before: the invalid value can no longer be built, let alone reach the
-engine. Recorded in [the findings register](../plan-findings.md) as F-12.
+engine. Recorded in [the findings register](../obvious-fix-findings.md) as F-12.
 
 ## Consequences
 

@@ -1,9 +1,9 @@
 # Obvious-fix plan — findings register
 
 Append-only. Entries are never edited or removed once written; a superseded entry gets a later
-entry that supersedes it, and the original stays. Opened at Stage 0 of
-`belief-ledger-pramana-obvious-fixes-plan.md` and carried to
-[the completion report](plan-completion-report.md).
+entry that supersedes it, and the original stays. Opened at Stage 0 of the obvious-fix
+plan — an external working document, not kept in this repository — and carried to
+[the completion report](obvious-fix-report.md).
 
 An entry belongs here whenever any of the following happens: a bug is found outside the plan's
 scope, an existing test has to change, a coupling blocks a pure move, a limitation is deliberately

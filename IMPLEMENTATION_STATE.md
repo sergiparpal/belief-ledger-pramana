@@ -459,7 +459,7 @@ Test count moved 484 → 581; coverage 88.31% → 88.42%. Largest source file: 3
 
 ## Obvious-fix plan, Stage 8 — consolidation and reporting — 2026-08-10
 
-Final gate from the Stage 7 tree, `docs/plan-completion-report.md` written, and
+Final gate from the Stage 7 tree, `docs/obvious-fix-report.md` written, and
 `docs/current-state-rc4.md` updated with the post-plan state.
 
 | Command | Exit | Result |

@@ -1,9 +1,10 @@
 # Obvious-fix plan — Stage 0 baseline
 
-The measured state of the repository before any stage of
-`belief-ledger-pramana-obvious-fixes-plan.md` was implemented. Every later stage reports its
-numbers against this file. A stage that reduces a number here without an explanation in
-[the findings register](plan-findings.md) is a failed stage.
+The measured state of the repository before any stage of the obvious-fix plan was
+implemented. That plan was an external working document and is not kept in this repository;
+what it required is recorded here, in the findings register, and in the completion report.
+Every later stage reports its numbers against this file. A stage that reduces a number here without an explanation in
+[the findings register](obvious-fix-findings.md) is a failed stage.
 
 ## Commit
 
@@ -141,7 +142,7 @@ That gap is the reason Stage 7a exists and must land before any move in 7b–7d.
 
 ## Answers to the Stage 0 question block
 
-Recorded when answered; see [the plan findings register](plan-findings.md) for anything the answers
+Recorded when answered; see [the plan findings register](obvious-fix-findings.md) for anything the answers
 displaced.
 
 Answered 2026-08-10. Every answer is the plan's default option A.
@@ -158,4 +159,4 @@ Q5 was extended beyond the plan's wording because `CLAUDE.md` rule 9 forbids pus
 authorization while the plan assumes pull requests through `ci-complete`. Authorization was not
 given, so every stage lands as a local branch for review. The branches form a stack — each stage
 branches from the previous stage's tip, because Stage 6 depends on Stage 1 and Stage 7 depends on
-all of them — and are listed in [the completion report](plan-completion-report.md).
+all of them — and are listed in [the completion report](obvious-fix-report.md).

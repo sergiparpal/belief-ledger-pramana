@@ -97,7 +97,7 @@ is a configured number rather than an inferred one.
 - Two existing tests changed. One hardcoded the schema numbers in the migration dry-run output. The
   other rolled the schema stamp back by `LATEST_SCHEMA_VERSION` to force the idempotency-rescoping
   migration to re-run — which silently stopped re-running it the moment a version was added above
-  it. Both are recorded in [the findings register](../plan-findings.md) as F-19 and F-20; the
+  it. Both are recorded in [the findings register](../obvious-fix-findings.md) as F-19 and F-20; the
   second was a latent defect in the test, not a consequence of this change.
 - Snapshot payloads hold projection rows, which include belief content. They inherit the ledger's
   redaction — the rows are copied from projections that were already redacted at ingestion — but a

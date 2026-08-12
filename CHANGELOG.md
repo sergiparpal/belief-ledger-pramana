@@ -2,12 +2,12 @@
 
 ## Unreleased
 
-- Recorded a measured baseline for the obvious-fix plan in `docs/plan-baseline.md`, including the
+- Recorded a measured baseline for the obvious-fix plan in `docs/obvious-fix-baseline.md`, including the
   experiment showing that defeat semantics are replay-independent: frozen v1 event and projection
   hashes do not move when `compare_priority` changes.
 - Documented the backward-compatible `belief_ledger_pramana` import surface in
   `docs/compat-surface.md`, separating the four promised names from the 77 reachable modules.
-- Opened the append-only findings register at `docs/plan-findings.md`.
+- Opened the append-only findings register at `docs/obvious-fix-findings.md`.
 - Added `scripts/check_doc_invariants.py`, which fails when a documented constant diverges from the
   code it is derived from. Six facts are guarded — `LATEST_SCHEMA_VERSION`, the package version, the
   `requires-python` range, the audited Hermes version and commit, and the CI cryptography override —
@@ -97,7 +97,7 @@
 - Scheduled `LedgerRuntime` for removal in 2.0.0 and pinned its `DeprecationWarning` with a test.
   Its remaining callers were not migrated: `ingest_health` and `authorize_deployment` are
   deployment-gate fixture policy with no `BeliefLedger` equivalent, which a test now asserts.
-- Recorded the outcome of the obvious-fix plan in `docs/plan-completion-report.md`, with baseline
+- Recorded the outcome of the obvious-fix plan in `docs/obvious-fix-report.md`, with baseline
   versus final numbers, the one in-scope item not completed and why, and the 24-entry findings
   register.
 

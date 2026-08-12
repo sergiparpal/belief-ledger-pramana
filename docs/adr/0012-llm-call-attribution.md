@@ -41,7 +41,7 @@ It is a **new record kind** rather than fields on `ComponentVerdict` or `LlmUsag
 appear in `tests/fixtures/v1_replay/`, and adding a required field to either would move hashes that
 those fixtures pin as a product invariant. `LLM_CALL_ATTRIBUTION` appears in no v1 fixture, so it is
 hash-neutral by construction — this is the option the plan marks preferred, and R2 of
-`docs/plan-baseline.md` is what confirms the fixtures allow it. The alternative, an
+`docs/obvious-fix-baseline.md` is what confirms the fixtures allow it. The alternative, an
 additive-optional field with a `payload_schema_version` bump and an upcaster, would have bought
 nothing here and cost an upcaster to maintain forever.
 

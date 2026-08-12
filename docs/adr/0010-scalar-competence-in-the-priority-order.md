@@ -58,7 +58,7 @@ That ordering is the substance of the rejection, not a preference. Revisit this 
 ## Consequences
 
 - No runtime behaviour changes. Frozen v1 replay fixtures are untouched, and defeat semantics are
-  replay-independent in any case (see `docs/plan-baseline.md`, R1).
+  replay-independent in any case (see `docs/obvious-fix-baseline.md`, R1).
 - The documentation is now more precise than it was, and harder to keep precise: the band coupling
   is a genuine complication and a future reader may be tempted to simplify the sentence back.
   `tests/unit/test_priority_order.py::test_for_shabda_a_competence_gap_across_a_band_boundary_is_decided_at_type`
