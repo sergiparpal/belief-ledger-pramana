@@ -435,7 +435,25 @@ SET idempotency_key = episode_id || ':' || idempotency_key
 WHERE substr(idempotency_key, 1, length(episode_id) + 1) <> episode_id || ':';
 """
 
-LATEST_SCHEMA_VERSION = 7
+SCHEMA_V8 = r"""
+-- Snapshots are a discardable derived cache and never the source of truth (ADR 0014).
+-- Every row can be deleted at any time with no loss; the append-only log rebuilds everything.
+-- `fingerprint` binds a payload to the code that produced it: on a mismatch the row is
+-- discarded rather than upgraded, because an upgraded snapshot is a guess about history.
+CREATE TABLE IF NOT EXISTS snapshots (
+  scope TEXT NOT NULL,
+  chain_height INTEGER NOT NULL,
+  projection_name TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  payload BLOB NOT NULL,
+  fingerprint TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (scope, chain_height, projection_name)
+);
+CREATE INDEX IF NOT EXISTS snapshots_by_height ON snapshots(scope, chain_height DESC);
+"""
+
+LATEST_SCHEMA_VERSION = 8
 
 
 PROJECTION_HASH_ALGORITHM = "sha256-canonical-json"
@@ -668,6 +686,7 @@ def migrate(
             5: SCHEMA_V5,
             6: SCHEMA_V6,
             7: SCHEMA_V7,
+            8: SCHEMA_V8,
         }
         for version in range(from_version + 1, LATEST_SCHEMA_VERSION + 1):
             _execute_script(connection, schemas[version])

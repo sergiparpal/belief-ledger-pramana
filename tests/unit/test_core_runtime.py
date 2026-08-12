@@ -217,3 +217,32 @@ def test_deterministic_dependency_fakes_cover_time_identity_token_and_model() ->
         fake.complete(request)
     callable_port = CallableStructuredModel(lambda value: result)
     assert callable_port.complete(request) is result
+
+
+def test_the_deprecated_facade_still_warns_on_construction(tmp_path: Path) -> None:
+    """Q3 of the obvious-fix plan kept the facade and its warning rather than removing it.
+
+    The warning is the deprecation path, so it is pinned: a refactor that silently dropped it would
+    leave callers with no signal before the 2.0.0 removal.
+    """
+    with pytest.warns(DeprecationWarning, match="LedgerRuntime is deprecated"):
+        LedgerRuntime(
+            tmp_path,
+            deterministic_dependencies(),
+            HostCapabilities(1),
+        )
+
+
+def test_the_facade_is_a_fixture_and_not_a_core_api_wrapper() -> None:
+    """Why the remaining callers were not migrated, asserted rather than only explained.
+
+    `authorize_deployment` and `ingest_health` are the deployment-gate fixture's own policy. There
+    is nothing on `BeliefLedger` to migrate them to, so migrating the callers would mean rewriting
+    the example — design work, and out of scope. Recorded as F-22.
+    """
+    from belief_ledger_core import BeliefLedger
+
+    assert hasattr(LedgerRuntime, "authorize_deployment")
+    assert hasattr(LedgerRuntime, "ingest_health")
+    assert not hasattr(BeliefLedger, "authorize_deployment")
+    assert not hasattr(BeliefLedger, "ingest_health")

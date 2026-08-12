@@ -2,6 +2,105 @@
 
 ## Unreleased
 
+- Recorded a measured baseline for the obvious-fix plan in `docs/obvious-fix-baseline.md`, including the
+  experiment showing that defeat semantics are replay-independent: frozen v1 event and projection
+  hashes do not move when `compare_priority` changes.
+- Documented the backward-compatible `belief_ledger_pramana` import surface in
+  `docs/compat-surface.md`, separating the four promised names from the 77 reachable modules.
+- Opened the append-only findings register at `docs/obvious-fix-findings.md`.
+- Added `scripts/check_doc_invariants.py`, which fails when a documented constant diverges from the
+  code it is derived from. Six facts are guarded — `LATEST_SCHEMA_VERSION`, the package version, the
+  `requires-python` range, the audited Hermes version and commit, and the CI cryptography override —
+  across nine files, plus an assertion that every schema version in `1..LATEST_SCHEMA_VERSION` has
+  either a migration SQL file or a `SCHEMA_V*` constant. Wired into `scripts/verify_stage.py` and
+  the `replay-claims-evaluations` CI job.
+- Stated the current schema version in `docs/operations.md` and `docs/architecture.md`, and the
+  supported Python range in `README.md`. The new checker found all three missing on its first run;
+  they were absent rather than stale, which no value-comparison check would have caught.
+- Corrected the specification's claim that a scalar does not govern defeat. `reliability_rank`, the
+  learned competence estimate for a source, is the third of the five lexicographic keys, and for
+  SHABDA the same scalar also selects the `shabda_apta_*` band at `type_rank`. The belief's own
+  `confidence` field remains genuinely unread. No behaviour changed; see
+  [ADR 0010](docs/adr/0010-scalar-competence-in-the-priority-order.md) and the new
+  `tests/unit/test_priority_order.py`, which pins the tuple order structurally.
+- Bound the self-claim privilege to the user's own channel structurally rather than by call-site
+  placement. `is_user_self_claim(source, content)` refuses any source whose kind is not `USER`
+  before consulting the pattern, and the runtime now calls it instead of `is_about_user_self`.
+  `is_about_user_self` is unchanged and still exported. The privilege is a waiver of cross-source
+  verification at HIGH stakes, not a competence adjustment; `docs/threat-model.md` now says so, and
+  `tests/unit/test_self_claim_scope.py` characterises the pattern's known limitations — no negation
+  handling, English and Spanish only, injectable by any user-channel text.
+- Made `recency_rank` a priority key for every perishability class rather than only `fast` and
+  `live`. Two `slow` or `stable` beliefs differing only in age previously tied on all five keys and
+  both went to `PENDING`, which has no active exit; they now resolve to one `IN` and one `OUT`.
+  Recency stays fifth, so it can never overturn integrity, type, reliability or specificity, and
+  `positive_over_anupalabdhi` still precedes the whole comparison. Frozen v1 replay fixtures are
+  unaffected because defeat semantics are replay-independent. See
+  [ADR 0011](docs/adr/0011-unconditional-recency-key.md).
+- Moved the timezone-awareness guarantee for `Belief.observed_at` to `Belief.__post_init__`, next to
+  where `parse_datetime` and `FixedClock` already enforce the same rule. A naive timestamp is now
+  refused when the belief is built rather than later inside defeat resolution.
+- Made model-component non-determinism detectable. Every call now records an
+  `LLM_CALL_ATTRIBUTION` event carrying provider and model labels, a digest of the prompt, a digest
+  of the whole request, a digest of the structured result, and the sampling policy applied. It is a
+  new record kind rather than a field on `ComponentVerdict` or `LlmUsage`, both of which appear in
+  the frozen v1 fixtures, so frozen hashes and both projection hashes are unchanged.
+- Added `hermes belief-ledger llm-divergence [--episode EP_ID] [--json]`, which groups recorded
+  calls by prompt and input digest and reports every input that produced more than one distinct
+  output. Failed calls are excluded: an error is the absence of an answer, not a second one.
+- Added `SamplingPolicy` and `verification.sampling_temperature`, defaulting to `0.0` and validated
+  to `[0.0, 2.0]`. Both `HostLlmClient` implementations previously passed `temperature=0.0` as a
+  hardcoded literal in two separate places; the policy is now expressed once, carried on
+  `StructuredModelRequest` as an additive optional field, and recorded on every call. See
+  [ADR 0012](docs/adr/0012-llm-call-attribution.md).
+- Added external anchoring of the hash chain. `hermes belief-ledger anchor publish` writes the chain
+  root at a height to an append-only JSONL sink whose path must resolve outside the ledger
+  directory; `anchor verify` recomputes the local root at every anchored height and exits non-zero
+  on a mismatch or an anchored height the chain no longer reaches. `db verify-chain
+  --against-anchors` fails if either check fails. This makes local modification followed by
+  re-chaining detectable — a tamper `db verify-chain` alone cannot see, because the attacker
+  restores the chain's internal consistency. It raises the cost of tampering; it does not prevent
+  it, and the threat model says so. Off by default via `anchoring.sink_path: ""`. See
+  [ADR 0013](docs/adr/0013-external-chain-anchoring.md).
+- Added `LedgerStore.chain_state(up_to_height=...)`, which shares its verification with
+  `verify_hash_chain` rather than recomputing the root a second way.
+- Added schema 8 and a `snapshots` table: a discardable derived cache that bounds replay cost
+  without ever becoming the source of truth. Any snapshot can be deleted at any time with no loss,
+  a snapshot whose derivation fingerprint no longer matches the installed code is discarded rather
+  than upgraded, `db replay` with no flags still reads every event from origin, and
+  `db verify-snapshot` rebuilds twice and compares every projection table row by row. Schema 8 adds
+  no event kind and no projection table, so both projection hashes are unchanged. See
+  [ADR 0014](docs/adr/0014-snapshots-as-a-discardable-cache.md).
+- Added `hermes belief-ledger db snapshot create|list|prune`, `db replay --from-snapshot` and
+  `db verify-snapshot`.
+- Added `replay.max_events_warn` (default 50 000), reported by both `db replay` and `doctor`, which
+  gains a `replay_budget` check. It makes the scaling wall visible before it is hit; it never
+  refuses and never changes doctor's health verdict.
+- Fixed a migration test that had silently stopped exercising its migration: it rolled the schema
+  stamp back by `LATEST_SCHEMA_VERSION`, so adding a version above the one under test made the
+  rollback skip it entirely. It now names the migration it exercises.
+- Pinned the backward-compatible import surface. `tests/fixtures/compat_surface.json` records every
+  module reachable from `belief_ledger_pramana` and every name it exports, and
+  `tests/unit/test_compat_surface.py` fails if a module or name disappears. Nothing asserted this
+  before, despite the package being a 1.x compatibility contract.
+- Gave packaged policy data one home. `defaults.yaml`, `action-policies.yaml` and
+  `source-profiles.yaml` no longer ship a second byte-identical copy in the adapter; it loads
+  core's, which it already depends on. The parity test now asserts there is exactly one copy.
+- Split `belief_ledger_pramana/runtime.py` (3,233 lines) into a package by pure moves:
+  `errors.py`, `helpers.py`, `plugin_runtime.py` and `episode_service.py`, with `__init__.py`
+  re-exporting every previously importable name. No behaviour changed. `EpisodeService` remains one
+  2,430-line class; splitting it is not a pure move and is recorded as a finding rather than
+  attempted.
+- Added a source-file size guard at 600 lines with eight reasoned exemptions, each recording a
+  ceiling the file may not exceed. A file that falls under the limit must leave the list. See
+  [ADR 0015](docs/adr/0015-runtime-module-layout.md).
+- Scheduled `LedgerRuntime` for removal in 2.0.0 and pinned its `DeprecationWarning` with a test.
+  Its remaining callers were not migrated: `ingest_health` and `authorize_deployment` are
+  deployment-gate fixture policy with no `BeliefLedger` equivalent, which a test now asserts.
+- Recorded the outcome of the obvious-fix plan in `docs/obvious-fix-report.md`, with baseline
+  versus final numbers, the one in-scope item not completed and why, and the 24-entry findings
+  register.
+
 ## v0.2.1 / 1.0.0rc4 - 2026-08-05
 
 GitHub source release correcting the `v0.2.0` product surface. It adds no feature and removes none:

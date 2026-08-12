@@ -209,3 +209,113 @@ def test_corrupted_unicode_tool_results_remain_bounded_and_replayable(runtime, r
         max(len(event.payload.get("record", {}).get("payload", "") or "") for event in evidence)
         <= 16_000
     )
+
+
+# Snapshotting at an arbitrary height must reproduce a full rebuild exactly. Generating the height
+# rather than fixing it is the point: an off-by-one in the "replay only events above the snapshot"
+# boundary would survive any single hand-chosen height.
+@settings(
+    max_examples=20,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(cut=st.integers(min_value=0, max_value=40))
+def test_a_snapshot_at_any_height_rebuilds_to_the_same_projections(tmp_path_factory, cut) -> None:
+    import json
+    from contextlib import closing
+    from pathlib import Path
+
+    from belief_ledger_pramana import snapshots
+    from belief_ledger_pramana.events import (
+        canonical_json,
+        compute_event_auth,
+        isoformat_utc,
+        parse_datetime,
+    )
+    from belief_ledger_pramana.models import Event
+    from belief_ledger_pramana.projections import apply_event
+    from belief_ledger_pramana.store import LedgerStore
+
+    fixture = (
+        Path(__file__).parents[1] / "fixtures" / "v1_replay" / "contradiction_retraction.jsonl"
+    )
+    values = [
+        json.loads(line)
+        for line in fixture.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    database = tmp_path_factory.mktemp("snapshot-property") / "ledger.sqlite3"
+    store = LedgerStore(database)
+
+    height = min(cut, len(values))
+    for index, value in enumerate(values, start=1):
+        with store.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            event = Event(
+                seq=int(value["seq"]),
+                id=str(value["id"]),
+                episode_id=str(value["episode_id"]),
+                timestamp=parse_datetime(str(value["timestamp"])),
+                kind=str(value["kind"]),
+                schema_version=int(value["schema_version"]),
+                aggregate_type=str(value["aggregate_type"]),
+                aggregate_id=str(value["aggregate_id"]),
+                correlation=dict(value["correlation"]),
+                causal_event_id=value["causal_event_id"],
+                payload=dict(value["payload"]),
+                previous_hash=str(value["previous_hash"]),
+                event_hash=str(value["event_hash"]),
+            )
+            connection.execute(
+                "INSERT INTO events(seq,id,episode_id,ts,kind,schema_version,aggregate_type,"
+                "aggregate_id,correlation_json,causal_event_id,payload_json,previous_hash,"
+                "event_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    event.seq,
+                    event.id,
+                    event.episode_id,
+                    isoformat_utc(event.timestamp),
+                    event.kind,
+                    event.schema_version,
+                    event.aggregate_type,
+                    event.aggregate_id,
+                    canonical_json(event.correlation),
+                    event.causal_event_id,
+                    canonical_json(event.payload),
+                    event.previous_hash,
+                    event.event_hash,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO event_auth(event_id,event_hash,auth_tag) VALUES (?,?,?)",
+                (
+                    event.id,
+                    event.event_hash,
+                    compute_event_auth(store._integrity_key, event.id, event.event_hash),
+                ),
+            )
+            apply_event(connection, event)
+            connection.commit()
+        if index == height:
+            # Capture at exactly this height, which is what makes the boundary interesting.
+            with store.connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                snapshots.create(
+                    connection,
+                    scope="global",
+                    chain_height=index,
+                    created_at=datetime(2026, 8, 10, tzinfo=UTC),
+                )
+                connection.commit()
+
+    store.replay()
+    with closing(store.connect()) as connection:
+        full = snapshots.projection_tables(connection)
+    full_hash = store.projection_hash(version=2)
+
+    store.replay(from_snapshot=True)
+    with closing(store.connect()) as connection:
+        accelerated = snapshots.projection_tables(connection)
+
+    assert snapshots.first_difference(full, accelerated) is None
+    assert store.projection_hash(version=2) == full_hash

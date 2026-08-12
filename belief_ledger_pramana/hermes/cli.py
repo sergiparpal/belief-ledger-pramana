@@ -29,8 +29,18 @@ from ..config import (
     validate_config,
 )
 from ..events import canonical_json, to_primitive, utc_now
+from ..llm.divergence import divergence_report
 from ..migrations import LATEST_SCHEMA_VERSION
 from ..runtime import PluginRuntime
+from ..snapshots import GLOBAL_SCOPE as SNAPSHOT_GLOBAL_SCOPE
+from ..snapshots import replay_budget_warning
+from ..verification.anchors import (
+    GLOBAL_SCOPE,
+    AnchorError,
+    FileAnchorSink,
+    build_record,
+    compare_against_anchors,
+)
 
 
 def setup_cli(parser: argparse.ArgumentParser) -> None:
@@ -49,8 +59,29 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     db_sub.add_parser("status")
     migrate = db_sub.add_parser("migrate")
     migrate.add_argument("--dry-run", action="store_true")
-    db_sub.add_parser("verify-chain")
-    db_sub.add_parser("replay")
+    verify_chain = db_sub.add_parser("verify-chain")
+    verify_chain.add_argument(
+        "--against-anchors",
+        action="store_true",
+        help="Also compare every published anchor against the local chain",
+    )
+    replay = db_sub.add_parser("replay")
+    replay.add_argument(
+        "--from-snapshot",
+        action="store_true",
+        help="Accelerate from the newest valid snapshot instead of replaying from origin",
+    )
+    snapshot = db_sub.add_parser("snapshot")
+    snapshot_sub = snapshot.add_subparsers(dest="snapshot_command", required=True)
+    snapshot_create = snapshot_sub.add_parser("create")
+    snapshot_create.add_argument("--scope", default=SNAPSHOT_GLOBAL_SCOPE)
+    snapshot_list = snapshot_sub.add_parser("list")
+    snapshot_list.add_argument("--scope", default=None)
+    snapshot_prune = snapshot_sub.add_parser("prune")
+    snapshot_prune.add_argument("--scope", default=SNAPSHOT_GLOBAL_SCOPE)
+    snapshot_prune.add_argument("--keep", type=int, default=1)
+    verify_snapshot = db_sub.add_parser("verify-snapshot")
+    verify_snapshot.add_argument("--scope", default=SNAPSHOT_GLOBAL_SCOPE)
 
     episode = sub.add_parser("episode", help="Inspect or export episodes")
     episode_sub = episode.add_subparsers(dest="episode_command", required=True)
@@ -69,6 +100,21 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     evaluate = sub.add_parser("evaluate", help="Run deterministic evaluation suites")
     evaluate.add_argument("--suite", choices=("a", "b", "c", "d", "e", "all"), default="all")
     evaluate.add_argument("--offline", action="store_true", required=True)
+
+    anchor = sub.add_parser("anchor", help="Publish and verify external anchors of the hash chain")
+    anchor_sub = anchor.add_subparsers(dest="anchor_command", required=True)
+    publish = anchor_sub.add_parser("publish")
+    publish.add_argument("--scope", default=GLOBAL_SCOPE)
+    anchor_verify = anchor_sub.add_parser("verify")
+    anchor_verify.add_argument("--since-height", type=int, default=0)
+    anchor_verify.add_argument("--json", action="store_true")
+
+    divergence = sub.add_parser(
+        "llm-divergence",
+        help="Report identical model inputs that produced different outputs",
+    )
+    divergence.add_argument("--episode", default=None)
+    divergence.add_argument("--json", action="store_true")
 
     policy = sub.add_parser("policy", help="Inventory and validate tool policy coverage")
     policy_sub = policy.add_subparsers(dest="policy_command", required=True)
@@ -154,9 +200,29 @@ def run_cli(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]
                 )
             if args.db_command == "verify-chain":
                 ok, digest = runtime.store.verify_hash_chain()
-                return 0, _json({"ok": ok, "heads": digest})
+                if not getattr(args, "against_anchors", False):
+                    return 0, _json({"ok": ok, "heads": digest})
+                anchors = _anchor_verification(runtime, since_height=0)
+                # The chain being internally consistent is exactly what a re-chaining attacker
+                # restores, so a passing chain with a failing anchor is still a failure.
+                return (0 if ok and anchors["ok"] else 1), _json(
+                    {"ok": ok and anchors["ok"], "heads": digest, "anchors": anchors}
+                )
+            if args.db_command == "snapshot":
+                return _snapshot_command(runtime, args)
+            if args.db_command == "verify-snapshot":
+                verification = runtime.store.verify_snapshot(scope=args.scope)
+                return (0 if verification.ok else 1), _json(verification.as_json())
             if args.db_command == "replay":
-                return 0, _json(to_primitive(runtime.store.replay()))
+                replayed = runtime.store.replay(from_snapshot=args.from_snapshot)
+                payload = dict(to_primitive(replayed))
+                warning = replay_budget_warning(
+                    replayed.events_replayed,
+                    int(runtime.config.data["replay"]["max_events_warn"]),
+                )
+                if warning:
+                    payload["warning"] = warning
+                return 0, _json(payload)
             return 0, _json(to_primitive(runtime.store.migration))
         if command == "episode":
             if args.episode_command == "list":
@@ -200,6 +266,18 @@ def run_cli(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]
                 return 2, _json({"ok": False, "error": "confirmation_mismatch"})
             result = runtime.store.purge_episode(args.episode, confirmation=args.confirm)
             return 0, _json({"ok": True, "result": to_primitive(result)})
+        if command == "anchor":
+            if args.anchor_command == "publish":
+                return _anchor_publish(runtime, scope=args.scope)
+            report = _anchor_verification(runtime, since_height=args.since_height)
+            if args.json:
+                return (0 if report["ok"] else 1), _json(report)
+            return (0 if report["ok"] else 1), _human_anchor_verification(report)
+        if command == "llm-divergence":
+            report = divergence_report(runtime.store.events(args.episode))
+            if args.json:
+                return 0, _json(report)
+            return 0, _human_divergence(report)
         if command == "evaluate":
             from evaluations.report import run_offline_evaluations
 
@@ -356,6 +434,21 @@ def doctor(runtime: PluginRuntime) -> dict[str, Any]:
             "schema": runtime.store.migration.to_version,
             "fts5": runtime.store.migration.fts5_available,
         }
+        # Replay cost grows with total history, so the scaling wall has to be visible before an
+        # operator hits it rather than the first time a replay takes too long (ADR 0014). Doctor
+        # is where an operator looks when nothing is wrong yet, which is exactly when this is
+        # worth knowing. It reports; it never changes the health verdict.
+        event_count = len(runtime.store.events())
+        replay_warning = replay_budget_warning(
+            event_count, int(runtime.config.data["replay"]["max_events_warn"])
+        )
+        checks["replay_budget"] = {
+            "events": event_count,
+            "max_events_warn": int(runtime.config.data["replay"]["max_events_warn"]),
+            "over_threshold": replay_warning is not None,
+        }
+        if replay_warning:
+            warnings.append(replay_warning)
         permission_issues = _permission_issues(runtime)
         checks["permissions"] = {"ok": not permission_issues, "issues": permission_issues}
         warnings.extend(permission_issues)
@@ -502,6 +595,143 @@ def _distribution_version(name: str) -> str:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return "not-installed"
+
+
+def _snapshot_command(runtime: PluginRuntime, args: argparse.Namespace) -> tuple[int, str]:
+    if runtime.store is None:
+        raise RuntimeError("ledger store is unavailable after initialization")
+    if args.snapshot_command == "create":
+        rows = runtime.store.create_snapshot(
+            scope=args.scope, package_version=_distribution_version("belief-ledger-pramana")
+        )
+        return 0, _json(
+            {
+                "ok": True,
+                "scope": args.scope,
+                "chain_height": rows[0].chain_height if rows else 0,
+                "projections": len(rows),
+                "fingerprint": rows[0].fingerprint if rows else "",
+            }
+        )
+    if args.snapshot_command == "list":
+        return 0, _json([row.as_json() for row in runtime.store.list_snapshots(scope=args.scope)])
+    removed = runtime.store.prune_snapshots(scope=args.scope, keep=args.keep)
+    return 0, _json({"ok": True, "scope": args.scope, "kept": args.keep, "rows_removed": removed})
+
+
+def _anchor_sink(runtime: PluginRuntime) -> FileAnchorSink:
+    """Build the configured sink, or explain precisely why anchoring is unavailable."""
+
+    if runtime.paths is None or runtime.store is None:
+        raise AnchorError("ledger is not initialized")
+    configured = str(runtime.config.data["anchoring"]["sink_path"]).strip()
+    if not configured:
+        raise AnchorError(
+            "anchoring.sink_path is empty; set it to a path outside the ledger directory"
+        )
+    return FileAnchorSink(Path(configured), ledger_directory=runtime.paths.root)
+
+
+def _anchor_publish(runtime: PluginRuntime, *, scope: str) -> tuple[int, str]:
+    if runtime.store is None:
+        raise RuntimeError("ledger store is unavailable after initialization")
+    try:
+        sink = _anchor_sink(runtime)
+    except AnchorError as exc:
+        return 2, _json({"ok": False, "error": "anchor_unavailable", "message": str(exc)})
+    state = runtime.store.chain_state()
+    record = build_record(
+        state,
+        ledger_id=str(runtime.store.database),
+        scope=scope,
+        created_at=utc_now(),
+        package_version=_distribution_version("belief-ledger-pramana"),
+    )
+    receipt = sink.publish(record)
+    return 0, _json(
+        {
+            "ok": True,
+            "sink": receipt.sink,
+            "scope": scope,
+            "chain_height": receipt.chain_height,
+            "root_hash": receipt.root_hash,
+        }
+    )
+
+
+def _anchor_verification(runtime: PluginRuntime, *, since_height: int) -> dict[str, Any]:
+    if runtime.store is None:
+        raise RuntimeError("ledger store is unavailable after initialization")
+    try:
+        sink = _anchor_sink(runtime)
+        records = list(sink.fetch(since_height))
+    except AnchorError as exc:
+        return {"ok": False, "error": "anchor_unavailable", "message": str(exc), "checked": 0}
+    store = runtime.store
+    current = store.chain_state()
+    comparisons = compare_against_anchors(
+        records,
+        local_root_at=lambda height: store.chain_state(up_to_height=height).root_hash,
+        current_height=current.chain_height,
+    )
+    failures = [item for item in comparisons if not item.ok]
+    return {
+        "ok": not failures,
+        "sink": str(sink.path),
+        "checked": len(comparisons),
+        "current_height": current.chain_height,
+        "current_root": current.root_hash,
+        "failures": [item.as_json() for item in failures],
+        "comparisons": [item.as_json() for item in comparisons],
+    }
+
+
+def _human_anchor_verification(report: dict[str, Any]) -> str:
+    if report.get("error"):
+        return f"anchoring unavailable: {report['message']}"
+    lines = [
+        f"sink: {report['sink']}",
+        f"anchors checked: {report['checked']}",
+        f"current height: {report['current_height']} root {report['current_root'][:12]}",
+    ]
+    if report["ok"]:
+        lines.append("every anchored root matches the local chain")
+        return "\n".join(lines)
+    lines.append("")
+    lines.append("TAMPER EVIDENCE: an anchored root does not match the local chain")
+    for failure in report["failures"]:
+        local = failure["local_root"] or "unreachable"
+        lines.append(
+            f"  height {failure['chain_height']}: anchored {failure['anchored_root']} "
+            f"!= local {local} ({failure['status']})"
+        )
+    return "\n".join(lines)
+
+
+def _human_divergence(report: dict[str, Any]) -> str:
+    """A short operator summary. `--json` carries the full detail."""
+
+    lines = [
+        f"recorded model calls: {report['recorded_calls']}",
+        f"distinct inputs: {report['distinct_inputs']}",
+        f"divergent inputs: {report['divergent_groups']}",
+    ]
+    for group in report["groups"]:
+        lines.append("")
+        lines.append(
+            f"  {group['purpose']} input {group['input_hash'][:12]} "
+            f"prompt {group['prompt_hash'][:12]} -> {group['distinct_outputs']} distinct outputs"
+        )
+        for call in group["calls"]:
+            output = call["output_hash"] or "none"
+            lines.append(
+                f"    {call['timestamp']}  {call['model'] or '(unlabelled model)'}  "
+                f"output {output[:12]}  {call['event_id']}"
+            )
+    if not report["groups"]:
+        lines.append("")
+        lines.append("no input produced more than one distinct output")
+    return "\n".join(lines)
 
 
 def _json(value: Any) -> str:

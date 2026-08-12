@@ -9,6 +9,7 @@ a claim of external scientific validity.
 | Requirement | Implementation | Automated evidence |
 |---|---|---|
 | R1 discrete state and structural defeat | `models.py`, `engine/defeat.py`, status transition events | `tests/unit/test_engine.py`, suite B |
+| R1 scalar participation is bounded ([ADR 0010](adr/0010-scalar-competence-in-the-priority-order.md)) | `engine/priority.py` module docstring and `PriorityTrace.value` | `tests/unit/test_priority_order.py` |
 | R2 wrapper/content separation | `ingestion/adapters.py`, `runtime.py:ingest_tool_result` | `tests/integration/test_episode_flow.py::test_wrapper_content_separation_and_lazy_promotion` |
 | R3 yogyatā for absence | `ingestion/absence.py`, `engine/validity.py`, `runtime.py:_absence_drafts` | `tests/unit/test_validity.py`, negative-search integration test |
 | R4 memory is transport | `engine/trust.py` prior-ledger LIVE rule, memory adapter provenance | `test_live_memory_transport_reentry_requires_reobservation` and trust tests |
@@ -71,7 +72,13 @@ a claim of external scientific validity.
 | §3 ANUPALABDHI/yogyatā | absence assessment and positive fixed rule | absence and engine tests |
 | §3 user/model/prior-ledger rules | trust profiles and adapter source kinds | complete trust-matrix test |
 | §4.1 REBUT/UNDERCUT | `models.DefeatKind`, `engine/defeat.py` | engine winner/undercut scenarios |
-| §4.2 lexicographic priority/fixed rules | `engine/priority.py`, packaged ranks | suite B, priority tests |
+| §4.2 lexicographic priority/fixed rules | `engine/priority.py`, packaged ranks | suite B, `tests/unit/test_priority_order.py` field-order and override pins |
+| §4.2 recency for every perishability class ([ADR 0011](adr/0011-unconditional-recency-key.md)) | `engine/priority.py:priority_trace`, `models.Belief.__post_init__` | `tests/unit/test_recency_priority.py` |
+| Model-call attribution and divergence ([ADR 0012](adr/0012-llm-call-attribution.md)) | `llm/attribution.py`, `llm/divergence.py`, `LLM_CALL_ATTRIBUTION` events | `tests/unit/test_llm_divergence.py`, `test_llm_divergence_command_reports_identical_inputs_with_different_outputs` |
+| External chain anchoring ([ADR 0013](adr/0013-external-chain-anchoring.md)) | `verification/anchors.py`, `store.chain_state`, `anchor publish`/`verify` | `tests/unit/test_chain_anchoring.py::test_a_rechained_tamper_passes_verify_chain_and_fails_anchor_verify` |
+| Snapshots never authoritative ([ADR 0014](adr/0014-snapshots-as-a-discardable-cache.md)) | `snapshots.py`, schema 8 `snapshots` table, `db verify-snapshot` | `tests/unit/test_snapshots.py::test_deleting_every_snapshot_loses_nothing`, `tests/properties/test_ledger_properties.py::test_a_snapshot_at_any_height_rebuilds_to_the_same_projections` |
+| Backward-compatible import surface ([ADR 0007](adr/0007-host-neutral-product-surface.md), [ADR 0015](adr/0015-runtime-module-layout.md)) | `belief_ledger_pramana/**`, `tests/fixtures/compat_surface.json` | `tests/unit/test_compat_surface.py` |
+| Source file size limit ([ADR 0015](adr/0015-runtime-module-layout.md)) | `belief_ledger_pramana/**`, `packages/*/src/**` | `tests/unit/test_architecture.py::test_no_new_source_file_exceeds_the_line_limit` and its ceiling tests |
 | §4.2 saṃśaya | equal/cycle PENDING plus persistent conflict/task | equal-priority test/integration |
 | §4.3 fixed point/termination/reinstatement | `engine/defeat.py` state detection/ceiling | generated finite chains and reinstatement test |
 | §4.4 structural retraction | rendered-belief projection, notice/descendants/ack | stale-claim end-to-end test |

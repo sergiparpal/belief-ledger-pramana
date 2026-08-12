@@ -15,9 +15,12 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
+
+# Packaged policy data has exactly one copy, in core. The adapter depends on core, so this
+# is always installed alongside it; a second copy could only ever drift (ADR 0015).
+from belief_ledger_core import data as data_package
 from belief_ledger_core.config import freeze_config
 
-from . import data as data_package
 from .atomic import write_private_text_atomically
 from .events import canonical_json, content_hash
 from .models import Stakes, VerificationMethod
@@ -73,6 +76,7 @@ class VerificationSettings:
     max_input_tokens_per_episode: int
     max_output_tokens_per_episode: int
     structured_timeout_seconds: int
+    sampling_temperature: float
     critical_human_confirmation: bool
 
 
@@ -179,6 +183,7 @@ class ConfigSnapshot:
                 max_input_tokens_per_episode=int(verification["max_input_tokens_per_episode"]),
                 max_output_tokens_per_episode=int(verification["max_output_tokens_per_episode"]),
                 structured_timeout_seconds=int(verification["structured_timeout_seconds"]),
+                sampling_temperature=float(verification["sampling_temperature"]),
                 critical_human_confirmation=bool(verification["critical_human_confirmation"]),
             ),
             lint=LintSettings(
@@ -465,8 +470,17 @@ def validate_config(config: Mapping[str, Any]) -> None:
     ):
         _bounded_int(verification, key, 0, 10_000_000)
     _bounded_int(verification, "structured_timeout_seconds", 1, 10_000_000)
+    _bounded_float(verification, "sampling_temperature", 0.0, 2.0)
     if not isinstance(verification.get("critical_human_confirmation"), bool):
         raise ConfigError("verification.critical_human_confirmation must be a boolean")
+
+    replay = _mapping(config, "replay")
+    _bounded_int(replay, "max_events_warn", 0, 1_000_000_000)
+
+    anchoring = _mapping(config, "anchoring")
+    sink_path = anchoring.get("sink_path")
+    if not isinstance(sink_path, str) or len(sink_path) > 4_096 or "\n" in sink_path:
+        raise ConfigError("anchoring.sink_path must be a string path, empty to disable")
 
     lint = _mapping(config, "lint")
     allowed_lint = {"annotate", "rewrite_once", "block", "allow"}
@@ -690,6 +704,16 @@ def _bounded_int(container: dict[str, Any], key: str, minimum: int, maximum: int
     if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
         raise ConfigError(f"{key} must be an integer in [{minimum},{maximum}]")
     return value
+
+
+def _bounded_float(container: dict[str, Any], key: str, minimum: float, maximum: float) -> float:
+    value = container.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{key} must be a number in [{minimum},{maximum}]")
+    number = float(value)
+    if not minimum <= number <= maximum:
+        raise ConfigError(f"{key} must be a number in [{minimum},{maximum}]")
+    return number
 
 
 def _string_paths(container: dict[str, Any], key: str) -> tuple[str, ...]:

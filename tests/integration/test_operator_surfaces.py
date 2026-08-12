@@ -8,6 +8,7 @@ from belief_ledger_pramana.hermes.cli import doctor, run_cli, setup_cli
 from belief_ledger_pramana.hermes.hooks import HermesHooks
 from belief_ledger_pramana.hermes.slash_commands import build_ledger_command
 from belief_ledger_pramana.hermes.tools import build_tool_handlers
+from belief_ledger_pramana.migrations import LATEST_SCHEMA_VERSION
 from belief_ledger_pramana.models import CompatibilityMode, Health, Pramana, Stakes
 
 
@@ -60,11 +61,11 @@ def test_operator_cli_and_slash_command_cover_normal_workflow(runtime) -> None:
     assert json.loads(preflight) == {
         "backup_required": False,
         "config_digest": runtime.config.digest,
-        "current_schema": 7,
+        "current_schema": LATEST_SCHEMA_VERSION,
         "database": str(runtime.store.database),
         "dry_run": True,
         "migration_required": False,
-        "target_schema": 7,
+        "target_schema": LATEST_SCHEMA_VERSION,
         "writes_performed": False,
     }
 
@@ -353,3 +354,134 @@ def test_compatibility_fallback_hooks_are_visibly_degraded(runtime, monkeypatch)
     )
     degraded = hooks.pre_llm_call(user_message="Failure path")
     assert degraded is not None and "degraded" in degraded["context"]
+
+
+def test_llm_divergence_command_reports_identical_inputs_with_different_outputs(runtime) -> None:
+    """The operator-facing half of ADR 0012: the audit has to be runnable, not only recorded."""
+    from belief_ledger_core.llm.attribution import call_input_hash, prompt_hash
+
+    from belief_ledger_pramana.events import to_primitive
+    from belief_ledger_pramana.models import LlmCallAttribution
+    from belief_ledger_pramana.store import EventDraft
+
+    service = runtime.begin_turn(
+        session_id="divergence-session",
+        turn_id="divergence-turn",
+        user_message="Atlas is operational.",
+        sender_id="operator",
+    )
+    episode_id = service.episode_id
+
+    code, empty = run_cli(runtime, _arguments("llm-divergence", "--json"))
+    assert code == 0
+    assert json.loads(empty)["divergent_groups"] == 0
+
+    shared = {
+        "prompt_hash": prompt_hash("Classify support."),
+        "input_hash": call_input_hash(
+            instructions="Classify support.", text="Atlas", schema_name="support", max_tokens=8
+        ),
+    }
+    drafts = [
+        EventDraft(
+            "LLM_CALL_ATTRIBUTION",
+            "llm_call_attribution",
+            f"lca_divergence{index:016d}",
+            {
+                "record": to_primitive(
+                    LlmCallAttribution(
+                        id=f"lca_divergence{index:016d}",
+                        episode_id=episode_id,
+                        purpose="evaluation.entailment",
+                        provider="fake-provider",
+                        model="fake-model",
+                        output_hash=digest,
+                        sampling={"temperature": 0.0},
+                        outcome="success",
+                        turn_number=1,
+                        **shared,
+                    )
+                )
+            },
+        )
+        for index, digest in enumerate(("a" * 64, "b" * 64), start=1)
+    ]
+    service.store.append_events(episode_id, drafts)
+
+    code, output = run_cli(runtime, _arguments("llm-divergence", "--json"))
+    assert code == 0
+    report = json.loads(output)
+    assert report["recorded_calls"] == 2
+    assert report["distinct_inputs"] == 1
+    assert report["divergent_groups"] == 1
+    assert report["groups"][0]["output_hashes"] == ["a" * 64, "b" * 64]
+
+    code, scoped = run_cli(runtime, _arguments("llm-divergence", "--episode", episode_id))
+    assert code == 0
+    assert "divergent inputs: 1" in scoped
+    assert "fake-model" in scoped
+
+    code, other = run_cli(runtime, _arguments("llm-divergence", "--episode", "ep_absent"))
+    assert code == 0
+    assert "no input produced more than one distinct output" in other
+
+
+def test_anchor_commands_publish_and_detect_a_rechained_tamper(runtime, tmp_path) -> None:
+    """The operator-facing half of ADR 0013, including `db verify-chain --against-anchors`."""
+    from tests.unit.test_chain_anchoring import _rechain_from
+
+    runtime.ensure_initialized()
+    sink_path = tmp_path / "outside" / "anchors.jsonl"
+
+    code, unavailable = run_cli(runtime, _arguments("anchor", "publish"))
+    assert code == 2
+    assert json.loads(unavailable)["error"] == "anchor_unavailable"
+
+    data = dict(runtime.config.data)
+    data["anchoring"] = {"sink_path": str(sink_path)}
+    runtime._config = replace(runtime.config, data=data)
+
+    service = runtime.begin_turn(
+        session_id="anchor-session", turn_id="anchor-turn", user_message="Atlas is operational."
+    )
+    service.ingest_user_message(
+        "Atlas is operational.", session_id="anchor-session", turn_id="anchor-turn"
+    )
+
+    code, published = run_cli(runtime, _arguments("anchor", "publish"))
+    assert code == 0
+    receipt = json.loads(published)
+    assert receipt["ok"] is True
+    assert receipt["scope"] == "global"
+    assert receipt["chain_height"] > 0
+    assert sink_path.is_file()
+
+    code, verified = run_cli(runtime, _arguments("anchor", "verify", "--json"))
+    assert code == 0
+    assert json.loads(verified)["ok"] is True
+
+    code, combined = run_cli(runtime, _arguments("db", "verify-chain", "--against-anchors"))
+    assert code == 0
+    assert json.loads(combined)["ok"] is True
+
+    _rechain_from(runtime.store, mutated_seq=2)
+
+    code, chain_only = run_cli(runtime, _arguments("db", "verify-chain"))
+    assert code == 0, "the chain check alone cannot see a faithful re-chain"
+    assert json.loads(chain_only)["ok"] is True
+
+    code, caught = run_cli(runtime, _arguments("anchor", "verify", "--json"))
+    assert code == 1
+    report = json.loads(caught)
+    assert report["ok"] is False
+    assert report["failures"][0]["status"] == "mismatch"
+    assert report["failures"][0]["chain_height"] == receipt["chain_height"]
+
+    code, human = run_cli(runtime, _arguments("anchor", "verify"))
+    assert code == 1
+    assert "TAMPER EVIDENCE" in human
+    assert f"height {receipt['chain_height']}" in human
+
+    code, combined_after = run_cli(runtime, _arguments("db", "verify-chain", "--against-anchors"))
+    assert code == 1
+    assert json.loads(combined_after)["ok"] is False

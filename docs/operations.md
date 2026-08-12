@@ -37,17 +37,98 @@ hermes belief-ledger episode export EPISODE --format jsonl
 hermes belief-ledger evaluate --suite all --offline
 hermes belief-ledger policy validate
 hermes belief-ledger policy inventory
+hermes belief-ledger llm-divergence --json
+hermes belief-ledger anchor publish
+hermes belief-ledger anchor verify
+hermes belief-ledger db snapshot create
+hermes belief-ledger db verify-snapshot
 ```
+
+## Bounding replay cost
+
+Replay reads every event from origin, so its cost grows with total history. `db replay` with no
+flags always does that, and always will. Snapshots are an opt-in cache on top:
+
+```bash
+hermes belief-ledger db snapshot create --scope global
+hermes belief-ledger db snapshot list
+hermes belief-ledger db verify-snapshot
+hermes belief-ledger db replay --from-snapshot
+hermes belief-ledger db snapshot prune --keep 3
+```
+
+A snapshot is never the source of truth. Delete every one of them at any time and nothing is lost:
+the append-only log rebuilds every projection. A snapshot whose derivation fingerprint no longer
+matches the installed code is discarded rather than upgraded, and `db replay --from-snapshot`
+falls back to a full replay without error — so an upgrade never needs a snapshot migration step.
+
+Run `db verify-snapshot` before relying on acceleration. It rebuilds twice, once fully and once
+from the newest valid snapshot, and compares every projection table; a mismatch exits non-zero
+naming the first differing table and row.
+
+`replay.max_events_warn` (default 50 000) makes the scaling wall visible before it is hit. Both
+`db replay` and `doctor` report it: `doctor` carries a `replay_budget` check with the event count
+and the threshold, and adds a warning once the count reaches it. Neither refuses, and the warning
+does not change doctor's health verdict. Treat the first one as the signal to start snapshotting,
+not as an error.
+
+Snapshot payloads contain projection rows and are as sensitive as the database they came from.
+Keep them in the same encrypted backup set.
+
+## Anchoring the chain externally
+
+Set `anchoring.sink_path` to a path outside the ledger directory — the configuration is rejected
+otherwise — then publish an anchor whenever you would take a backup:
+
+```bash
+hermes belief-ledger anchor publish --scope global
+hermes belief-ledger anchor verify --json
+hermes belief-ledger db verify-chain --against-anchors
+```
+
+`anchor verify` exits non-zero on any anchored root that disagrees with the recomputed local root,
+and on any anchored height the local chain no longer reaches. Both are tamper evidence; the output
+names the height and both roots. Back up and access-control the sink separately from the ledger, or
+the control adds nothing. Read the [threat model](threat-model.md) for what this does and does not
+detect.
+
+## Auditing model-component non-determinism
+
+Every model-component call records an `LLM_CALL_ATTRIBUTION` event carrying the provider and model
+labels, a digest of the prompt, a digest of the whole request, a digest of the structured result,
+and the sampling policy that was applied. `verification.sampling_temperature` defaults to `0.0` and
+is asked of the host on every call.
+
+`temperature: 0.0` reduces non-determinism. It cannot remove it — batching, model routing and
+provider-side changes all sit outside this process — so divergence is detected rather than assumed
+away:
+
+```bash
+hermes belief-ledger llm-divergence --json
+hermes belief-ledger llm-divergence --episode EP_ID
+```
+
+The command groups recorded calls by prompt and input digest and reports every input that produced
+more than one distinct output, with the model label, timestamps and event IDs for each call. An
+empty report means no recorded input has yet been answered two different ways; it is not a proof
+that the component is deterministic. Failed calls carry no output digest and are excluded, so a
+transient provider error is not reported as divergence.
+
+A non-empty report is a fact about history, not an alarm on its own. Read it alongside the model
+labels: the same input answered differently by two different model labels is a routing change, and
+by one label is provider-side variation.
 
 For the Hermes profile, WAL checkpoints occur after turns; finalization releases process-local
 handles without deleting history. Back up the SQLite database, `-wal`, and `-shm` together while
 active, or checkpoint and then copy the main file. Retain the matching private
 `locks/ledger.integrity.key`, profile configuration, and policy/source-profile extensions in the
 same encrypted backup set. Do not regenerate or substitute the key for an existing database.
-Forward migrations create a pre-migration database backup. Schema v6, introduced in rc2, adds
+Forward migrations create a pre-migration database backup. The current schema version is 8.
+Schema v6, introduced in rc2, adds
 append-only authorization events and rebuildable receipt/decision projections. Schema v7 adds no
 table and no event format: it rewrites stored idempotency keys into the episode-scoped form that
-replay rebuilds, which is what lets a database written before that scoping be opened again. Follow
+replay rebuilds, which is what lets a database written before that scoping be opened again.
+Schema v8 adds the `snapshots` table, the discardable cache described above. Follow
 [upgrade and rollback](upgrade-and-rollback.md) before opening older state with newer code.
 
 If chain or event-authentication verification fails, stop effectful work, preserve the database and

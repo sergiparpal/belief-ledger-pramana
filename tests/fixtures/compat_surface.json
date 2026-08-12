@@ -1,0 +1,439 @@
+{
+  "belief_ledger_pramana": [
+    "Pramana",
+    "Stakes",
+    "Status",
+    "__version__"
+  ],
+  "belief_ledger_pramana.admission": null,
+  "belief_ledger_pramana.application": [
+    "ActionEvaluationUseCase",
+    "ContextCompilationUseCase",
+    "LedgerQueryService",
+    "LifecycleEventRecorder"
+  ],
+  "belief_ledger_pramana.application.actions": null,
+  "belief_ledger_pramana.application.context": null,
+  "belief_ledger_pramana.application.lifecycle": null,
+  "belief_ledger_pramana.application.queries": null,
+  "belief_ledger_pramana.application.verification": null,
+  "belief_ledger_pramana.atomic": null,
+  "belief_ledger_pramana.compatibility": null,
+  "belief_ledger_pramana.config": null,
+  "belief_ledger_pramana.context": [
+    "ContextInjectionError",
+    "HermesRequestInjector",
+    "RenderedContext",
+    "render_context"
+  ],
+  "belief_ledger_pramana.context.budget": [
+    "CharacterBudget"
+  ],
+  "belief_ledger_pramana.context.inject": null,
+  "belief_ledger_pramana.context.render": [
+    "RenderedContext",
+    "render_belief_line",
+    "render_context"
+  ],
+  "belief_ledger_pramana.context.select": [
+    "Selection",
+    "lexical_score",
+    "select_beliefs"
+  ],
+  "belief_ledger_pramana.contracts": [
+    "ApprovalResult",
+    "EnforcementProfile",
+    "EpisodeContext",
+    "HostCapabilities",
+    "NormalizedDecision",
+    "OutputCandidate",
+    "ProfileSelection",
+    "ToolInvocation",
+    "ToolResult",
+    "negotiate_profile"
+  ],
+  "belief_ledger_pramana.core_config": [
+    "CoreConfigSnapshot",
+    "FrozenDict",
+    "FrozenList",
+    "freeze_config",
+    "load_core_config"
+  ],
+  "belief_ledger_pramana.core_runtime": [
+    "CapabilityShortfall",
+    "LedgerRuntime",
+    "RuntimeEvent"
+  ],
+  "belief_ledger_pramana.data": null,
+  "belief_ledger_pramana.dependencies": [
+    "CallableStructuredModel",
+    "ClockPort",
+    "FakeStructuredModel",
+    "FixedClock",
+    "FixedMonotonicClock",
+    "IdentityPort",
+    "MonotonicClockPort",
+    "RuntimeDependencies",
+    "SecureIdentity",
+    "SecureToken",
+    "SequenceIdentity",
+    "SequenceToken",
+    "StructuredModelBudgetError",
+    "StructuredModelError",
+    "StructuredModelPort",
+    "StructuredModelProviderError",
+    "StructuredModelRequest",
+    "StructuredModelResult",
+    "StructuredModelTimeout",
+    "StructuredModelValidationError",
+    "SystemClock",
+    "SystemMonotonicClock",
+    "TokenPort",
+    "deterministic_dependencies"
+  ],
+  "belief_ledger_pramana.engine": [
+    "RelabelResult",
+    "ValidityResult",
+    "relabel",
+    "validate_belief"
+  ],
+  "belief_ledger_pramana.engine.contradiction": [
+    "ContradictionDecision",
+    "candidate_pair",
+    "candidate_tokens",
+    "classify_deterministically"
+  ],
+  "belief_ledger_pramana.engine.defeat": [
+    "RelabelResult",
+    "_defeat_cycle_nodes",
+    "relabel"
+  ],
+  "belief_ledger_pramana.engine.graph": [
+    "adjacency",
+    "cycle_path",
+    "descendants"
+  ],
+  "belief_ledger_pramana.engine.priority": [
+    "PriorityComparison",
+    "PriorityTrace",
+    "compare_priority",
+    "priority_trace"
+  ],
+  "belief_ledger_pramana.engine.qualifiers": [
+    "SUPPORTED_QUALIFIERS",
+    "ScopeReconciliation",
+    "canonicalize_qualifiers",
+    "reconcile_qualifiers",
+    "units_compatible"
+  ],
+  "belief_ledger_pramana.engine.retractions": [
+    "affected_subgraph",
+    "notice_expired"
+  ],
+  "belief_ledger_pramana.engine.trust": [
+    "TrustDecision",
+    "determine_admission",
+    "effective_competence",
+    "trust_profile"
+  ],
+  "belief_ledger_pramana.engine.validity": [
+    "ValidityResult",
+    "normalize_content",
+    "validate_belief",
+    "validate_content"
+  ],
+  "belief_ledger_pramana.errors": [
+    "HashChainError",
+    "LlmReservationError",
+    "StoreError"
+  ],
+  "belief_ledger_pramana.events": [
+    "EventDraft",
+    "build_event",
+    "canonical_json",
+    "compute_event_auth",
+    "compute_event_hash",
+    "content_hash",
+    "isoformat_utc",
+    "parse_datetime",
+    "to_primitive",
+    "utc_now"
+  ],
+  "belief_ledger_pramana.gate": [
+    "ActionGate"
+  ],
+  "belief_ledger_pramana.gate.classify": [
+    "ActionClassification",
+    "ActionPolicy",
+    "ActionPolicyRegistry"
+  ],
+  "belief_ledger_pramana.gate.decision": [
+    "ActionGate",
+    "ActionGateReader",
+    "ActionGateWriter",
+    "arguments_digest"
+  ],
+  "belief_ledger_pramana.gate.preconditions": [
+    "PreconditionResult",
+    "resolve_preconditions"
+  ],
+  "belief_ledger_pramana.hermes": null,
+  "belief_ledger_pramana.hermes.cli": null,
+  "belief_ledger_pramana.hermes.hooks": null,
+  "belief_ledger_pramana.hermes.middleware": null,
+  "belief_ledger_pramana.hermes.model_port": null,
+  "belief_ledger_pramana.hermes.schemas": null,
+  "belief_ledger_pramana.hermes.slash_commands": null,
+  "belief_ledger_pramana.hermes.tools": null,
+  "belief_ledger_pramana.ids": [
+    "is_typed_id",
+    "new_id",
+    "require_id"
+  ],
+  "belief_ledger_pramana.infrastructure": [
+    "SqliteEventWriter",
+    "SqliteLedgerMaintenance",
+    "SqliteLedgerReader",
+    "SqliteLlmBudgetLedger"
+  ],
+  "belief_ledger_pramana.infrastructure.sqlite_ledger": null,
+  "belief_ledger_pramana.ingestion": [
+    "PreparedEvidence",
+    "prepare_evidence"
+  ],
+  "belief_ledger_pramana.ingestion.absence": [
+    "AbsenceAssessment",
+    "assess_negative_search"
+  ],
+  "belief_ledger_pramana.ingestion.adapters": [
+    "AdaptedToolResult",
+    "SourceDescriptor",
+    "ToolAdapterRegistry"
+  ],
+  "belief_ledger_pramana.ingestion.claims": [
+    "ClaimCandidate",
+    "ClaimValidation",
+    "candidate_from_structured",
+    "deterministic_candidates",
+    "validate_candidate"
+  ],
+  "belief_ledger_pramana.ingestion.provenance": [
+    "fingerprint",
+    "independent",
+    "normalize_url",
+    "provenance_root",
+    "registrable_domain",
+    "similarity"
+  ],
+  "belief_ledger_pramana.ingestion.tool": [
+    "PreparedEvidence",
+    "prepare_evidence",
+    "redact_secrets",
+    "redacted_content_hash"
+  ],
+  "belief_ledger_pramana.ingestion.user": [
+    "is_about_user_self",
+    "is_user_self_claim",
+    "user_source"
+  ],
+  "belief_ledger_pramana.integrity": [
+    "IntegrityKeyError",
+    "load_or_create_integrity_key"
+  ],
+  "belief_ledger_pramana.lint": [
+    "enforce_report",
+    "lint_response"
+  ],
+  "belief_ledger_pramana.lint.enforce": [
+    "enforce_report",
+    "linter_failure_response"
+  ],
+  "belief_ledger_pramana.lint.extract": [
+    "ExtractedClaim",
+    "extract_claims",
+    "strip_citations"
+  ],
+  "belief_ledger_pramana.lint.match": [
+    "deterministic_entailment",
+    "match_claim"
+  ],
+  "belief_ledger_pramana.lint.report": [
+    "lint_response"
+  ],
+  "belief_ledger_pramana.llm": [
+    "HostLlmClient",
+    "LlmBudgetError",
+    "StructuredCallResult"
+  ],
+  "belief_ledger_pramana.llm.attribution": [
+    "call_input_hash",
+    "call_output_hash",
+    "prompt_hash",
+    "sampling_policy"
+  ],
+  "belief_ledger_pramana.llm.client": null,
+  "belief_ledger_pramana.llm.divergence": [
+    "ATTRIBUTION_KIND",
+    "DivergentGroup",
+    "RecordedCall",
+    "divergence_report",
+    "divergent_groups",
+    "recorded_calls"
+  ],
+  "belief_ledger_pramana.llm.prompts": [
+    "CHAIN_AUDIT",
+    "CLAIM_EXTRACTION",
+    "CONTRADICTION",
+    "LINT_ENTAILMENT",
+    "REWRITE"
+  ],
+  "belief_ledger_pramana.llm.schemas": [
+    "CHAIN_AUDIT_SCHEMA",
+    "CLAIM_EXTRACTION_SCHEMA",
+    "CONTRADICTION_SCHEMA",
+    "LINT_ENTAILMENT_SCHEMA",
+    "REWRITE_SCHEMA"
+  ],
+  "belief_ledger_pramana.migrations": [
+    "LATEST_SCHEMA_VERSION",
+    "MigrationResult",
+    "PROJECTION_HASH_ALGORITHM",
+    "PROJECTION_HASH_V1_ALGORITHM_VERSION",
+    "PROJECTION_HASH_V2_ALGORITHM_VERSION",
+    "PROJECTION_MANIFEST_V1",
+    "PROJECTION_MANIFEST_V2",
+    "PROJECTION_TABLES",
+    "SCHEMA_V1",
+    "SCHEMA_V2",
+    "SCHEMA_V3",
+    "SCHEMA_V4",
+    "SCHEMA_V5",
+    "SCHEMA_V6",
+    "SCHEMA_V7",
+    "SCHEMA_V8",
+    "configure_connection",
+    "migrate"
+  ],
+  "belief_ledger_pramana.models": [
+    "Belief",
+    "ChainAudit",
+    "CompatibilityMode",
+    "ComponentVerdict",
+    "Conflict",
+    "DefeatEdge",
+    "DefeatKind",
+    "Episode",
+    "Event",
+    "Evidence",
+    "EvidenceRef",
+    "GateDecision",
+    "GateOutcome",
+    "Health",
+    "IngestionSupport",
+    "Integrity",
+    "Justification",
+    "LintClaim",
+    "LintDisposition",
+    "LintReport",
+    "LlmCallAttribution",
+    "LlmUsage",
+    "Perishability",
+    "Pramana",
+    "RenderedBelief",
+    "RetractionNotice",
+    "STAKE_RANK",
+    "Source",
+    "SourceKind",
+    "SourceStats",
+    "Stakes",
+    "Status",
+    "VerificationMethod",
+    "VerificationTask",
+    "max_stakes"
+  ],
+  "belief_ledger_pramana.plugin": [
+    "register"
+  ],
+  "belief_ledger_pramana.policy_cli": null,
+  "belief_ledger_pramana.ports": [
+    "ActionGateLedger",
+    "ActionGateReader",
+    "ContextReader",
+    "EpisodeLifecycleStore",
+    "EventWriter",
+    "HostLlmFacade",
+    "LedgerQueryReader",
+    "LlmBudgetLedger",
+    "VerificationLedger",
+    "VerificationTaskReader"
+  ],
+  "belief_ledger_pramana.projections": [
+    "ProjectionHandler",
+    "apply_event"
+  ],
+  "belief_ledger_pramana.runtime": [
+    "EpisodeResolutionError",
+    "EpisodeService",
+    "PluginRuntime",
+    "RuntimeUnavailable",
+    "ToolEvidence"
+  ],
+  "belief_ledger_pramana.runtime.episode_service": null,
+  "belief_ledger_pramana.runtime.errors": null,
+  "belief_ledger_pramana.runtime.helpers": null,
+  "belief_ledger_pramana.runtime.plugin_runtime": null,
+  "belief_ledger_pramana.snapshots": [
+    "GLOBAL_SCOPE",
+    "SnapshotRow",
+    "SnapshotSet",
+    "SnapshotVerification",
+    "create",
+    "derivation_fingerprint",
+    "first_difference",
+    "heights",
+    "listing",
+    "load_newest_valid",
+    "projection_tables",
+    "prune",
+    "replay_budget_warning",
+    "restore"
+  ],
+  "belief_ledger_pramana.store": [
+    "EventDraft",
+    "LedgerStore",
+    "LlmReservationError",
+    "PurgeResult",
+    "ReplayResult",
+    "StoreError",
+    "ZERO_HASH"
+  ],
+  "belief_ledger_pramana.verification": [
+    "VerificationScheduler"
+  ],
+  "belief_ledger_pramana.verification.anchors": [
+    "ANCHOR_RECORD_VERSION",
+    "AnchorComparison",
+    "AnchorError",
+    "AnchorReceipt",
+    "AnchorRecord",
+    "ChainAnchorPort",
+    "FileAnchorSink",
+    "GLOBAL_SCOPE",
+    "build_record",
+    "compare_against_anchors"
+  ],
+  "belief_ledger_pramana.verification.apta": [
+    "updated_source"
+  ],
+  "belief_ledger_pramana.verification.chain_audit": [
+    "local_asiddha",
+    "validate_chain_audit"
+  ],
+  "belief_ledger_pramana.verification.methods": [
+    "method_instruction"
+  ],
+  "belief_ledger_pramana.verification.scheduler": [
+    "VerificationResult",
+    "VerificationScheduler"
+  ]
+}

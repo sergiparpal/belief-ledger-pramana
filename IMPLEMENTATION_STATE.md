@@ -214,3 +214,263 @@ One gate run failed before this one and neither failure was a defect in the rele
   `uvx --from twine==7.0.0 twine check build/workspace-*/*.whl`, which passed. `scripts/verify_stage.py`
   still invokes the venv's twine, so the complete local gate cannot finish in a venv that also has
   Hermes installed.
+
+## Obvious-fix plan, Stage 1 — documentation invariant guard — 2026-08-10
+
+`scripts/check_doc_invariants.py` is a new, separate checker from
+`scripts/check_product_claims.py`: that one guards restricted marketing language, this one guards
+derived facts. Each fact names one source of truth read with `ast` or `tomllib`, never by importing
+the module, and lists the documents that must state it together with the pattern each states it in.
+A listed document that matches the pattern nowhere fails exactly as loudly as one that matches with
+a stale value — the drift found on the first run was absence, not staleness, in all three cases.
+
+Drift found and corrected in this change:
+
+| File | What was wrong |
+|---|---|
+| `docs/operations.md` | Discussed schema v6 and v7 by name but never stated which version is current |
+| `docs/architecture.md` | Same |
+| `README.md` | Never stated the `requires-python` range; only `HERMES_COMPATIBILITY.md` did |
+
+| Command | Exit | Result |
+|---|---:|---|
+| `python scripts/check_doc_invariants.py` | 0 | 6 facts across 9 files; every schema version has a migration. |
+| `python scripts/check_doc_invariants.py --root <mutated tree>` | 1 | Names fact, expected value, file, line and found value. |
+| `pytest tests/unit/test_doc_invariants.py` | 0 | 14 passed, including seven that prove the checker fails. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 367 passed, 88.16% combined coverage against the 88% floor. |
+
+Test count moved 353 → 367. Coverage is unchanged at 88.16%: the checker lives in `scripts/`, which
+is outside the five measured packages, and the tests that exercise it are test code.
+
+## Obvious-fix plan, Stage 2 — priority claim reconciliation — 2026-08-10
+
+Q1 answered A: keep the behaviour, correct the claim. No runtime code changed; `engine/priority.py`
+gained a module docstring, the specification's §1 and §4.2 were made precise, and
+`tests/unit/test_priority_order.py` pins the order structurally so the claim and the tuple cannot
+diverge again. Recorded as [ADR 0010](docs/adr/0010-scalar-competence-in-the-priority-order.md).
+
+Writing the pinning test found something neither document stated: `_type_key` bands SHABDA into
+`shabda_apta_hi`/`_mid`/`_lo` using the same `effective_competence` scalar, so competence also moves
+`type_rank`. The first version of the "reliability decides the tie" test failed for exactly that
+reason — a 0.9-vs-0.2 contest between two testimony beliefs resolves at `type`, not `reliability`.
+The docstring, the specification and the ADR all state the coupling rather than eliding it, and
+`test_for_shabda_a_competence_gap_across_a_band_boundary_is_decided_at_type` keeps it stated. Logged
+as F-07.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_priority_order.py` | 0 | 12 passed. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | 265 files, no findings. |
+| `mypy packages/{core,gateway,mcp,reference}/src belief_ledger_pramana` | 0 | 146 source files. |
+| `scripts/check_doc_invariants.py` / `scripts/check_product_claims.py` | 0 / 0 | No drift, no restricted claims. |
+| `pytest -m "not live_llm" --cov ... --cov-branch` | 0 | 379 passed; 88.18% against the 88% floor. |
+
+Test count moved 367 → 379; coverage 88.16% → 88.18%.
+
+## Obvious-fix plan, Stage 2b — self-claim scope guard — 2026-08-10
+
+Tracing the call site answered the plan's branch: `is_about_user_self` is reached only from
+`ingest_user_message`, whose source is always `user_source(...)` and therefore always
+`SourceKind.USER`, and that method is called only from the `pre_llm_call` hook with
+`kwargs["user_message"]`. Content from a tool result, a fetched page, a file, or a prior-ledger
+belief cannot reach it. The guarantee held, but it held by call-site placement, which nothing
+enforced.
+
+`is_user_self_claim(source, content)` now enforces it: a non-`USER` source is refused before the
+pattern is consulted. `trust_profile` already gated the `user_self` branch on the same kind, so the
+privilege now has two independent guards and removing either alone fails a test.
+`is_about_user_self` is unchanged and still exported, so the compatibility surface only grows.
+
+The privilege itself is not what the plan described. `about_self` selects the `user_self` trust
+profile over `user_world`; at HIGH stakes that is `svatah`/`k=0` against `paratah`/`k=1`
+`cross_source`. It waives cross-source verification rather than raising a competence scalar. Logged
+as F-08, with the unreachable `self: 0.95` competence entry as F-09 and the pattern's limitations
+as F-10.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_self_claim_scope.py` | 0 | 26 passed: 12 scope pins, 11 characterisation cases, 3 profile assertions. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | 266 files, no findings. |
+| `mypy packages/{core,gateway,mcp,reference}/src belief_ledger_pramana` | 0 | 146 source files. |
+| `scripts/check_product_claims.py` / `scripts/check_doc_invariants.py` | 0 / 0 | Threat-model addition passes the restricted-language checker. |
+| `pytest -m "not live_llm" --cov ... --cov-branch` | 0 | 405 passed; 88.18% against the 88% floor. |
+
+Test count moved 379 → 405; coverage unchanged at 88.18%.
+
+## Obvious-fix plan, Stage 3 — recency for slow and stable beliefs — 2026-08-10
+
+R1 from the baseline said replay-independent, so this proceeded without a fixture copy:
+`tests/fixtures/v1_replay/` is untouched and still verifies byte-for-byte. `recency_rank` is now
+computed from `observed_at` for every perishability class and stays the fifth key, which bounds the
+change by position rather than by a guard.
+
+Making recency unconditional made `_timestamp`'s naive-datetime raise reachable for every belief,
+so the guarantee moved to `Belief.__post_init__`, alongside `parse_datetime` and `FixedClock` which
+already enforce it with the same message. `_timestamp`'s check is kept as redundancy and is pinned
+so it is not read as dead code.
+
+Running the suite before adding new tests produced exactly one failure — the naive-construction
+test — and no defeat outcome moved anywhere in `tests/` or `evaluations/`. The case this change
+exists to fix was not covered by any existing test or suite. Logged as F-11; the changed test is
+F-12.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_recency_priority.py` | 0 | 14 passed, including the relabel pair that resolves and the same-timestamp control that still reaches saṃśaya. |
+| `pytest tests/contract/test_v1_replay.py` | 0 | 10 passed; frozen projection hashes unchanged. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 419 passed; 88.18% against the 88% floor; evaluations, examples, gateway demo, policy validate and the Hermes contract all pass. |
+
+Test count moved 405 → 419; coverage 88.18%, equal to the Stage 0 baseline of 88.16% and above the
+floor. Removing the perishability branch and adding the constructor branch net out.
+
+## Obvious-fix plan, Stage 4 — model determinism and divergence auditability — 2026-08-10
+
+Neither of the plan's Part A branches matched. The port could not carry sampling parameters, but
+`hermes/model_port.py` and `belief_ledger_pramana/llm/client.py` were each already passing
+`temperature=0.0` to the Hermes facade as a literal. Sampling was controlled — twice, invisibly,
+with nothing linking the two or recording what was applied. `SamplingPolicy` now expresses it once,
+`verification.sampling_temperature` configures it with bounded validation in both validators, and
+it rides on `StructuredModelRequest` as an additive defaulted field so existing port
+implementations are unaffected. Logged as F-16.
+
+Attribution is a new `LLM_CALL_ATTRIBUTION` record written alongside the usage and verdict records.
+R2 from the baseline confirmed neither `ComponentVerdict` nor `LlmUsage` can take a required field
+without moving a frozen v1 hash, so the sibling-record option the plan marks preferred is the one
+taken. No projection table is added, so neither projection hash moves either. `prompt_hash` digests
+the prompt text because the prompt module carries no version to reuse (F-14).
+
+`hermes belief-ledger llm-divergence` groups by `(prompt_hash, input_hash)` and reports every input
+answered more than one way. Failed calls are excluded.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_llm_divergence.py` | 0 | 16 passed, including the two-different-outputs acceptance case and the identical-results control. |
+| `pytest tests/integration/test_operator_surfaces.py` | 0 | 6 passed; the CLI reports one divergent group and nothing for a clean episode. |
+| `pytest tests/contract/test_v1_replay.py` | 0 | 10 passed; frozen event and projection hashes unchanged. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | No findings. |
+| `mypy packages/{core,gateway,mcp,reference}/src belief_ledger_pramana` | 0 | 150 source files. |
+| `pytest -m "not live_llm" --cov ... --cov-branch` | 0 | 436 passed; 88.33% against the 88% floor. |
+
+Test count moved 419 → 436; coverage 88.18% → 88.33%.
+
+## Obvious-fix plan, Stage 5 — external anchoring of the hash chain — 2026-08-10
+
+Q2 answered A: a local append-only JSONL sink, no HTTP adapter. The integrity key sits beside the
+database, so an attacker who can read the ledger can also forge it: edit a row, re-chain everything
+after it, and `db verify-chain` passes because the chain is internally consistent again. An anchor
+is a copy of the chain root written where the ledger cannot reach back into.
+
+The plan's instruction to reuse `chain_audit.py`'s chain-state computation did not apply — that
+module audits *inference* chains, not the hash chain (F-17). The instruction's intent was followed
+against `LedgerStore.verify_hash_chain`, whose head computation moved into `_verified_heads` so
+`chain_state(up_to_height=...)` shares it. There is still exactly one root computation, which is
+what keeps an anchor mismatch from being ambiguous between tampering and a bug.
+
+The acceptance test is the tamper simulation and it is unconditional: build a real chain from a
+frozen fixture, publish an anchor, drop the append-only triggers, edit event 2, faithfully re-chain
+everything after it, restore the triggers, then assert `verify_hash_chain` still passes and anchor
+verification fails at the anchored height naming both roots. Dropping the triggers is faithful to
+the threat: a trigger is a row in the schema of a file the attacker can write (F-18).
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_chain_anchoring.py` | 0 | 17 passed: tamper simulation, unreachable-height case, append-only and 0600 sink, path validation, no key material in any record. |
+| `pytest tests/integration/test_operator_surfaces.py` | 0 | 7 passed; `anchor publish`/`verify` and `db verify-chain --against-anchors` exercised through the CLI. |
+| `python scripts/check_product_claims.py` | 0 | The anchoring documentation passes the restricted-language checker without relaxing it. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 454 passed; 88.39% against the 88% floor. |
+
+Test count moved 436 → 454; coverage 88.33% → 88.37%. Warnings stay at 8: the raw `sqlite3`
+connections the tamper helper needs are closed explicitly, so no `ResourceWarning` is added.
+
+## Obvious-fix plan, Stage 6 — snapshots as a discardable cache — 2026-08-10
+
+Schema 8 adds the `snapshots` table. It adds no event kind and no projection table, so
+`projection_hash_v1` and `projection_hash_v2` are both unchanged and the frozen v1 fixtures still
+verify byte-for-byte. Rolling back to schema 7 loses nothing but the cache.
+
+The four invariants are tests, not comments. Deleting every snapshot loses nothing, asserted against
+all six frozen fixtures. A stale derivation fingerprint means discard rather than upgrade, and so
+does a corrupt payload — `zlib.decompress` runs before the content hash can be checked, so it needed
+its own guard, which is F-21. `db replay` with no flags reads every event, asserted by event-read
+count rather than timing. `db verify-snapshot` rebuilds twice and compares every projection table
+row by row.
+
+`replay.max_events_warn` defaults to 50 000. The v1 fixtures are 22 events, so no timing measurement
+in this repository can surface the scaling wall — the threshold is a configured number for that
+reason.
+
+Two existing tests changed. One hardcoded the schema numbers in the migrate dry-run output (F-19).
+The other rolled the schema stamp back by `LATEST_SCHEMA_VERSION` to re-run the v7 idempotency
+rescoping, which silently stopped re-running it the moment v8 existed (F-20) — a latent defect in
+the test that schema 8 revealed rather than caused.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_snapshots.py` | 0 | 29 passed, one per invariant plus the parametrized sweep over all six fixtures. |
+| `pytest tests/properties/test_ledger_properties.py` | 0 | 6 passed; the new hypothesis case snapshots at a generated height and asserts the accelerated rebuild equals the full one. |
+| `pytest tests/contract/test_v1_replay.py` | 0 | 10 passed; frozen hashes unchanged across the schema bump. |
+| `python scripts/check_doc_invariants.py` | 0 | The Stage 1 guard forced the schema bump into all three documents in the same change. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 484 passed; 88.31% against the 88% floor. |
+
+Test count moved 454 → 484; coverage 88.37% → 88.31%. The drop is the new
+`from_snapshot`/verification branches in `store.py` and `snapshots.py`, which are exercised but not
+saturated; both remain well above the floor and above the 88.16% Stage 0 baseline.
+
+## Obvious-fix plan, Stage 7 — structural consolidation — 2026-08-10
+
+**7a.** `tests/fixtures/compat_surface.json` and `tests/unit/test_compat_surface.py` pin the
+`belief_ledger_pramana` import surface: 81 modules, 288 exported names. Nothing asserted this
+before (F-03). It lives in `tests/unit/` rather than `tests/core/` because the `core-no-adapters`
+CI job runs `tests/core` against a core-only venv that does not have the adapter installed.
+
+**7b.** Packaged policy data now has one home. The adapter loads `belief_ledger_core.data`, the
+three duplicated YAML files are deleted, and the byte-identity test became a one-copy assertion.
+Re-export shims were kept: only four names are formally promised, so deleting everything outside
+the promised surface would delete most of a 1.x compatibility contract (F-24).
+
+**7c.** Q3 answered A. The facade keeps its warning, now pinned by a test, and removal is
+documented for 2.0.0. Its callers were not migrated because `LedgerRuntime` is a fixture, not a
+`BeliefLedger` wrapper (F-22).
+
+**7d.** `runtime.py` (3,233 lines) is now a package, by pure moves:
+
+| Module | Lines |
+|---|---:|
+| `runtime/__init__.py` | 42 |
+| `runtime/errors.py` | 36 |
+| `runtime/helpers.py` | 271 |
+| `runtime/plugin_runtime.py` | 598 |
+| `runtime/episode_service.py` | 2430 |
+
+The 600-line target is not met and cannot be met by pure moves: `EpisodeService` is one class of
+2,430 lines, and splitting a class is not a move (F-23). The guard ships anyway, with eight
+exemptions that each record a ceiling and a reason, plus tests that stop an exempt file growing and
+force a file that drops under the limit to leave the list.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_compat_surface.py` | 0 | 90 passed; no module or exported name lost across the split. |
+| `pytest tests/unit/test_architecture.py` | 0 | 9 passed, including the four size-guard tests. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | No findings after the move. |
+| `mypy packages/{core,gateway,mcp,reference}/src belief_ledger_pramana` | 0 | 158 source files. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 581 passed; 88.42% against the 88% floor. |
+
+Test count moved 484 → 581; coverage 88.31% → 88.42%. Largest source file: 3,233 → 2,430 lines.
+
+## Obvious-fix plan, Stage 8 — consolidation and reporting — 2026-08-10
+
+Final gate from the Stage 7 tree, `docs/obvious-fix-report.md` written, and
+`docs/current-state-rc4.md` updated with the post-plan state.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `python scripts/verify_stage.py all --skip-build` | 0 | 581 passed; 88.46% against the 88% floor; 34.4 s wall clock. |
+| `pytest tests/contract/test_v1_replay.py` | 0 | 10 passed; frozen hashes unchanged across a schema bump, a new record kind, a defeat-semantics change and the runtime split. |
+| `git diff main -- tests/fixtures/v1_replay/` | — | Empty. The fixtures were never touched. |
+| `python scripts/check_doc_invariants.py` | 0 | 6 facts across 9 files. |
+| `python scripts/check_product_claims.py` | 0 | 10 public metadata files. |
+
+Baseline → final: tests 353 → 581, coverage 88.16% → 88.46%, largest source file 3 233 → 2 430
+lines, ADRs 9 → 15, warnings 8 → 8. One in-scope item is incomplete and listed with its reason: the
+600-line target in Stage 7d, blocked by `EpisodeService` being a single 2,430-line class that no
+pure move can divide (F-23).

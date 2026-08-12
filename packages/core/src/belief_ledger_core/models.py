@@ -178,6 +178,12 @@ class Belief:
     validity: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # Timezone awareness is guaranteed here rather than where observed_at is read. Since
+        # recency became an unconditional priority key (ADR 0011), every belief is compared by
+        # timestamp, so a naive value would fail deep inside defeat resolution instead of at the
+        # boundary that admitted it. parse_datetime and FixedClock enforce the same rule.
+        if self.observed_at.tzinfo is None:
+            raise ValueError("belief observed_at must be timezone-aware")
         object.__setattr__(self, "qualifiers", freeze(self.qualifiers))
         object.__setattr__(self, "validity", freeze(self.validity))
 
@@ -278,6 +284,39 @@ class LlmUsage:
     latency_ms: int
     turn_number: int
     outcome: str
+
+
+@dataclass(frozen=True, slots=True)
+class LlmCallAttribution:
+    """Everything needed to detect that one input produced two different outputs.
+
+    Written as a sibling of `ComponentVerdict` rather than as fields on it. `ComponentVerdict` and
+    `LlmUsage` are frozen v1 record kinds, and adding a required field to either would move hashes
+    that `tests/fixtures/v1_replay/` pins. `LLM_CALL_ATTRIBUTION` appears in no v1 fixture, so it
+    is hash-neutral by construction (ADR 0012).
+
+    `prompt_hash` digests the instruction text itself. The prompt module describes itself as
+    versioned but carries no version constant, and inventing a parallel numbering scheme would
+    create a second thing to keep in step. A digest of the prompt cannot drift from the prompt.
+
+    `input_hash` and `output_hash` are computed over redacted, canonicalised content with the same
+    `content_hash` helper the event chain uses, so neither commits to a credential.
+    """
+
+    id: str
+    episode_id: str
+    purpose: str
+    provider: str
+    model: str
+    prompt_hash: str
+    input_hash: str
+    output_hash: str | None
+    sampling: dict[str, Any]
+    outcome: str
+    turn_number: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sampling", freeze(self.sampling))
 
 
 @dataclass(frozen=True, slots=True)

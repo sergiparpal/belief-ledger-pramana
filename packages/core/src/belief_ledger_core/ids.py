@@ -19,6 +19,7 @@ _PREFIXES = {
     "support": "is_",
     "verdict": "cv_",
     "usage": "lu_",
+    "attribution": "lca_",
     "reservation": "lr_",
     "approval": "apr_",
     "decision": "dec_",

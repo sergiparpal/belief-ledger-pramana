@@ -18,3 +18,11 @@ V2 currently adds `approval_receipts` and `action_decisions`. Replay reconstruct
 append-only enforcement chain while independently comparing v1 and v2 hashes.
 Operator output and fixture manifests report the algorithm name and version with each expected
 hash.
+
+`LLM_CALL_ATTRIBUTION` is a record kind added after the v1 fixtures were frozen. It is written
+alongside `LLM_USAGE_RECORDED` and `COMPONENT_VERDICT_RECORDED` rather than as new fields on either,
+because both of those appear in `tests/fixtures/v1_replay/` and a required field added to a frozen
+record would move a frozen hash. A record kind absent from every v1 fixture is hash-neutral with
+respect to them by construction. It has no projection table, so it changes neither
+`projection_hash_v1` nor `projection_hash_v2`; `hermes belief-ledger llm-divergence` reads it from
+the event log directly. See [ADR 0012](adr/0012-llm-call-attribution.md).

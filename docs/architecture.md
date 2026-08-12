@@ -46,7 +46,7 @@ chain. Authorization uses a second append-only enforcement chain and rebuildable
 `approval_receipts`/`action_decisions`; schema v6 installs them without changing v1 projection
 material. Schema v7 adds no table: it rewrites legacy unscoped `idempotency` keys into the
 episode-scoped form that replay rebuilds, so a database written before that scoping can be opened
-again.
+again. Schema v8 adds `snapshots`, a derived cache that is never authoritative: the append-only log rebuilds every projection, and any snapshot may be deleted at any time with no loss. The current schema version is 8, and `scripts/check_doc_invariants.py` fails if this sentence and `LATEST_SCHEMA_VERSION` disagree.
 
 ```text
 normalize invocation -> policy/preconditions -> exact approval receipt

@@ -12,7 +12,7 @@
 
 **Non-goals (v0.x).**
 - **This is not an anti-injection defense.** Channel integrity is marked at ingestion and affects priorities, but defense against instructions embedded in content is an orthogonal harness layer. The ledger assumes it; it does not implement it.
-- **This is not a probabilistic reasoner.** A belief's state is discrete (IN/OUT/PENDING/QUARANTINED); scalar confidence exists as an auxiliary field but does not govern defeat. The rationale is in §4.
+- **This is not a probabilistic reasoner.** A belief's state is discrete (IN/OUT/PENDING/QUARANTINED); the belief's own `confidence` field is auxiliary and is never read when deciding defeat. One scalar does participate, and it is a different one: `reliability`, the competence estimate for the *source*, is the third of the five lexicographic keys in §4.2 — it can break a tie that `integrity_rank` and `type_rank` left, and can never override either. For SHABDA it also selects the `shabda_apta_*` band, so it reaches `type_rank` as well. The rationale is in §4.
 - **This is not a knowledge graph.** No ontology or logical form is required: beliefs are normalized natural-language propositions. Structure lives in the justification and defeat graph, not in the content.
 - **This is not long-term memory.** The ledger is per episode (or per task). Its interaction with persistent memory is defined by rule R6; everything else belongs to the vāsanā-store project.
 
@@ -118,7 +118,9 @@ class Belief:
     observed_at: datetime
     stakes: Stakes                     # inherited from the task; escalatable by action
     status: Status
-    confidence: float | None = None    # auxiliary; does NOT govern bādha (R1)
+    confidence: float | None = None    # auxiliary; never read by engine/priority.py (R1).
+                                       # Not to be confused with reliability in §4.2, which is
+                                       # the source's competence and is the third priority key.
     corroboration: int = 0             # number of agreeing independent sources (R6)
 
 @dataclass
@@ -184,7 +186,7 @@ An optional vector index on `beliefs.content` supports the compiler's relevance 
 
 | Type | What produces it | Validity condition at ingestion | Typical defeaters |
 |---|---|---|---|
-| **PRATYAKSHA** | Output from a harness-executed tool | The tool completed OK; output was parsed; the belief covers only what was measured (R2); the environment is intact | UNDERCUT: incorrectly invoked tool, corrupt environment, demonstrated flakiness. REBUT: subsequent re-observation for FAST/LIVE facts |
+| **PRATYAKSHA** | Output from a harness-executed tool | The tool completed OK; output was parsed; the belief covers only what was measured (R2); the environment is intact | UNDERCUT: incorrectly invoked tool, corrupt environment, demonstrated flakiness. REBUT: subsequent re-observation, which since [ADR 0011](adr/0011-unconditional-recency-key.md) wins on `recency_rank` for every perishability class rather than only FAST/LIVE — perishability still governs staleness and re-observation policy, it no longer governs whether age is comparable |
 | **SHABDA** | Content asserted by a document, website, user, or other agent | Required citation to an evidence span; source with computable āpta; marked channel (Integrity) | REBUT: pratyakṣa or testimony with higher āpta. UNDERCUT: source discredited in the domain, obsolete document, satirical/non-assertive context |
 | **ANUMANA** | A conclusion derived by the model | Premises are listed and all IN; explicit warrant (vyāpti); optional audit (Appendix A) according to stakes | UNDERCUT: hetvābhāsa detected in the chain, a premise falls to OUT. REBUT: contradictory belief with higher priority |
 | **ARTHAPATTI** | Abductive postulation (“it is explained only if…”) | The explanandum is IN; considered and rejected alternatives are recorded | UNDERCUT: a viable alternative appears (the type's constitutive defeater) |
@@ -218,10 +220,12 @@ priority(b) = ( integrity_rank(source(b)),      # trusted=2 > semi=1 > untrusted
                 type_rank(b.pramana, domain),   # configurable table; see YAML
                 reliability(b),                  # effective āpta or chain quality, discretized
                 specificity(b),                  # specific > general (lex specialis)
-                recency_rank(b) )                # matters only if perishability ∈ {FAST, LIVE}
+                recency_rank(b) )                # observed_at for every perishability class
 ```
 
-Lexicographic comparison. A REBUT **wins** when `priority(attacker) > priority(target)` strictly at the first component that differs. Equality or configured incomparability → **saṃśaya**: neither defeats the other; both are marked CONFLICT, rendered as an open conflict (§6.2), and a VerificationTask is emitted. Conflicts are not silently resolved: doubt triggers inquiry, not an arbitrary tie-break.
+Lexicographic comparison. A REBUT **wins** when `priority(attacker) > priority(target)` strictly at the first component that differs. `reliability` is a scalar and is third: it decides only contests that `integrity_rank` and `type_rank` left tied, and never overrides either. For SHABDA the same scalar additionally selects the `shabda_apta_hi`/`_mid`/`_lo` band below, so a competence gap that crosses a band boundary is decided at `type_rank` and never reaches the third key at all — "third" locates the scalar in the tuple, it does not bound its influence on testimony. The belief's own `confidence` field never participates. `tests/unit/test_priority_order.py` pins each of those claims, and the field order itself.
+
+`recency_rank` is `observed_at` for every perishability class, not only FAST and LIVE ([ADR 0011](adr/0011-unconditional-recency-key.md)). Being fifth, it settles only contests that all four earlier keys left tied — in practice, two claims from the same source, of the same type, at the same specificity, differing only in age. Preferring the fresher one there is strictly better than the previous behaviour, which was to send both to PENDING. Perishability continues to govern staleness and re-observation elsewhere; it no longer gates whether age is *comparable*. `tests/unit/test_recency_priority.py` pins this. Equality or configured incomparability → **saṃśaya**: neither defeats the other; both are marked CONFLICT, rendered as an open conflict (§6.2), and a VerificationTask is emitted. Conflicts are not silently resolved: doubt triggers inquiry, not an arbitrary tie-break.
 
 ```yaml
 type_rank:
