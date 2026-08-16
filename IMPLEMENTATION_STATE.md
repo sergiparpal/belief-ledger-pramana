@@ -474,3 +474,38 @@ Baseline → final: tests 353 → 581, coverage 88.16% → 88.46%, largest sourc
 lines, ADRs 9 → 15, warnings 8 → 8. One in-scope item is incomplete and listed with its reason: the
 600-line target in Stage 7d, blocked by `EpisodeService` being a single 2,430-line class that no
 pure move can divide (F-23).
+
+## Deflake the semantic-contradiction integration test — 2026-08-16
+
+`hermes-adapter (3.12)` failed on the Dependabot ruff PR (#29) while the identical commit passed in
+the sibling run. The cause is not the dependency bump and not the adapter: it is a wall-clock
+dependence that ADR 0011 introduced into
+`tests/integration/test_semantic_contradiction.py`.
+
+`priority_trace` computes the fifth key as `int(observed_at.timestamp())`, truncated to whole
+seconds. The test ingests two contradicting user claims milliseconds apart through `utc_now()`.
+Landing inside one second makes the pair tie on all five keys — saṃśaya, both PENDING, which is what
+the test asserted. Straddling a second boundary lets recency settle the contest, so the older claim
+goes OUT and the assertion fails. ADR 0011's "every existing test produced the same outcome before
+and after" held only because the verifying run stayed inside one second; this pair is exactly the
+stale-versus-fresh shape the ADR says must resolve to one IN and one OUT.
+
+The clock is now pinned through `monkeypatch` on `episode_service.utc_now`, and both regimes are
+asserted instead of whichever the clock supplies: thirty seconds apart resolves IN/OUT per ADR 0011,
+one timestamp stays saṃśaya. The two REBUT edges and the R5 verdict — the behaviour the test is
+named for — were invariant across every timing regime and are asserted in both.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/integration/test_semantic_contradiction.py` × 30, varying `PYTHONHASHSEED` | 0 | 0 failures; was reproducible under a forced boundary straddle before the fix. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | No findings. |
+| `mypy packages/{core,gateway,mcp,reference}/src belief_ledger_pramana` | 0 | 158 source files. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 583 passed; 88.44% against the 88% floor. |
+| `python scripts/check_doc_invariants.py` | 0 | 6 facts across 9 files. |
+| `python scripts/check_product_claims.py` | 0 | 10 public metadata files. |
+
+Test count 581 → 583; the split adds the saṃśaya control at integration level. Engine code is
+untouched: changing the recency granularity from seconds to full precision would be a semantic
+deviation and needs its own ADR. Left open, since second-granularity truncation still makes the
+outcome for two claims under a second apart depend on where the boundary falls — see the note in
+the test docstring.
