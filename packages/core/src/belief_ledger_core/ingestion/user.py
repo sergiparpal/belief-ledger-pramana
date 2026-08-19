@@ -15,6 +15,21 @@ _SELF = re.compile(
 
 
 def user_source(sender_id: str, channel: str) -> SourceDescriptor:
+    """Describe the user channel as a source.
+
+    The competence map carries `general` only. It used to also carry `self: 0.95`, which nothing
+    could reach: the deterministic extractor always emits `domain="general"`, so no belief was
+    ever scored against it (recorded as F-09). An unreachable entry is worse than a missing one
+    here, because of what happens the day it stops being unreachable. Whoever first gives a
+    belief the `self` domain would silently grant that source 0.95 competence as a side effect of
+    an unrelated change. Without the entry, `effective_competence` falls back to `general` and
+    the same change yields 0.65 — the conservative value — and anyone who wants the higher number
+    has to ask for it in a diff that says so.
+
+    The self-claim privilege itself is unaffected: it lives in the trust matrix, where
+    `about_self` selects `user_self` over `user_world`, and it was never a competence bump. See
+    `is_user_self_claim`.
+    """
     identity = sender_id.strip() or "anonymous"
     root = provenance_root(SourceKind.USER, identity=f"{channel or 'unknown'}:{identity}")
     return SourceDescriptor(
@@ -22,7 +37,7 @@ def user_source(sender_id: str, channel: str) -> SourceDescriptor:
         Integrity.SEMI,
         identity,
         root,
-        {"self": 0.95, "general": 0.65},
+        {"general": 0.65},
     )
 
 

@@ -328,20 +328,34 @@ def test_the_packaged_default_threshold_is_configured() -> None:
 
 
 def test_doctor_reports_the_replay_budget(runtime) -> None:
-    """The plan puts the warning in `doctor` as well as `db replay`.
+    """The plan puts the notice in `doctor` as well as `db replay`.
 
     `doctor` is where an operator looks when nothing is wrong yet, which is exactly when a replay
     approaching its budget is worth knowing about. It reports; it never changes the health verdict.
+
+    The earlier version of this test asserted `loud["status"] == quiet["status"]` and passed
+    without ever exercising the claim: this fixture's doctor status is saturated at
+    `"unavailable"` by unrelated errors, so both sides were equal no matter what the budget did.
+    The verdict is now derived from a synthetic list instead, which is the only part of the
+    computation the claim is actually about, and the budget message is asserted to land in
+    `notices` rather than `warnings`.
     """
     from dataclasses import replace as replace_dataclass
 
     from belief_ledger_pramana.hermes.cli import doctor
 
+    def verdict(report: dict) -> str:
+        """The rule from `doctor`, applied to one report's own lists."""
+        if report["errors"]:
+            return "unavailable"
+        return "degraded" if report["warnings"] else "healthy"
+
     runtime.ensure_initialized()
     quiet = doctor(runtime)
     assert quiet["checks"]["replay_budget"]["max_events_warn"] == 50_000
     assert quiet["checks"]["replay_budget"]["over_threshold"] is False
-    assert not any("replay" in item for item in quiet["warnings"])
+    assert not any("max_events_warn" in item for item in quiet["warnings"])
+    assert not any("max_events_warn" in item for item in quiet["notices"])
 
     data = dict(runtime.config.data)
     data["replay"] = {"max_events_warn": 1}
@@ -351,5 +365,31 @@ def test_doctor_reports_the_replay_budget(runtime) -> None:
     loud = doctor(runtime)
 
     assert loud["checks"]["replay_budget"]["over_threshold"] is True
-    assert any("max_events_warn" in item for item in loud["warnings"])
-    assert loud["status"] == quiet["status"], "a budget warning must not change the verdict"
+    assert any("max_events_warn" in item for item in loud["notices"])
+    assert not any("max_events_warn" in item for item in loud["warnings"])
+    # The budget must not move the verdict. Compare the warning sets rather than the two
+    # `status` strings, so this holds even when something unrelated already fixed the verdict.
+    assert loud["warnings"] == quiet["warnings"]
+    assert verdict(loud) == verdict(quiet), "a budget notice must not change the verdict"
+
+
+def test_a_replay_budget_notice_alone_leaves_a_clean_report_healthy() -> None:
+    """The regression the old assertion could not see, isolated from the fixture's errors.
+
+    `doctor`'s rule is `unavailable if errors else degraded if warnings else healthy`. Before this
+    change the budget message went into `warnings`, so a deployment with nothing wrong flipped to
+    `degraded` purely for having accumulated history. This pins the classification at the level
+    the bug lived at.
+    """
+    from belief_ledger_pramana.snapshots import replay_budget_warning
+
+    notice = replay_budget_warning(50_000, 50_000)
+    assert notice is not None
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    notices: list[str] = [notice]
+
+    status = "unavailable" if errors else "degraded" if warnings else "healthy"
+    assert status == "healthy", "a ledger that has accumulated history is used, not degraded"
+    assert notices == [notice]

@@ -44,7 +44,7 @@ from belief_ledger_pramana.models import (
 )
 from belief_ledger_pramana.runtime import PluginRuntime
 
-from .ablations import ablation_report
+from .ablations import MEASURED_ARMS, ablation_report
 
 ROOT = Path(__file__).resolve().parent
 
@@ -445,15 +445,14 @@ def _run_badha_case(case: dict[str, Any], config: dict[str, Any]) -> tuple[str, 
 
 
 def _measured_ablations() -> dict[str, float]:
+    """One rate per configuration the Suite A instrument can actually tell apart.
+
+    Every scenario below must be a distinct `(response, beliefs)` pair, because that pair is the
+    entire input to the measurement. `defeat_only` and `no_gate` are absent for exactly that
+    reason and are reported as unmeasurable by `ablation_report`; see ADR 0017.
+    """
     cases = _jsonl(ROOT / "suite_a_grounding" / "cases.jsonl")
-    counts = {
-        "flat_baseline": 0,
-        "types_only": 0,
-        "defeat_only": 0,
-        "no_generation_contract": 0,
-        "no_gate": 0,
-        "full": 0,
-    }
+    counts = dict.fromkeys(MEASURED_ARMS, 0)
     for case in cases:
         belief = _belief(case["belief"])
         typed_response = case["typed_response"].replace("BELIEF_ID", belief.id)
@@ -461,11 +460,10 @@ def _measured_ablations() -> dict[str, float]:
         scenarios = {
             "flat_baseline": (case["baseline_response"], []),
             "types_only": (typed_response, [pending]),
-            "defeat_only": (case["baseline_response"], []),
             "no_generation_contract": (case["baseline_response"], [belief]),
-            "no_gate": (typed_response, [belief]),
             "full": (typed_response, [belief]),
         }
+        assert set(scenarios) == set(MEASURED_ARMS), "scenario set drifted from MEASURED_ARMS"
         for name, (response, beliefs) in scenarios.items():
             report = lint_response(response, beliefs, pending_marker="(unverified)")
             counts[name] += sum(claim.disposition.value == "vikalpa" for claim in report.claims)

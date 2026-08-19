@@ -51,7 +51,7 @@ def _source(kind: SourceKind, competence: dict[str, float] | None = None) -> Sou
         Integrity.SEMI,
         kind.value,
         f"{kind.value}.example",
-        competence if competence is not None else {"self": 0.95, "general": 0.65},
+        competence if competence is not None else {"general": 0.65},
     )
 
 
@@ -123,12 +123,18 @@ def test_the_privilege_is_a_verification_waiver_not_a_competence_bump() -> None:
     assert matrix["user_world"]["high"]["k"] == 1
 
 
-def test_the_self_competence_entry_is_unreached_by_the_user_ingestion_path() -> None:
-    """`user_source` advertises `self: 0.95`, but no belief is ever given the `self` domain.
+def test_the_unreachable_self_competence_entry_is_gone_and_falls_back_conservatively() -> None:
+    """F-09 is closed by removal, and the fallback is the safe direction.
 
-    `ingest_user_message` extracts with `deterministic_candidates`, which always emits
-    `domain="general"`. Recorded as F-09; this test fails the day something starts setting it,
-    which is the point.
+    `user_source` used to advertise `self: 0.95` while `deterministic_candidates` always emitted
+    `domain="general"`, so nothing could reach it. The risk was never the dead value; it was what
+    the value would do the day someone gave a belief the `self` domain for an unrelated reason —
+    a silent competence grant nobody asked for in that diff.
+
+    With the entry gone, `effective_competence` falls back through `general`, so that same future
+    change yields 0.65 rather than 0.95. This test pins the fallback, not just the absence: an
+    assertion that the key is missing would still pass if the fallback were ever changed to
+    something permissive.
     """
     descriptor = user_source("person-1", "cli")
     source = Source(
@@ -141,9 +147,10 @@ def test_the_self_competence_entry_is_unreached_by_the_user_ingestion_path() -> 
         dict(descriptor.competence),
     )
 
-    assert descriptor.competence["self"] == 0.95
+    assert "self" not in descriptor.competence
     assert effective_competence(source, "general", CONFIG) == pytest.approx(0.65)
-    assert effective_competence(source, "self", CONFIG) == pytest.approx(0.95)
+    assert effective_competence(source, "self", CONFIG) == pytest.approx(0.65)
+    assert effective_competence(source, "anything_unmapped", CONFIG) == pytest.approx(0.65)
 
 
 # --- characterisation of the pattern's current behaviour ---------------------------------------
