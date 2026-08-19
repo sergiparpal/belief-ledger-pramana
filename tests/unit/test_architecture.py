@@ -119,11 +119,14 @@ OVERSIZED_EXEMPTIONS: dict[str, tuple[int, str]] = {
         "from the table that must list all of them.",
     ),
     "belief_ledger_pramana/hermes/cli.py": (
-        738,
+        879,
         "One argparse tree and one dispatch function. Grew past the limit in Stages 4 to 6, which "
-        "added the divergence, anchor and snapshot commands. Ceiling moved once, 723 to 738 in "
-        "Stage 8, for the `replay_budget` check in `doctor`: the guard caught that addition, "
-        "which is the intended workflow — a ceiling moves only in a change that says why.",
+        "added the divergence, anchor and snapshot commands. Ceiling moved twice: 723 to 738 in "
+        "Stage 8 for the `replay_budget` check in `doctor`, and 738 to 879 for the doctor "
+        "severity split — the `notices` list, the `anchor` check with its own comparison helper, "
+        "and the `strict_guarantee` check. The guard caught both additions, which is the intended "
+        "workflow — a ceiling moves only in a change that says why. The anchor helper is the "
+        "natural seam if this file is split: it is self-contained and has no argparse coupling.",
     ),
 }
 

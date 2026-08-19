@@ -28,6 +28,7 @@ from ..config import (
     require_private_path,
     validate_config,
 )
+from ..contracts import EnforcementProfile
 from ..events import canonical_json, to_primitive, utc_now
 from ..llm.divergence import divergence_report
 from ..migrations import LATEST_SCHEMA_VERSION
@@ -386,9 +387,19 @@ def _tool_descriptors(runtime: PluginRuntime) -> tuple[ToolDescriptor, ...]:
 
 
 def doctor(runtime: PluginRuntime) -> dict[str, Any]:
+    """Offline diagnostics, reported in three severities that mean three different things.
+
+    `errors` make the adapter unusable, `warnings` degrade the verdict, and `notices` never move
+    it. The third list exists because two useful facts are neither: a replay approaching its
+    budget is a scaling heads-up on a perfectly healthy ledger, and a host that structurally
+    cannot offer the strong guarantee is not a fault to be fixed. Before `notices` existed both
+    had to be either invisible or a degradation, and the replay budget was documented in four
+    places as one thing while being implemented as the other.
+    """
     checks: dict[str, Any] = {}
     errors: list[str] = list(runtime.compatibility.errors)
     warnings: list[str] = list(runtime.compatibility.warnings)
+    notices: list[str] = []
     checks["python"] = runtime.compatibility.python_version
     checks["versions"] = {
         "product_core": _distribution_version("belief-ledger-core"),
@@ -426,6 +437,35 @@ def doctor(runtime: PluginRuntime) -> dict[str, Any]:
             "reason_codes": list(runtime.profile_selection.reason_codes),
             "downgraded": runtime.profile_selection.downgraded,
         }
+        # Two different facts, and conflating them is why neither was visible before.
+        #
+        # A downgrade is a gap between the guarantee an operator asked for and the one they got,
+        # so it degrades: someone configured this deployment expecting enforcement it does not
+        # have. The capability cap is not a gap — an audited Hermes host structurally cannot
+        # offer atomic token consumption or exclusive delivery, whatever anyone requests — so it
+        # is a notice. Degrading forever on a limit nobody can lift trains operators to ignore
+        # the verdict, which is the failure this check exists to prevent.
+        if runtime.profile_selection.downgraded:
+            warnings.append(
+                "enforcement profile downgraded from "
+                f"{runtime.profile_selection.requested.value} to "
+                f"{runtime.profile_selection.effective.value}; missing capabilities: "
+                + (", ".join(runtime.profile_selection.missing) or "none")
+                + "; reasons: "
+                + (", ".join(runtime.profile_selection.reason_codes) or "none")
+            )
+        strict_shortfall = runtime.host_capabilities.missing_for(EnforcementProfile.STRICT)
+        checks["strict_guarantee"] = {
+            "available": not strict_shortfall,
+            "missing": list(strict_shortfall),
+        }
+        if strict_shortfall:
+            notices.append(
+                "this host cannot provide the strict enforcement guarantee; missing "
+                + ", ".join(strict_shortfall)
+                + ". The strong guarantee is a property of a host that offers these "
+                "capabilities, not of the product. See docs/threat-model.md."
+            )
         ok, heads = runtime.store.verify_hash_chain()
         checks["database"] = {
             "path": str(runtime.store.database),
@@ -434,21 +474,28 @@ def doctor(runtime: PluginRuntime) -> dict[str, Any]:
             "schema": runtime.store.migration.to_version,
             "fts5": runtime.store.migration.fts5_available,
         }
+        anchor_check, anchor_severity, anchor_message = _anchor_doctor_check(runtime)
+        checks["anchor"] = anchor_check
+        if anchor_message:
+            {"error": errors, "warning": warnings, "notice": notices}[anchor_severity].append(
+                anchor_message
+            )
         # Replay cost grows with total history, so the scaling wall has to be visible before an
         # operator hits it rather than the first time a replay takes too long (ADR 0014). Doctor
         # is where an operator looks when nothing is wrong yet, which is exactly when this is
-        # worth knowing. It reports; it never changes the health verdict.
+        # worth knowing. It reports; it never changes the health verdict — which is why it is a
+        # notice. A ledger that has accumulated history is not degraded, it is used.
         event_count = len(runtime.store.events())
-        replay_warning = replay_budget_warning(
+        replay_notice = replay_budget_warning(
             event_count, int(runtime.config.data["replay"]["max_events_warn"])
         )
         checks["replay_budget"] = {
             "events": event_count,
             "max_events_warn": int(runtime.config.data["replay"]["max_events_warn"]),
-            "over_threshold": replay_warning is not None,
+            "over_threshold": replay_notice is not None,
         }
-        if replay_warning:
-            warnings.append(replay_warning)
+        if replay_notice:
+            notices.append(replay_notice)
         permission_issues = _permission_issues(runtime)
         checks["permissions"] = {"ok": not permission_issues, "issues": permission_issues}
         warnings.extend(permission_issues)
@@ -533,6 +580,7 @@ def doctor(runtime: PluginRuntime) -> dict[str, Any]:
         "checks": checks,
         "warnings": sorted(set(warnings)),
         "errors": sorted(set(errors)),
+        "notices": sorted(set(notices)),
     }
 
 
@@ -630,6 +678,99 @@ def _anchor_sink(runtime: PluginRuntime) -> FileAnchorSink:
             "anchoring.sink_path is empty; set it to a path outside the ledger directory"
         )
     return FileAnchorSink(Path(configured), ledger_directory=runtime.paths.root)
+
+
+def _anchor_doctor_check(runtime: PluginRuntime) -> tuple[dict[str, Any], str, str]:
+    """Whether external anchoring is configured, in use, and still agreeing with the chain.
+
+    Anchoring shipped as a mechanism with no way to tell whether anyone is using it. An operator
+    who never runs `anchor publish` gets exactly the same silent report as one who anchors hourly,
+    which makes the defence indistinguishable from its absence.
+
+    Only the newest anchor is compared, and that is a deliberate choice rather than a shortcut.
+    Re-chaining after an edit changes the root at every height at or above the edit, so any anchor
+    taken after the tampered range disagrees — and the newest is the one most likely to sit after
+    it. An edit newer than the newest anchor is invisible to *every* anchor, so checking the older
+    ones adds no coverage against it. What checking all of them would add is cost: each comparison
+    re-streams the event log through `chain_state(up_to_height=...)`, so a full sweep is O(anchors
+    x events) in a command an operator runs casually. `db verify-chain --against-anchors` remains
+    the exhaustive check.
+
+    Severity follows what the operator can do about it, and the three cases are genuinely
+    different. A mismatch is tamper evidence and is an error. A sink that is configured but
+    cannot be read is a misconfiguration someone has to fix, so it is a warning. An empty
+    `anchoring.sink_path` is documented as the way to disable anchoring, so it is a deliberate
+    posture and only ever a notice — degrading every default deployment for declining an optional
+    control would make the verdict meaningless. Having a sink but never publishing to it is also
+    a notice, for the same reason.
+    """
+    if runtime.store is None:
+        raise RuntimeError("ledger store is unavailable after initialization")
+    # Read the setting rather than the exception. `_anchor_sink` raises AnchorError both for the
+    # documented opt-out and for a genuinely broken path, and those are not the same severity.
+    if not str(runtime.config.data["anchoring"]["sink_path"]).strip():
+        return (
+            {"configured": False, "enabled": False},
+            "notice",
+            "external chain anchoring is disabled (anchoring.sink_path is empty). Hash chaining "
+            "alone does not detect an attacker who can read the integrity key and re-chain. See "
+            "docs/threat-model.md.",
+        )
+    try:
+        sink = _anchor_sink(runtime)
+        records = list(sink.fetch(0))
+    except AnchorError as exc:
+        return (
+            {
+                "configured": True,
+                "enabled": True,
+                "error": "anchor_unavailable",
+                "message": str(exc),
+            },
+            "warning",
+            f"external chain anchoring is configured but unusable: {exc}",
+        )
+    store = runtime.store
+    current = store.chain_state()
+    if not records:
+        return (
+            {
+                "configured": True,
+                "enabled": True,
+                "sink": str(sink.path),
+                "anchors": 0,
+                "current_height": current.chain_height,
+            },
+            "notice",
+            f"no chain anchor has ever been published to {sink.path}; the hash chain is "
+            "self-consistent but nothing outside the ledger corroborates it. Run "
+            "`belief-ledger anchor publish`.",
+        )
+    newest = max(records, key=lambda record: record.chain_height)
+    comparison = compare_against_anchors(
+        [newest],
+        local_root_at=lambda height: store.chain_state(up_to_height=height).root_hash,
+        current_height=current.chain_height,
+    )[0]
+    check = {
+        "configured": True,
+        "enabled": True,
+        "sink": str(sink.path),
+        "anchors": len(records),
+        "newest_anchor_height": newest.chain_height,
+        "current_height": current.chain_height,
+        "events_since_newest_anchor": max(0, current.chain_height - newest.chain_height),
+        "newest_status": comparison.status,
+    }
+    if comparison.status != "match":
+        return (
+            check,
+            "error",
+            f"newest chain anchor at height {newest.chain_height} is {comparison.status}: the "
+            "local chain is not the chain that was anchored. Run "
+            "`belief-ledger db verify-chain --against-anchors`.",
+        )
+    return check, "notice", ""
 
 
 def _anchor_publish(runtime: PluginRuntime, *, scope: str) -> tuple[int, str]:

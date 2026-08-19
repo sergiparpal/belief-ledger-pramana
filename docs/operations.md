@@ -26,6 +26,14 @@ schema/hash integrity, private permissions, and registered tools. It separately 
 requested, and effective profiles; healthy Hermes is `accepted_final`, not strict. Doctor is
 offline and performs only a temporary state-directory write probe.
 
+The report carries three lists, and the difference between them is the verdict. `errors` mean the
+adapter is unusable and give `status: unavailable`. `warnings` give `status: degraded` and mean
+something a person has to fix — a profile downgraded below what was requested, an unreadable anchor
+sink. `notices` never move the verdict: they carry facts that are true of a healthy deployment, such
+as a replay approaching its budget, anchoring being switched off, or this host being structurally
+unable to offer the strict guarantee. Anything that fires on a correctly configured system belongs
+in `notices`, because a warning that is always present is a warning nobody reads.
+
 Routine commands:
 
 ```bash
@@ -68,9 +76,10 @@ naming the first differing table and row.
 
 `replay.max_events_warn` (default 50 000) makes the scaling wall visible before it is hit. Both
 `db replay` and `doctor` report it: `doctor` carries a `replay_budget` check with the event count
-and the threshold, and adds a warning once the count reaches it. Neither refuses, and the warning
+and the threshold, and adds a **notice** once the count reaches it. Neither refuses, and the notice
 does not change doctor's health verdict. Treat the first one as the signal to start snapshotting,
-not as an error.
+not as an error. Until 2026-08-19 this message was appended to `warnings`, which did move the
+verdict — a ledger flipped to `degraded` for nothing worse than having been used.
 
 Snapshot payloads contain projection rows and are as sensitive as the database they came from.
 Keep them in the same encrypted backup set.
@@ -85,6 +94,13 @@ hermes belief-ledger anchor publish --scope global
 hermes belief-ledger anchor verify --json
 hermes belief-ledger db verify-chain --against-anchors
 ```
+
+`doctor` reports anchoring state in a `checks["anchor"]` block so the control is not silently
+unused: an empty `sink_path` is a notice naming the opt-out, a configured sink that cannot be read is
+a warning, a sink with no published record is a notice, and a newest anchor that disagrees with the
+recomputed root is an **error**. Doctor compares only the newest anchor, because re-chaining changes
+the root at every height at or above the edit and each comparison re-streams the log; `db
+verify-chain --against-anchors` remains the exhaustive check.
 
 `anchor verify` exits non-zero on any anchored root that disagrees with the recomputed local root,
 and on any anchored height the local chain no longer reaches. Both are tamper evidence; the output

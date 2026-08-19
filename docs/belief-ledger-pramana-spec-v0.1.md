@@ -463,7 +463,7 @@ What this system buys in this trace: the correction did not depend on the model 
 
 ### Ablations
 
-Flat baseline · types only (no defeat) · defeat only (no types) · no compiler contract · no gate. The question for every ablation: which component earns its cost?
+Flat baseline · types only (no defeat) · defeat only (no types) · no compiler contract · no gate. The question for every ablation: which component earns its cost? Two of the five carry no rate. The Suite A instrument is the vikalpa rate of `lint_response(response, beliefs)`, which observes neither belief status nor tool dispatch, so `defeat_only` and `no_gate` cannot be isolated by it at any arguments and report `measurable: false`; Suite B measures defeat and Suite C measures the gate. See [ADR 0017](adr/0017-ablation-arms-the-suite-a-instrument-cannot-isolate.md).
 
 ### Costs and collapse
 
