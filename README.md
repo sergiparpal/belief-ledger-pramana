@@ -156,4 +156,6 @@ open a pull request. GitHub release `v0.2.1` records the complete RC4 source sta
 publish the distributions to a package registry or upload built wheels or sdists. See
 [CHANGELOG.md](CHANGELOG.md), [RELEASE_NOTES.md](RELEASE_NOTES.md), and
 [the product-surface ADR](docs/adr/0007-host-neutral-product-surface.md). The
-[decision records](docs/adr/README.md) index every decision that constrains the implementation.
+[decision records](docs/adr/README.md) index every decision that constrains the implementation, and
+[open findings](docs/open-findings.md) records what is known to be wrong or unproven and is not
+fixed, with the evidence for each.
