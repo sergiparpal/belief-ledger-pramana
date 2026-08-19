@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Removed the second-granularity truncation from `recency_rank`. The fifth priority key was
+  `int(observed_at.timestamp())`, so whether two beliefs tied on recency depended on where a second
+  boundary fell rather than on how far apart they were: 2 ms across a boundary resolved, 998 ms
+  inside one second went to saṃśaya and both beliefs to `PENDING`, which has no active exit. The key
+  is now whole microseconds computed with integer arithmetic on the `timedelta` — `datetime`'s own
+  resolution, so a tie means one instant. `int(observed_at.timestamp() * 1_000_000)` was rejected:
+  float64 spacing collapses distinct microseconds at a rate that grows with the date (0% in 2026,
+  9.7% in 2038, 50% in 2260), which is the same defect arriving with a calendar. Recency stays
+  fifth, so nothing that wins on integrity, type, reliability or specificity can lose on age. Frozen
+  v1 replay fixtures are unaffected. See
+  [ADR 0016](docs/adr/0016-full-precision-recency-key.md), closing #31.
 - Recorded a measured baseline for the obvious-fix plan in `docs/obvious-fix-baseline.md`, including the
   experiment showing that defeat semantics are replay-independent: frozen v1 event and projection
   hashes do not move when `compare_priority` changes.

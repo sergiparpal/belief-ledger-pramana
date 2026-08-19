@@ -509,3 +509,54 @@ untouched: changing the recency granularity from seconds to full precision would
 deviation and needs its own ADR. Left open, since second-granularity truncation still makes the
 outcome for two claims under a second apart depend on where the boundary falls — see the note in
 the test docstring.
+
+## Full-precision recency key (ADR 0016), closing #31 — 2026-08-19
+
+The item left open by the deflake above. `priority_trace` computed the fifth key as
+`int(observed_at.timestamp())`, so `recency_rank` sat on a fixed one-second grid and whether two
+beliefs tied depended on where a boundary fell rather than on how far apart they were — 2 ms across
+a boundary resolved, 998 ms inside one second produced saṃśaya and two `PENDING` beliefs. `PENDING`
+has no active exit, which is the harm ADR 0011 was written to close; truncation reintroduced it
+non-deterministically for any pair observed inside one second.
+
+The key is now whole microseconds from integer arithmetic on the `timedelta`. `datetime` resolves to
+one microsecond, so the conversion is lossless and a tie means one instant.
+
+`int(observed_at.timestamp() * 1_000_000)` — the obvious spelling, and the one the issue suggested —
+was measured and rejected. float64 spacing at the current epoch is ~0.24 µs and grows with the date,
+so it collapses adjacent microseconds back into ties: 0% of 100 000 pairs at 2026 and 2100, 9.7% at
+2038, 50% at 2260, and it differs from the true microsecond count by 1 µs in ~10% of 100 000 random
+timestamps across 1971–2260. Today's tests would be green and the artifact would return in 2038.
+`test_distinct_instants_never_share_a_rank_at_any_epoch` is parametrized over those epochs and was
+confirmed to fail at 2038 and 2260 under the float route.
+
+Both regression tests were verified against the defects they guard rather than assumed to work:
+reinstating second-truncation fails `test_a_sub_second_gap_decides_wherever_the_second_boundary_falls`
+at `[inside-one-second]` and `[one-microsecond]`, and substituting the float route fails
+`test_distinct_instants_never_share_a_rank_at_any_epoch` at exactly `[2038]` and `[2260]`.
+
+`_timestamp` becomes `_recency_micros`, carrying the same timezone guard and message; ADR 0011's
+defence-in-depth argument for it is unchanged and still pinned. Two consequences the issue did not
+raise are recorded in ADR 0016: `context/select.py` sorts the bounded context window on the same
+tuple, so same-second beliefs previously fell through to `belief.id` and are now ordered by
+observation time; and `recency_rank` is rendered by `queries.explain` through the Hermes tool and
+slash command, changing magnitude from ~1.79e9 to ~1.79e15 with no schema, fixture or contract
+pinning it.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_recency_priority.py` | 0 | 21 passed, up from 14. |
+| `pytest tests/` under both rejected implementations | 1 | Confirms each new test fails on the defect it guards; see above. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | 289 files formatted; no findings. |
+| `mypy packages/{core,gateway,mcp,reference}/src belief_ledger_pramana` | 0 | 158 source files. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 590 passed; 88.45% against the 88% floor; evaluations A–E `passed: true`. |
+| `python scripts/check_doc_invariants.py` | 0 | 6 facts across 9 files. |
+| `python scripts/check_product_claims.py` | 0 | 10 public metadata files. |
+
+Test count 583 → 590: three sub-second boundary cases and four epoch cases. The only pre-existing
+assertion that changed is `test_recency_is_computed_for_every_perishability_class`, which pinned
+`int(FRESHER.timestamp())` — the truncation itself rather than a behaviour — and now pins the
+microsecond count derived independently of the engine's arithmetic. The v1 replay contract stays
+green and `tests/fixtures/v1_replay/` is untouched, for the reason ADR 0011 records: relabel output
+is materialised into events and replay reapplies them rather than re-running the engine. The offline
+evaluation report is identical to the baseline except for timestamps and timing measurements.

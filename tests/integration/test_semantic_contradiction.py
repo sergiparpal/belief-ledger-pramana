@@ -5,12 +5,18 @@ Both claims here are ingested through `ingest_user_message`, which stamps `obser
 unconditional, that stamp decides the outcome: two user claims from one sender tie on integrity,
 type, reliability and specificity, so recency is the only key left to settle the contest.
 
-`priority_trace` computes the key as `int(observed_at.timestamp())`, i.e. truncated to whole
-seconds. Two ingestions a few milliseconds apart therefore tie *only* when they land inside the same
-wall-clock second. Reading the real clock leaves the assertion below to grid alignment — the same
-commit produced `pending`/`pending` on one CI run and `out`/`in` on another, because the second run
-happened to straddle a second boundary. So both regimes are pinned explicitly here rather than left
-to whichever one the clock happens to supply.
+`priority_trace` computed the key as `int(observed_at.timestamp())` when this test was written,
+i.e. truncated to whole seconds, so two ingestions a few milliseconds apart tied *only* when they
+landed inside the same wall-clock second. Reading the real clock left the assertion below to grid
+alignment — the same commit produced `pending`/`pending` on one CI run and `out`/`in` on another,
+because the second run happened to straddle a second boundary.
+
+[ADR 0016](../../docs/adr/0016-full-precision-recency-key.md) removed that truncation: the key is
+now whole microseconds, so two real-clock ingestions milliseconds apart always resolve and never
+tie. The pinned clock stays regardless. It is what makes the saṃśaya case below constructible at
+all — that case needs one identical timestamp, which no real clock will hand out — and pinning both
+regimes explicitly is what keeps this test a statement about the classifier rather than about
+whatever the engine's granularity happens to be.
 
 What does not depend on timing, and is the subject the test names: the classifier verdict produces
 two REBUT edges and an R5 belief either way.
