@@ -24,7 +24,9 @@ tied.
 
 Two rules sit outside the tuple entirely. Positive evidence always defeats an admitted absence,
 whatever the tuple says; and equality across all five keys is not a tie-break but saṃśaya, which
-`relabel` turns into PENDING rather than an arbitrary winner.
+`relabel` turns into PENDING rather than an arbitrary winner. Equality on the fifth key means the
+same instant to the microsecond, not the same wall-clock second: see ADR 0016 for why the coarser
+reading made saṃśaya depend on where a boundary happened to fall.
 
 The order is pinned structurally by `tests/unit/test_priority_order.py`, so it cannot drift from
 this docstring silently. See `docs/adr/0010-scalar-competence-in-the-priority-order.md`.
@@ -34,7 +36,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from ..models import Belief, Pramana, Source
@@ -91,7 +93,7 @@ def priority_trace(belief: Belief, source: Source, config: dict[str, Any]) -> Pr
     # fifth and last key, so it can only settle a contest that integrity, type, reliability and
     # specificity all left tied — see ADR 0011. Before that change two slow or static beliefs
     # differing only in age produced saṃśaya, and saṃśaya has no active exit.
-    recency = int(_timestamp(belief.observed_at))
+    recency = _recency_micros(belief.observed_at)
     return PriorityTrace(
         belief.id,
         integrity_rank,
@@ -154,7 +156,26 @@ def _type_key(belief: Belief, reliability: float, config: dict[str, Any]) -> str
     return belief.pramana.value
 
 
-def _timestamp(value: datetime) -> float:
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def _recency_micros(value: datetime) -> int:
+    """Whole microseconds since the epoch, computed without going through a float.
+
+    `datetime` resolves to one microsecond, so this conversion is lossless: two beliefs share a
+    `recency_rank` exactly when they name the same instant. That equivalence is the rule ADR 0011
+    states and ADR 0016 restores — a coarser key makes saṃśaya depend on where an arbitrary
+    boundary falls rather than on the beliefs, and `PENDING` has no active exit.
+
+    `value.timestamp() * 1_000_000` would not do. A float64 holding seconds since 1970 spaces its
+    representable values ~0.24 µs apart today and further apart every year, so distinct instants
+    would collapse back into ties at a rate that grows with the date — the same defect at a finer
+    grid, arriving silently. Integer arithmetic on the `timedelta` has no such horizon.
+
+    The timezone guard is kept here as well as at the model boundary. ADR 0011 explains why that
+    redundancy is deliberate rather than dead code once `Belief.__post_init__` enforces the rule.
+    """
     if value.tzinfo is None:
         raise ValueError("belief observed_at must be timezone-aware")
-    return value.timestamp()
+    delta = value - _EPOCH
+    return delta.days * 86_400_000_000 + delta.seconds * 1_000_000 + delta.microseconds

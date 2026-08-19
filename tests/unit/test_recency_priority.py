@@ -1,4 +1,4 @@
-"""Recency as an unconditional priority key (ADR 0011).
+"""Recency as an unconditional, full-precision priority key (ADR 0011, ADR 0016).
 
 Before this change `priority_trace` computed recency only for FAST and LIVE beliefs and left it at
 zero for everything else. Two SLOW or STABLE beliefs that differed only in age therefore tied on
@@ -8,6 +8,11 @@ into an unbounded queue.
 
 Recency stays the fifth and last key. It can only settle a contest that integrity, type,
 reliability and specificity all left tied, which bounds the blast radius by construction.
+
+ADR 0016 then removed the second-granularity truncation. The key was `int(observed_at.timestamp())`,
+so whether two beliefs tied depended on where the second boundary fell rather than on how far apart
+they were: 2 ms across a boundary resolved, 998 ms inside one second went to saṃśaya. The key is now
+whole microseconds, which is `datetime`'s own resolution, so a tie means one instant.
 """
 
 from __future__ import annotations
@@ -37,6 +42,13 @@ from belief_ledger_pramana.models import (
 CONFIG = packaged_yaml("defaults.yaml")
 OLDER = datetime(2026, 7, 11, 9, 0, tzinfo=UTC)
 FRESHER = OLDER + timedelta(hours=6)
+EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def _micros(value: datetime) -> int:
+    """The expected rank, derived independently of the engine's own arithmetic."""
+    delta = value - EPOCH
+    return delta.days * 86_400_000_000 + delta.seconds * 1_000_000 + delta.microseconds
 
 
 def _source(
@@ -101,7 +113,7 @@ def test_recency_is_computed_for_every_perishability_class(
         _belief("b", source, FRESHER, perishability=perishability), source, CONFIG
     )
 
-    assert trace.recency_rank == int(FRESHER.timestamp())
+    assert trace.recency_rank == _micros(FRESHER)
 
 
 @pytest.mark.parametrize(
@@ -122,6 +134,81 @@ def test_the_fresher_of_two_otherwise_identical_beliefs_wins(
     assert comparison.decisive_field == "recency"
     assert comparison.result == 1
     assert compare_priority(older, fresher, sources, CONFIG).result == -1
+
+
+SECOND_BOUNDARY = datetime(2026, 7, 11, 12, 0, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("older", "fresher", "gap"),
+    [
+        (
+            SECOND_BOUNDARY - timedelta(milliseconds=1),
+            SECOND_BOUNDARY + timedelta(milliseconds=1),
+            "2 ms across a second boundary",
+        ),
+        (
+            SECOND_BOUNDARY + timedelta(milliseconds=1),
+            SECOND_BOUNDARY + timedelta(milliseconds=999),
+            "998 ms inside one second",
+        ),
+        (
+            SECOND_BOUNDARY,
+            SECOND_BOUNDARY + timedelta(microseconds=1),
+            "one microsecond, the finest gap a datetime expresses",
+        ),
+    ],
+    ids=["boundary-straddle", "inside-one-second", "one-microsecond"],
+)
+def test_a_sub_second_gap_decides_wherever_the_second_boundary_falls(
+    older: datetime, fresher: datetime, gap: str
+) -> None:
+    """The defect ADR 0016 removed: under truncation the middle row tied and the first did not.
+
+    Two claims 2 ms apart resolved because a second boundary happened to fall between them, while
+    two claims 500x further apart went to saṃśaya because it did not. Whether the ledger can tell
+    two observations apart is now a fact about the observations.
+    """
+    source = _source()
+    sources = {source.id: source}
+
+    comparison = compare_priority(
+        _belief("b_fresh", source, fresher), _belief("b_old", source, older), sources, CONFIG
+    )
+
+    assert comparison.decisive_field == "recency", gap
+    assert comparison.result == 1
+    assert (
+        compare_priority(
+            _belief("b_old", source, older), _belief("b_fresh", source, fresher), sources, CONFIG
+        ).result
+        == -1
+    )
+
+
+@pytest.mark.parametrize("year", [2026, 2038, 2100, 2260])
+def test_distinct_instants_never_share_a_rank_at_any_epoch(year: int) -> None:
+    """Guards the arithmetic, not just the granularity.
+
+    `int(observed_at.timestamp() * 1_000_000)` is the obvious way to write this key and is wrong:
+    a float64 holding seconds since 1970 spaces its representable values ~0.24 us apart today and
+    ~1.9 us apart in 2260, so it collapses adjacent microseconds back into ties — measured at 0% of
+    pairs in 2026, 9.7% in 2038 and 50% in 2260. A tie that arrives with a calendar date is worse
+    than the one ADR 0016 removed, because no test written today would see it. The engine uses
+    integer arithmetic on the timedelta, which has no such horizon; these epochs are the fixtures
+    that would fail under the float route.
+    """
+    source = _source()
+    base = datetime(year, 6, 1, 12, 0, 0, tzinfo=UTC)
+    ranks = {
+        priority_trace(
+            _belief(f"b_{offset}", source, base + timedelta(microseconds=offset)), source, CONFIG
+        ).recency_rank
+        for offset in range(64)
+    }
+
+    assert len(ranks) == 64
+    assert ranks == {_micros(base) + offset for offset in range(64)}
 
 
 def test_recency_cannot_override_an_earlier_key() -> None:
@@ -244,7 +331,7 @@ def test_the_same_pair_at_one_timestamp_is_still_pending() -> None:
 
 
 def test_a_naive_observed_at_is_refused_at_construction() -> None:
-    """Making recency unconditional made `_timestamp`'s raise reachable for every belief.
+    """Making recency unconditional made the engine's naive-datetime raise reachable everywhere.
 
     The guarantee is enforced at the model boundary instead, so an invalid value cannot reach
     defeat resolution at all.
@@ -256,7 +343,7 @@ def test_a_naive_observed_at_is_refused_at_construction() -> None:
 
 
 def test_the_engines_own_timezone_guard_is_kept_as_defence_in_depth() -> None:
-    """`_timestamp` still refuses a naive value even though construction should have.
+    """`_recency_micros` still refuses a naive value even though construction should have.
 
     The constructor makes this unreachable through any ordinary path, which is exactly why it is
     worth pinning: the guard is deliberate redundancy, not dead code left behind, and a future
