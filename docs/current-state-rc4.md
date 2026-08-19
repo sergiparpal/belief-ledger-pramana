@@ -94,6 +94,12 @@ Three new machine checks now gate the tree: documented constants must equal the 
 from, the `belief_ledger_pramana` import surface must not lose a module or a name, and no source
 file may exceed 600 lines outside eight exemptions that each carry a ceiling and a reason.
 
+What that plan deliberately left untouched, plus everything a later audit confirmed against the
+code, is recorded in [open findings](open-findings.md). It is the register of what is true of the
+tree now rather than of what any one plan set out to do, and it carries the evidence for each entry
+so a reader can re-check it. Three claims made in review are recorded there as *not* reproduced,
+which is the other half of the same job.
+
 Test count 353 → 581; combined coverage 88.16% → 88.46% against an unchanged 88% floor.
 Twenty-four findings are recorded in [the findings register](obvious-fix-findings.md), including four
 existing tests that had to change and one — F-20 — that had silently stopped exercising the
