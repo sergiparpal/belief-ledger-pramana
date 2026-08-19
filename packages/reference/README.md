@@ -16,6 +16,6 @@ and buffered output through one owned sink. Deployment and CRM examples are comp
 | `ReferenceRunner` | `strict` | Owns inventory, private handlers, permit consumption, buffering, and the sole sink. |
 
 `belief_ledger_reference.ReferenceRunner` is the supported package entry point. See
-[adapter authoring](../../docs/adapter-authoring.md) and
-[adapter conformance](../../docs/adapter-conformance.md) before using it as a construction example.
+[adapter conformance and authoring](../../docs/adapter-conformance.md) before using it as a
+construction example.
 Repository scripts build local artifacts but do not publish this distribution.
