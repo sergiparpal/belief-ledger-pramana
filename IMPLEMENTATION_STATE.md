@@ -565,7 +565,7 @@ evaluation report is identical to the baseline except for timestamps and timing 
 
 ## Documentation consolidation — 2026-08-19
 
-Removes four documents and merges what only they carried, after an inbound-reference sweep over
+Removes five documents and merges what only they carried, after an inbound-reference sweep over
 every tracked Markdown file. No source, schema, test, or fixture changed; the gate below is the
 full one regardless, because two of the removed documents are cited by ADRs.
 
@@ -588,3 +588,65 @@ Relative-link sweep over all tracked Markdown: no broken `](*.md)` link remains.
 mentions of `docs/current-state-rc3.md` and `docs/current-state-rc4.md` survive in the historical
 sections of this file, which is the existing convention here — the rc3 mention was already
 dangling on `main` after that document was renamed.
+
+## CI Hermes checkouts, dependency bumps, and two corrected counts — 2026-08-20
+
+Five commits landed after the documentation consolidation and none of them was recorded here: four
+Dependabot bumps and the fix for the CI failure the first of those bumps was blamed for. No source,
+schema, test, or fixture changed in any of them, and none changed a distribution version.
+
+`exact-hermes-contract` is one of the eleven jobs in `ci-complete`'s `needs:` list, and its first
+step after the sync was an unauthenticated `git clone` of `NousResearch/hermes-agent`. Anonymous
+clones share the runner pool's IP rate limit, so github.com answered HTTP 429 and failed that
+required job on `0c04755` — a commit whose own pull-request run had been green, and whose content
+was a `setup-uv` bump that never touched the clone. A required job failing for a reason outside the
+change under test is indistinguishable, at the branch ruleset, from a real regression.
+
+Both external clones now go through the already-pinned `actions/checkout`, which authenticates the
+fetch with the workflow token, retries a throttled response, and transfers only the commit being
+audited instead of the whole history. `persist-credentials: false` keeps the token out of the
+throwaway checkout. `hermes-main-canary` moved the same way: it is `continue-on-error`, so a 429
+there costs signal rather than a red build, but a canary that flakes is not a canary.
+
+The contract itself did not move. `scripts/check_hermes_contract.py` still pins
+`AUDITED_VERSION = "0.19.0"` and `AUDITED_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"`, and
+a depth-1 checkout of that commit still reports the audited commit, the version, and all eight
+source-mode capabilities.
+
+| Bump | From | To | Scope |
+|---|---|---|---|
+| `astral-sh/setup-uv` | 9.0.0 | 10.0.1 | CI action, re-pinned by SHA in the twelve jobs that use it |
+| `mypy` | 2.3.0 | 2.3.1 | dev group |
+| `hypothesis` | 6.165.2 | 6.165.10 | dev group |
+| `types-pyyaml` | 6.0.12.20260724 | 6.0.12.20260815 | dev group |
+
+Every count the consolidation entry states was re-measured in the same pass, and two of them were
+wrong. Both errors were in the arithmetic, not the prose: each document already listed all five
+removed files by name.
+
+| Claim | Was | Is | How it was measured |
+|---|---|---|---|
+| Documents removed by the consolidation | "four" in this file | five | `git show 05dc49f --diff-filter=D --name-only` lists five `.md` deletions. |
+| Tracked Markdown after the consolidation | "53" in `CHANGELOG.md` | 52 | `git ls-tree -r --name-only 05dc49f \| grep -c '\.md$'`, and `git ls-files '*.md' \| wc -l` at HEAD both return 52. |
+
+One count that looks stale is not. O-22 in `docs/open-findings.md` cites "over 58 commits" as the
+evidence for no external review, and the graph is at 65. It was left alone: that file pins every
+measurement in it to commit `c1c8bdf`, and `git log --oneline c1c8bdf | wc -l` is exactly 58. The
+author set it reports is also unchanged — `Sergi Parpal`, `sergiparpal`, `dependabot[bot]` — and
+nothing between `c1c8bdf` and HEAD touched code, so the baseline still holds and refreshing one
+figure inside it would have broken the convention that makes the rest re-checkable.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `pytest tests/unit/test_doc_invariants.py tests/unit/test_product_claims.py tests/unit/test_compat_surface.py tests/contract/test_workspace_packages.py` | 0 | 108 passed. These are the checks that read Markdown. |
+| `python scripts/check_doc_invariants.py` | 0 | 6 facts across 9 files; no documented constant moved, which is why neither count error was caught by it. |
+| `python scripts/check_product_claims.py` | 0 | 10 public metadata files. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 603 passed; evaluations A–E `passed: true`. Run three times across the edits: 88.46%, 88.46%, then 88.47% against the 88% floor, so the combined figure is not bit-stable run to run. Test count and evaluation results match the pre-change baseline, as expected for a documentation-only change. |
+
+Relative-link sweep over all 52 tracked Markdown files: every relative Markdown link resolves to a
+file that exists. A naive regex sweep reports one non-resolving match, and it is not a link: it is
+the inline-code fragment in which the consolidation section above quotes the link syntax itself.
+
+Not recorded as a finding: `scripts/check_doc_invariants.py` guards six derived constants, and
+neither corrected count is derivable from code — both are properties of a past commit. Nothing
+mechanical would have caught them, and the check that did was re-measuring the claim.

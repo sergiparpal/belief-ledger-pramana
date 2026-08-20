@@ -2,18 +2,33 @@
 
 ## Unreleased
 
-- Consolidated the documentation set from 57 files to 53. Removed `docs/baseline-v1rc1.md`, a
-  frozen rc1 snapshot with no inbound reference whose every value — Hermes 0.18.2, schema 2,
-  `1.0.0rc2` — had been superseded, and `docs/event-format.md`, which nothing linked; the envelope
-  example and the `event_auth` and event-family paragraphs it alone carried moved into
-  `docs/event-compatibility.md`, which the README already links for the same subject. Folded
-  `docs/obvious-fix-baseline.md` into `docs/obvious-fix-report.md` as an appendix, keeping the R1,
-  R2 and R3 answers that ADRs 0010, 0011 and 0012 cite as evidence. Folded
+- Fetched both Hermes checkouts in CI through the pinned `actions/checkout` rather than an
+  anonymous `git clone`. `exact-hermes-contract` is a required job, and an unauthenticated clone of
+  `NousResearch/hermes-agent` shares the runner pool's IP rate limit: github.com answered HTTP 429
+  and failed the job on `0c04755`, a commit whose own pull-request run had been green. Nothing about
+  the change in that commit was involved. The action authenticates the fetch with the workflow
+  token, retries a throttled response, and transfers only the commit being audited instead of the
+  full history; `persist-credentials: false` keeps the token out of the throwaway checkout.
+  `hermes-main-canary` moves the same way — it is `continue-on-error`, so a 429 there costs signal
+  rather than a red build, but a canary that flakes is not a canary. The contract assertions are
+  unchanged: a depth-1 checkout of `3ef6bbd` still reports the audited commit, version `0.19.0`, and
+  all eight capabilities.
+- Bumped `astral-sh/setup-uv` from 9.0.0 to 10.0.1 via Dependabot, re-pinned to the new commit SHA
+  in all twelve jobs that use it, and bumped three dev-only leaves: `mypy` 2.3.0 to 2.3.1,
+  `hypothesis` 6.165.2 to 6.165.10, and `types-pyyaml` 6.0.12.20260724 to 6.0.12.20260815. No
+  runtime dependency moved, no distribution version changed, and no library code is affected.
+- Consolidated the documentation set from 57 tracked Markdown files to 52. Removed
+  `docs/baseline-v1rc1.md`, a frozen rc1 snapshot with no inbound reference whose every value —
+  Hermes 0.18.2, schema 2, `1.0.0rc2` — had been superseded, and `docs/event-format.md`, which
+  nothing linked; the envelope example and the `event_auth` and event-family paragraphs it alone
+  carried moved into `docs/event-compatibility.md`, which the README already links for the same
+  subject. Folded `docs/obvious-fix-baseline.md` into `docs/obvious-fix-report.md` as an appendix,
+  keeping the R1, R2 and R3 answers that ADRs 0010, 0011 and 0012 cite as evidence. Folded
   `docs/adapter-authoring.md` into `docs/adapter-conformance.md`, which it opened by referring to.
   Removed `docs/current-state-rc4.md`, a fourth rendering of the release narrative — 12% of it was
-  literal text from `RELEASE_NOTES.md` — and the only one no check guarded. No document lost a
-  fact: every claim removed is stated in `RELEASE_NOTES.md`, `CHANGELOG.md`,
-  `docs/obvious-fix-report.md`, or `docs/open-findings.md`.
+  literal text from `RELEASE_NOTES.md` — and the only one no check guarded. No document lost a fact:
+  every claim removed is stated in `RELEASE_NOTES.md`, `CHANGELOG.md`, `docs/obvious-fix-report.md`,
+  or `docs/open-findings.md`.
 - Removed the second-granularity truncation from `recency_rank`. The fifth priority key was
   `int(observed_at.timestamp())`, so whether two beliefs tied on recency depended on where a second
   boundary fell rather than on how far apart they were: 2 ms across a boundary resolved, 998 ms
