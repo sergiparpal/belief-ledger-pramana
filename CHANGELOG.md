@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Consolidated the documentation set from 57 files to 53. Removed `docs/baseline-v1rc1.md`, a
+  frozen rc1 snapshot with no inbound reference whose every value — Hermes 0.18.2, schema 2,
+  `1.0.0rc2` — had been superseded, and `docs/event-format.md`, which nothing linked; the envelope
+  example and the `event_auth` and event-family paragraphs it alone carried moved into
+  `docs/event-compatibility.md`, which the README already links for the same subject. Folded
+  `docs/obvious-fix-baseline.md` into `docs/obvious-fix-report.md` as an appendix, keeping the R1,
+  R2 and R3 answers that ADRs 0010, 0011 and 0012 cite as evidence. Folded
+  `docs/adapter-authoring.md` into `docs/adapter-conformance.md`, which it opened by referring to.
+  Removed `docs/current-state-rc4.md`, a fourth rendering of the release narrative — 12% of it was
+  literal text from `RELEASE_NOTES.md` — and the only one no check guarded. No document lost a
+  fact: every claim removed is stated in `RELEASE_NOTES.md`, `CHANGELOG.md`,
+  `docs/obvious-fix-report.md`, or `docs/open-findings.md`.
 - Removed the second-granularity truncation from `recency_rank`. The fifth priority key was
   `int(observed_at.timestamp())`, so whether two beliefs tied on recency depended on where a second
   boundary fell rather than on how far apart they were: 2 ms across a boundary resolved, 998 ms
@@ -13,7 +25,7 @@
   fifth, so nothing that wins on integrity, type, reliability or specificity can lose on age. Frozen
   v1 replay fixtures are unaffected. See
   [ADR 0016](docs/adr/0016-full-precision-recency-key.md), closing #31.
-- Recorded a measured baseline for the obvious-fix plan in `docs/obvious-fix-baseline.md`, including the
+- Recorded a measured baseline for the obvious-fix plan, including the
   experiment showing that defeat semantics are replay-independent: frozen v1 event and projection
   hashes do not move when `compare_priority` changes.
 - Documented the backward-compatible `belief_ledger_pramana` import surface in
