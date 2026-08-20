@@ -3,7 +3,7 @@
 from .dispatcher import GatewayDispatcher, HandlerResult
 from .protocol import MAX_LINE_BYTES, GatewayService, serve_jsonl
 
-__version__ = "1.0.0rc4"
+__version__ = "1.0.0rc5"
 
 __all__ = [
     "MAX_LINE_BYTES",

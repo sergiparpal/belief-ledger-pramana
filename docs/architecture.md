@@ -18,15 +18,15 @@ wrapped upstream boundary. The root distribution owns only Hermes compatibility 
 Dependencies point upward toward core and never back into an adapter; `scripts/check_workspace_boundaries.py`
 enforces static and literal dynamic imports. See [product surfaces](product-surface.md).
 
-The rc4 dependency graph uses exact same-candidate pins:
+The rc5 dependency graph uses exact same-candidate pins:
 
 ```text
 belief-ledger-core
   ^          ^             ^
-  | rc4      | rc4         | rc4
+  | rc5      | rc5         | rc5
 gateway   reference     pramana/Hermes
   ^
-  | rc4
+  | rc5
  MCP
 ```
 

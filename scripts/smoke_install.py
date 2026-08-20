@@ -127,7 +127,7 @@ def main() -> int:
         )
         report = json.loads(result.stdout)
         print(json.dumps(report, indent=2, sort_keys=True))
-    expected = report["register"] and report["version"] == "1.0.0rc4"
+    expected = report["register"] and report["version"] == "1.0.0rc5"
     if not args.skip_hermes:
         expected = expected and report["hermes"] == "0.19.0"
         expected = expected and report["middleware"] == ["llm_request"]
@@ -230,7 +230,7 @@ def _run_matrix(matrix: str, manifest_path: Path) -> int:
                     "a=BeliefLedgerMcp(l,mode=McpMode.PROXY,upstream=u,inventory_complete=True);"
                     "r=a.invoke(e.id,c,'lookup',{},namespace='local');"
                     "assert a.capability_profile=='action_enforce' and r.forwarded;"
-                    "assert r.content==b'{\"offline\":true}';print('1.0.0rc4')"
+                    "assert r.content==b'{\"offline\":true}';print('1.0.0rc5')"
                 )
             else:
                 code = (
@@ -240,7 +240,7 @@ def _run_matrix(matrix: str, manifest_path: Path) -> int:
                     "ep=next(x for x in eps if x.name=='belief-ledger-pramana');"
                     "assert callable(ep.load().register);"
                     "assert importlib.metadata.version('hermes-agent')=='0.19.0';"
-                    "assert importlib.metadata.version('belief-ledger-gateway')=='1.0.0rc4';"
+                    "assert importlib.metadata.version('belief-ledger-gateway')=='1.0.0rc5';"
                     "c=Path(sys.executable).with_name('belief-ledger');assert c.is_file();"
                     "subprocess.run([str(c),'--help'],check=True,capture_output=True,text=True);"
                     "m=PluginManager();m.discover_and_load();"
@@ -249,7 +249,7 @@ def _run_matrix(matrix: str, manifest_path: Path) -> int:
                     "==['pramana_explain','pramana_query','pramana_record_inference',"
                     "'pramana_request_verification'];"
                     "assert sorted(m._middleware)==['llm_request'];"
-                    "print('1.0.0rc4')"
+                    "print('1.0.0rc5')"
                 )
             result = subprocess.run(
                 [str(python), "-c", code],

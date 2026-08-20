@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 / 1.0.0rc5 - 2026-08-20
 
+GitHub source release containing all repository changes after `v0.2.1`. Unlike `v0.2.1`, this one
+changes behaviour: defeat resolution, `doctor`'s verdict, and the evaluation report all decide
+differently than they did before. The package layout, public API, protocol, plugin entry point and
+audited Hermes contract are compatible — the CLI gains commands, `doctor` gains a severity list,
+the store gains schema 8, and nothing is removed. The five synchronized Python distributions
+advance to `1.0.0rc5` because their code changed, and remain unpublished to any package registry.
+
+- Advanced all five synchronized workspace distributions to `1.0.0rc5`.
 - Fetched both Hermes checkouts in CI through the pinned `actions/checkout` rather than an
   anonymous `git clone`. `exact-hermes-contract` is a required job, and an unauthenticated clone of
   `NousResearch/hermes-agent` shares the runner pool's IP rate limit: github.com answered HTTP 429
@@ -29,6 +37,46 @@
   literal text from `RELEASE_NOTES.md` — and the only one no check guarded. No document lost a fact:
   every claim removed is stated in `RELEASE_NOTES.md`, `CHANGELOG.md`, `docs/obvious-fix-report.md`,
   or `docs/open-findings.md`.
+- Opened `docs/open-findings.md`, a living register of the twenty-four findings confirmed against
+  the code and not fixed. Each entry carries the evidence that establishes it — a file and line, a
+  command and its output — rather than an assertion, and says why it is still open. Three claims
+  are recorded as investigated and *not* reproduced, which is the other half of the job: two of
+  them were load-bearing in the review's own prioritisation. The register also states which items
+  gate which — O-07, verification scheduled and never executed, unblocks O-09, O-14 and O-15,
+  because each of those raises `PENDING` volume and `PENDING` has no drain until O-07 is fixed.
+- Gave `doctor` a third severity list and corrected what the existing two mean. The replay-budget
+  message went into `warnings`, and `warnings` is what turns the verdict from `healthy` into
+  `degraded`, so a ledger that had merely accumulated history reported as degraded — while the
+  comment above the check, the test's docstring, `docs/operations.md` and the completion report all
+  said it would not. `errors` make the adapter unusable, `warnings` degrade, and the new `notices`
+  never move the verdict, for facts true of a healthy deployment that are still worth saying. The
+  test that should have caught this compared two reports' statuses on a fixture that saturates at
+  `unavailable`, so both sides were equal whatever the budget did; it now derives each verdict from
+  that report's own lists.
+- Made anchoring observable in `doctor`. An operator who never ran `anchor publish` got the same
+  silence as one who anchored hourly. `checks["anchor"]` reports configuration, freshness and
+  agreement at three severities: a root mismatch is tamper evidence and an error, a
+  configured-but-unreadable sink is a warning, and the documented `sink_path: ""` opt-out is only
+  ever a notice. Only the newest anchor is compared — re-chaining moves the root at every height at
+  or above the edit, so older anchors cover nothing that a newer edit could evade.
+- Made a requested-versus-effective profile downgrade a warning instead of a report field nothing
+  read, and made the capability cap a notice. An audited Hermes host structurally cannot offer
+  atomic token consumption whatever anyone requests, and degrading forever on a limit nobody can
+  lift is how a verdict stops being read. The shortfall list is derived from `missing_for(STRICT)`
+  rather than written by hand.
+- Stopped publishing two ablation identities as measurements. `defeat_only` was computed from the
+  same `(response, beliefs)` pair as `flat_baseline`, and `no_gate` from the same pair as `full`,
+  so the report showed the defeat engine and the action gate each contributing exactly zero.
+  `lint_response` observes neither belief status nor tool dispatch, so no pair of arguments would
+  fix it. Both arms stay enumerated, as specification §10 names them, but carry `measurable: false`
+  and no rate, naming the suite that does measure the component. See
+  [ADR 0017](docs/adr/0017-ablation-arms-the-suite-a-instrument-cannot-isolate.md).
+- Removed the unreachable `self: 0.95` competence from `user_source`. The deterministic extractor
+  always emits `domain="general"`, so nothing could reach it; the risk was never the dead value but
+  what it would do the day a belief got the `self` domain for an unrelated reason — a silent
+  competence grant nobody asked for in that diff. The fallback through `general` now yields 0.65.
+  The self-claim privilege is untouched: it lives in the trust matrix and was never a competence
+  bump.
 - Removed the second-granularity truncation from `recency_rank`. The fifth priority key was
   `int(observed_at.timestamp())`, so whether two beliefs tied on recency depended on where a second
   boundary fell rather than on how far apart they were: 2 ms across a boundary resolved, 998 ms
@@ -40,6 +88,15 @@
   fifth, so nothing that wins on integrity, type, reliability or specificity can lose on age. Frozen
   v1 replay fixtures are unaffected. See
   [ADR 0016](docs/adr/0016-full-precision-recency-key.md), closing #31.
+- Pinned the ingestion clock in the semantic-contradiction test, which depended on the wall clock
+  and failed one matrix leg while the identical commit passed in the sibling run. Once
+  [ADR 0011](docs/adr/0011-unconditional-recency-key.md) made `recency_rank` unconditional, two
+  contradicting user claims from one sender tied on the first four keys and recency settled the
+  contest; with second truncation still in place, two ingestions milliseconds apart tied only when
+  they landed inside the same second. The test now pins the clock and asserts both regimes rather
+  than whichever the clock supplies. Engine code was untouched; the truncation itself is fixed
+  above.
+- Bumped `hypothesis` from 6.165.0 to 6.165.2 and `ruff` from 0.16.1 to 0.16.3 via Dependabot.
 - Recorded a measured baseline for the obvious-fix plan, including the
   experiment showing that defeat semantics are replay-independent: frozen v1 event and projection
   hashes do not move when `compare_priority` changes.

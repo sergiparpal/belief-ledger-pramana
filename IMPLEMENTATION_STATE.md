@@ -650,3 +650,59 @@ the inline-code fragment in which the consolidation section above quotes the lin
 Not recorded as a finding: `scripts/check_doc_invariants.py` guards six derived constants, and
 neither corrected count is derivable from code — both are properties of a past commit. Nothing
 mechanical would have caught them, and the check that did was re-measuring the claim.
+
+## v0.3.0 GitHub release qualification — 2026-08-20
+
+The five synchronized workspace distributions advance from `1.0.0rc4` to `1.0.0rc5` because their
+code changed after `v0.2.1`. Unlike the `v0.2.1` release this one changes behaviour rather than only
+correcting it: defeat resolution settles pairs that used to tie, `doctor`'s verdict is computed from
+three severity lists instead of two, the evaluation report withdraws two ablation rates that were
+identities rather than measurements, and the store gains schema 8. Nothing is removed. This release
+publishes GitHub-generated source archives only; it does not upload the locally built wheels,
+publish to a package registry, sign artifacts, or call a live model provider.
+
+`CHANGELOG.md` gained six entries during release preparation for work that had landed with no
+changelog coverage: the `doctor` severity split, the anchoring and profile-downgrade checks, the two
+withdrawn ablation arms, the removed `user_source` `self` competence (all #33), the open-findings
+register (#34), the semantic-contradiction clock pin (#30), and the `hypothesis` and `ruff` bumps
+(#28, #29). A release cannot claim to contain all changes after `v0.2.1` while its changelog omits
+five merged pull requests.
+
+| Command | Exit | Result |
+|---|---:|---|
+| `uv lock --check` | 0 | Frozen resolution succeeds with 80 packages at the bumped versions. |
+| `ruff format --check .` / `ruff check .` | 0 / 0 | 287 files formatted; no lint findings. |
+| `mypy packages/{core,gateway,mcp,reference}/src belief_ledger_pramana` | 0 | Strict typing passes for 158 source files. |
+| `pytest -m "not live_llm" --cov ... --cov-branch` | 0 | 603 passed; 88.47% combined coverage against the 88% floor. Ten warnings: the intentional `LedgerRuntime` deprecations and two SQLite `ResourceWarning`s. |
+| Dependency boundary / workspace boundary / product claims / doc invariants | 0 / 0 / 0 / 0 | All pass after the version bump and the release-document edits. |
+| Examples, gateway demo, offline Suites A–E, policy validate | 0 | Evaluation report passes; policy validates at normalized schema 2. |
+| `scripts/check_hermes_contract.py --allow-missing` | 0 | Installed host reports `0.19.0` with every audited capability present. CI's `exact-hermes-contract` job pins the commit against a checkout. |
+| Five-wheel build / artifact inspection | 0 / 0 | `build/artifacts-20260820T082358929106Z.json` records the five `1.0.0rc5` wheels; required contents present, forbidden contents absent. |
+| `uvx --from twine==7.0.0 twine check` on the five wheels | 0 | All five PASSED. Not run from the shared venv; see below. |
+| `scripts/smoke_install.py --matrix core,core+gateway,core+reference,core+gateway+mcp,hermes` | 0 | All five clean-install modes pass and report `1.0.0rc5`. |
+| `pip-audit --ignore-vuln CVE-2026-10221 --ignore-vuln CVE-2026-10224` | 0 | No known vulnerabilities; the five unpublished workspace packages are skipped. |
+
+Two gate runs failed before this one. Neither was a defect in the release, and both are worth
+recording because both were self-inflicted by the release procedure itself.
+
+- `uv sync --frozen --all-packages --group dev`, run to pick up the bumped versions, uninstalled the
+  audited Hermes host from the shared virtualenv, and `test_real_hermes_manager.py` failed twice
+  with `ModuleNotFoundError: No module named 'hermes_cli'`. The workflow comment in `ci.yml` already
+  warns about this — Hermes is a peer, installed after the sync, and a later sync evicts it. Fixed
+  by reinstalling the host and the two documented leaf overrides exactly as the `hermes-adapter` job
+  does.
+- `test_a_drifted_package_version_is_caught_in_release_notes` mutates `RELEASE_NOTES.md` to prove
+  the invariant checker fails on drift. Its mutation string was bumped to `1.0.0rc5` with the rest
+  of the release; the version it asserts the checker *reports* was left at `1.0.0rc3`, so the test
+  failed on its own second assertion. Both halves now move together.
+- `python -m twine check` then failed with `ImportError: cannot import name 'errors' from
+  'packaging'`. This is O-24 exactly: reinstalling the audited host downgrades `packaging` to 26.0
+  and Twine 7 needs `packaging.errors` from 26.2. It reproduces on wheels that predate this release,
+  so it is an environment defect and not a property of these artifacts. Re-run through `uvx --from
+  twine==7.0.0`, which resolves its own environment, all five wheels PASSED.
+
+The gate is therefore green end to end, but no single `verify_stage.py all` invocation was green:
+the twine step cannot pass in a virtualenv that also holds the audited host. O-24's direction — have
+`verify_stage.py` assert the environment matches the lock before running anything — would have
+turned both the Hermes eviction and the twine failure into one immediate, legible error instead of
+two confusing ones late in the run.

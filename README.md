@@ -149,10 +149,10 @@ uv run --no-sync python scripts/verify_stage.py all --skip-build
 uv run --no-sync python scripts/verify_stage.py all
 ```
 
-The workspace builds synchronized `1.0.0rc4` local distributions for core, gateway, reference,
+The workspace builds synchronized `1.0.0rc5` local distributions for core, gateway, reference,
 MCP, and the Hermes adapter. The supported Python range is `>=3.11,<3.14`, and CI runs the matrix
 across every version in it. Builds, checks, and smoke installs do not publish, sign, tag, push, or
-open a pull request. GitHub release `v0.2.1` records the complete RC4 source state but does not
+open a pull request. GitHub release `v0.3.0` records the complete RC5 source state but does not
 publish the distributions to a package registry or upload built wheels or sdists. See
 [CHANGELOG.md](CHANGELOG.md), [RELEASE_NOTES.md](RELEASE_NOTES.md), and
 [the product-surface ADR](docs/adr/0007-host-neutral-product-surface.md). The
