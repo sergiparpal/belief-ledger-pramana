@@ -3,10 +3,12 @@
 This file is the completed, frozen `1.0.0rc1` baseline. Its entries intentionally retain the
 then-current Hermes 0.18.2 contract, package version, and local-gate evidence. For the current
 `1.0.0rc4` workspace architecture and release qualification, see
-[`docs/current-state-rc4.md`](docs/current-state-rc4.md),
-[`docs/architecture.md`](docs/architecture.md), and
+[`docs/architecture.md`](docs/architecture.md), [`RELEASE_NOTES.md`](RELEASE_NOTES.md), and
 [`HERMES_COMPATIBILITY.md`](HERMES_COMPATIBILITY.md). Those documents do not revise the historical
-baseline evidence below.
+baseline evidence below. Sections below that mention `docs/current-state-rc3.md` or
+`docs/current-state-rc4.md` are historical: that document was removed on 2026-08-19 because it was a
+fourth rendering of the release narrative, and what it said now lives in `RELEASE_NOTES.md`,
+`CHANGELOG.md`, and `docs/obvious-fix-report.md`.
 
 Local implementation completed on 2026-07-11. No publication, signing, remote release, or
 license selection was authorized or performed.
@@ -560,3 +562,29 @@ microsecond count derived independently of the engine's arithmetic. The v1 repla
 green and `tests/fixtures/v1_replay/` is untouched, for the reason ADR 0011 records: relabel output
 is materialised into events and replay reapplies them rather than re-running the engine. The offline
 evaluation report is identical to the baseline except for timestamps and timing measurements.
+
+## Documentation consolidation — 2026-08-19
+
+Removes four documents and merges what only they carried, after an inbound-reference sweep over
+every tracked Markdown file. No source, schema, test, or fixture changed; the gate below is the
+full one regardless, because two of the removed documents are cited by ADRs.
+
+| Document | Disposition | Evidence for the call |
+|---|---|---|
+| `docs/baseline-v1rc1.md` | removed | Zero inbound references from any document, script, test, or CI job. Frozen 2026-07-22 against Hermes 0.18.2, schema 2 and `1.0.0rc2`; the live equivalents are `HERMES_COMPATIBILITY.md`, `docs/compat-surface.md`, and the rc1 sections of this file. |
+| `docs/event-format.md` | merged into `docs/event-compatibility.md`, then removed | Zero inbound references; the README already sends the reader to `event-compatibility.md` for the same subject. The envelope example, the per-episode head note, the `event_auth`/HMAC paragraph, and the event-family inventory moved across; the two sentences that restated canonical-JSON and hash-material rules were dropped because the destination already stated both. |
+| `docs/obvious-fix-baseline.md` | merged into `docs/obvious-fix-report.md` as an appendix, then removed | The report already compared against it section by section. ADRs 0010, 0011 and 0012 cite its R1 and R2 experiments as evidence, so the appendix keeps them and those three ADRs now point at it. |
+| `docs/adapter-authoring.md` | merged into `docs/adapter-conformance.md`, then removed | One inbound reference (`packages/reference/README.md`), and the document opened by directing the reader to the file it is now part of. |
+| `docs/current-state-rc4.md` | removed | A fourth rendering of the release narrative alongside `CHANGELOG.md`, `RELEASE_NOTES.md` and this file, and the only one no check guards. Measured with 8-word shingles, 12.2% of it is literal `RELEASE_NOTES.md` text and the rest restates the same facts. Its two live inbound links are redirected; the mentions in the historical sections above are left as history and flagged in this file's header. |
+
+| Command | Exit | Result |
+|---|---:|---|
+| `python scripts/check_doc_invariants.py` | 0 | 6 facts across 9 files; none of the removed documents carried a guarded fact. |
+| `python scripts/check_product_claims.py` | 0 | 10 public metadata files. |
+| `pytest tests/unit/test_doc_invariants.py tests/unit/test_product_claims.py tests/unit/test_compat_surface.py tests/contract/test_workspace_packages.py` | 0 | 108 passed. These are the checks that read Markdown. |
+| `python scripts/verify_stage.py all --skip-build` | 0 | 603 passed; 88.46% against the 88% floor; evaluations A–E `passed: true`. |
+
+Relative-link sweep over all tracked Markdown: no broken `](*.md)` link remains. Six backtick
+mentions of `docs/current-state-rc3.md` and `docs/current-state-rc4.md` survive in the historical
+sections of this file, which is the existing convention here — the rc3 mention was already
+dangling on `main` after that document was renamed.

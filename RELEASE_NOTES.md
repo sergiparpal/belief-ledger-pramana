@@ -59,8 +59,7 @@ the same key still fails.
   and only detection becomes incremental. Proposed; no code has changed for it.
 
 The behavioural corrections in this release ship with regression coverage that fails against the
-previous code. See [CHANGELOG.md](CHANGELOG.md) for the complete list and
-[docs/current-state-rc4.md](docs/current-state-rc4.md) for the narrative.
+previous code. See [CHANGELOG.md](CHANGELOG.md) for the complete list.
 
 ## Compatibility and operations
 
