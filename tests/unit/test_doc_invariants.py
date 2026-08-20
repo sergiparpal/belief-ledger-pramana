@@ -105,7 +105,7 @@ def test_a_drifted_package_version_is_caught_in_release_notes(tmp_path: Path) ->
     notes = root / "RELEASE_NOTES.md"
     notes.write_text(
         notes.read_text(encoding="utf-8").replace(
-            "distributions advance to `1.0.0rc4`", "distributions advance to `1.0.0rc3`"
+            "distributions advance to `1.0.0rc5`", "distributions advance to `1.0.0rc4`"
         ),
         encoding="utf-8",
     )
@@ -113,7 +113,7 @@ def test_a_drifted_package_version_is_caught_in_release_notes(tmp_path: Path) ->
     failures = fact_failures(root)
 
     assert any("package_version" in item and "RELEASE_NOTES.md" in item for item in failures)
-    assert any("found '1.0.0rc3'" in item for item in failures)
+    assert any("found '1.0.0rc4'" in item for item in failures)
 
 
 def test_older_changelog_headings_may_keep_older_versions(tmp_path: Path) -> None:

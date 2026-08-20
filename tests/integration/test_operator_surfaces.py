@@ -119,9 +119,9 @@ def test_doctor_reports_activation_and_transform_competition(runtime) -> None:
     assert report["checks"]["enforcement_profile"]["effective"] == "accepted_final"
     assert report["checks"]["host_capabilities"]["atomic_action_token_consume"] is False
     assert report["checks"]["versions"] == {
-        "product_core": "1.0.0rc4",
-        "gateway": "1.0.0rc4",
-        "adapter": "1.0.0rc4",
+        "product_core": "1.0.0rc5",
+        "gateway": "1.0.0rc5",
+        "adapter": "1.0.0rc5",
         "host": "0.19.0",
         "audited_host_version": "0.19.0",
         "audited_host_commit": "3ef6bbd201263d354fd83ec55b3c306ded2eb72a",

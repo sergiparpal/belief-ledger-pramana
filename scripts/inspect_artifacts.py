@@ -148,22 +148,22 @@ def main() -> int:
         if "file://" in metadata or " @ " in metadata:
             failures.append(f"{path.name}: local workspace source leaked into metadata")
         if distribution == "belief-ledger-pramana" and (
-            "Requires-Dist: belief-ledger-core==1.0.0rc4" not in metadata
-            or "Requires-Dist: belief-ledger-gateway==1.0.0rc4" not in metadata
+            "Requires-Dist: belief-ledger-core==1.0.0rc5" not in metadata
+            or "Requires-Dist: belief-ledger-gateway==1.0.0rc5" not in metadata
         ):
             failures.append(f"{path.name}: missing frozen core/gateway dependencies")
         if distribution == "belief-ledger-gateway" and (
-            "Requires-Dist: belief-ledger-core==1.0.0rc4" not in metadata
+            "Requires-Dist: belief-ledger-core==1.0.0rc5" not in metadata
         ):
             failures.append(f"{path.name}: missing frozen core dependency")
         if distribution == "belief-ledger-reference" and (
-            "Requires-Dist: belief-ledger-core==1.0.0rc4" not in metadata
-            or "Requires-Dist: belief-ledger-gateway==1.0.0rc4" not in metadata
+            "Requires-Dist: belief-ledger-core==1.0.0rc5" not in metadata
+            or "Requires-Dist: belief-ledger-gateway==1.0.0rc5" not in metadata
         ):
             failures.append(f"{path.name}: missing frozen core/gateway dependencies")
         if distribution == "belief-ledger-mcp" and (
-            "Requires-Dist: belief-ledger-core==1.0.0rc4" not in metadata
-            or "Requires-Dist: belief-ledger-gateway==1.0.0rc4" not in metadata
+            "Requires-Dist: belief-ledger-core==1.0.0rc5" not in metadata
+            or "Requires-Dist: belief-ledger-gateway==1.0.0rc5" not in metadata
         ):
             failures.append(f"{path.name}: missing frozen core/gateway dependencies")
         if distribution in {
