@@ -42,7 +42,7 @@ fresher admitted absence still loses to older positive evidence.
 None. Defeat semantics are replay-independent: `relabel` output is materialised into
 `BELIEF_STATUS_CHANGED` and `DEFEAT_ADDED` events, and replay reapplies those events through the
 projection handler table rather than re-running the engine. This was verified by experiment in
-`docs/obvious-fix-baseline.md` (R1) — inverting the sign of the lexicographic comparison fails
+`docs/obvious-fix-report.md` (appendix R1) — inverting the sign of the lexicographic comparison fails
 `tests/unit/test_engine.py` and leaves `tests/contract/test_v1_replay.py` green.
 
 `tests/fixtures/v1_replay/` is therefore untouched, no legacy fixture directory is needed, and
